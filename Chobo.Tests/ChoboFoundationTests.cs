@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Chobo.Contracts;
@@ -13,7 +14,6 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 [assembly: CollectionBehavior(DisableTestParallelization = true)]
@@ -247,7 +247,16 @@ public sealed class ChoboFoundationTests
             [new UpsertAccessNodeRequest("localhost")],
             null,
             null));
-        var policy = await Post<BackupPolicyDto>(client, "/api/v1/policies", new UpsertPolicyRequest("all", cluster.Id, PolicySelector.Empty));
+        var target = await Post<BackupTargetDto>(client, "/api/v1/targets/s3", new UpsertS3TargetRequest(
+            "minio",
+            "http://minio:9000",
+            "us-east-1",
+            "bucket",
+            null,
+            true,
+            "access",
+            "secret"));
+        var policy = await Post<BackupPolicyDto>(client, "/api/v1/policies", new UpsertPolicyRequest("all", cluster.Id, target.Id, PolicySelector.Empty));
         var eval = await Post<PolicyEvaluationDto>(client, $"/api/v1/policies/{policy.Id}/evaluate", new PolicyEvaluationRequest(new PolicyInventory([new PolicyInventoryTable("sales", "orders")])));
         Assert.Equal(policy.Id, eval.PolicyId);
         Assert.Equal(cluster.Id, eval.SourceClusterId);
@@ -265,6 +274,25 @@ public sealed class ChoboFoundationTests
     }
 
     [Fact]
+    public async Task Application_logging_does_not_delete_chobo_state()
+    {
+        await using var factory = CreateFactory();
+        _ = AuthenticatedClient(factory);
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var logger = scope.ServiceProvider.GetRequiredService<Serilog.ILogger>().ForContext<ChoboFoundationTests>();
+            logger.Information("Regression log entry for application log storage.");
+        }
+
+        using var verifyScope = factory.Services.CreateScope();
+        var db = verifyScope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+        Assert.True(await db.Users.AnyAsync(x => x.UserName == "admin" && x.IsActive));
+        Assert.True(await db.AccessTokens.AnyAsync(x => x.IsActive));
+        Assert.True(await db.ApplicationLogEntries.AnyAsync(x => x.RenderedMessage.Contains("Regression log entry")));
+    }
+
+    [Fact]
     public async Task Audit_clear_api_deletes_old_records_and_writes_clear_audit()
     {
         await using var factory = CreateFactory();
@@ -274,8 +302,8 @@ public sealed class ChoboFoundationTests
         using (var seedScope = factory.Services.CreateScope())
         {
             var db = seedScope.ServiceProvider.GetRequiredService<ChoboDbContext>();
-            await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO AuditEntries (Timestamp, ActorName, Action, EntityType, Details) VALUES ({cutoff.AddMinutes(-10).ToString("O")}, 'system', 'old-audit', 'test', '{{}}');");
-            await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO AuditEntries (Timestamp, ActorName, Action, EntityType, Details) VALUES ({cutoff.AddMinutes(10).ToString("O")}, 'system', 'new-audit', 'test', '{{}}');");
+            await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO AuditEntries (Timestamp, ActorName, Action, EntityType, Details) VALUES ({ToUnixMilliseconds(cutoff.AddMinutes(-10))}, 'system', 'old-audit', 'test', '{{}}');");
+            await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO AuditEntries (Timestamp, ActorName, Action, EntityType, Details) VALUES ({ToUnixMilliseconds(cutoff.AddMinutes(10))}, 'system', 'new-audit', 'test', '{{}}');");
         }
 
         var response = await client.PostAsJsonAsync("/api/v1/audit/clear", new ClearBeforeRequest(cutoff), JsonOptions);
@@ -298,10 +326,10 @@ public sealed class ChoboFoundationTests
 
         using var seedScope = factory.Services.CreateScope();
         var db = seedScope.ServiceProvider.GetRequiredService<ChoboDbContext>();
-        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO ApplicationLogEntries (Timestamp, Level, Exception, RenderedMessage, Properties) VALUES ({cutoff.AddMinutes(-10).ToString("O")}, 'Information', NULL, 'old log', '{{}}');");
-        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO ApplicationLogEntries (Timestamp, Level, Exception, RenderedMessage, Properties) VALUES ({cutoff.AddMinutes(10).ToString("O")}, 'Information', NULL, 'new log', '{{}}');");
-        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO AuditEntries (Timestamp, ActorName, Action, EntityType, Details) VALUES ({cutoff.AddMinutes(-10).ToString("O")}, 'system', 'old', 'test', '{{}}');");
-        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO AuditEntries (Timestamp, ActorName, Action, EntityType, Details) VALUES ({cutoff.AddMinutes(10).ToString("O")}, 'system', 'new', 'test', '{{}}');");
+        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO ApplicationLogEntries (Timestamp, Level, Exception, RenderedMessage, Properties) VALUES ({ToUnixMilliseconds(cutoff.AddMinutes(-10))}, 'Information', NULL, 'old log', '{{}}');");
+        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO ApplicationLogEntries (Timestamp, Level, Exception, RenderedMessage, Properties) VALUES ({ToUnixMilliseconds(cutoff.AddMinutes(10))}, 'Information', NULL, 'new log', '{{}}');");
+        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO AuditEntries (Timestamp, ActorName, Action, EntityType, Details) VALUES ({ToUnixMilliseconds(cutoff.AddMinutes(-10))}, 'system', 'old', 'test', '{{}}');");
+        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO AuditEntries (Timestamp, ActorName, Action, EntityType, Details) VALUES ({ToUnixMilliseconds(cutoff.AddMinutes(10))}, 'system', 'new', 'test', '{{}}');");
 
         var service = new DataRetentionBackgroundService(
             factory.Services,
@@ -310,7 +338,7 @@ public sealed class ChoboFoundationTests
                 LogsBefore = cutoff,
                 AuditsBefore = cutoff
             }),
-            NullLogger<DataRetentionBackgroundService>.Instance);
+            Serilog.Core.Logger.None);
 
         var deleted = await service.PurgeOnceAsync();
 
@@ -321,6 +349,34 @@ public sealed class ChoboFoundationTests
         Assert.False(await db.AuditEntries.AnyAsync(x => x.Action == "old"));
         Assert.True(await db.AuditEntries.AnyAsync(x => x.Action == "new"));
         Assert.True(await db.AuditEntries.AnyAsync(x => x.Action == "retention-purge" && x.EntityType == "data-retention"));
+    }
+
+    [Fact]
+    public async Task Sqlite_time_columns_are_stored_as_unix_millisecond_integers()
+    {
+        await using var factory = CreateFactory();
+        var client = AuthenticatedClient(factory);
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var logger = scope.ServiceProvider.GetRequiredService<Serilog.ILogger>().ForContext<ChoboFoundationTests>();
+            logger.Information("Timestamp storage regression log entry.");
+        }
+
+        using var verifyScope = factory.Services.CreateScope();
+        var db = verifyScope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+        Assert.Equal("INTEGER", await GetColumnTypeAsync(db, "AuditEntries", "Timestamp"));
+        Assert.Equal("INTEGER", await GetColumnTypeAsync(db, "ApplicationLogEntries", "Timestamp"));
+        Assert.Equal("INTEGER", await GetColumnTypeAsync(db, "Users", "CreatedAt"));
+        Assert.Equal("INTEGER", await GetColumnTypeAsync(db, "BackupSchedules", "CreatedAt"));
+
+        var audits = await client.GetFromJsonAsync<List<AuditEntryDto>>("/api/v1/audit?last=5", JsonOptions);
+        var logs = await client.GetFromJsonAsync<List<LogEntryDto>>("/api/v1/logs?last=5", JsonOptions);
+        var rawAuditJson = await client.GetStringAsync("/api/v1/audit?last=5");
+        Assert.Contains(audits!, x => x.Action == "initialize" && x.Timestamp > DateTimeOffset.UnixEpoch);
+        Assert.Contains(logs!, x => x.Message.Contains("Timestamp storage regression log entry") && x.Timestamp > DateTimeOffset.UnixEpoch);
+        Assert.Contains("+00:00", rawAuditJson);
+        Assert.DoesNotContain("\\u002B", rawAuditJson);
     }
 
     private static WebApplicationFactory<Program> CreateFactory(string? dataDir = null, string adminUser = "admin", string accessToken = Token)
@@ -371,7 +427,44 @@ public sealed class ChoboFoundationTests
     private static JsonSerializerOptions CreateJsonOptions()
     {
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        options.Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
         options.Converters.Add(new JsonStringEnumConverter());
         return options;
+    }
+
+    private static long ToUnixMilliseconds(DateTimeOffset value) =>
+        value.ToUniversalTime().ToUnixTimeMilliseconds();
+
+    private static async Task<string> GetColumnTypeAsync(ChoboDbContext db, string tableName, string columnName)
+    {
+        var connection = db.Database.GetDbConnection();
+        var shouldClose = connection.State != System.Data.ConnectionState.Open;
+        if (shouldClose)
+        {
+            await connection.OpenAsync();
+        }
+
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = $"PRAGMA table_info({tableName});";
+            await using var reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return reader.GetString(2).ToUpperInvariant();
+                }
+            }
+        }
+        finally
+        {
+            if (shouldClose)
+            {
+                await connection.CloseAsync();
+            }
+        }
+
+        throw new InvalidOperationException($"Column {tableName}.{columnName} was not found.");
     }
 }

@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Net;
 using System.Text.Json;
 using Chobo.Contracts;
 
@@ -26,6 +27,38 @@ public sealed class ChoboApiClient : IDisposable
 
     public Task<object?> GetAsync(string relativePath) =>
         ReadResponseAsync(_client.GetAsync(Api(relativePath)));
+
+    public async Task<T?> GetAsync<T>(string relativePath)
+    {
+        using var response = await _client.GetAsync(Api(relativePath));
+        var text = await response.Content.ReadAsStringAsync();
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException(string.IsNullOrWhiteSpace(text) ? response.ReasonPhrase : text);
+        }
+
+        return string.IsNullOrWhiteSpace(text)
+            ? default
+            : JsonSerializer.Deserialize<T>(text, JsonOutputWriter.JsonOptions);
+    }
+
+    public async Task<T?> GetOptionalAsync<T>(string relativePath)
+    {
+        using var response = await _client.GetAsync(Api(relativePath));
+        var text = await response.Content.ReadAsStringAsync();
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return default;
+        }
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException(string.IsNullOrWhiteSpace(text) ? response.ReasonPhrase : text);
+        }
+
+        return string.IsNullOrWhiteSpace(text)
+            ? default
+            : JsonSerializer.Deserialize<T>(text, JsonOutputWriter.JsonOptions);
+    }
 
     public Task<object?> PostAsync(string relativePath, object body) =>
         ReadResponseAsync(_client.PostAsJsonAsync(Api(relativePath), body, JsonOutputWriter.JsonOptions));
@@ -55,4 +88,3 @@ public sealed class ChoboApiClient : IDisposable
 
     public void Dispose() => _client.Dispose();
 }
-

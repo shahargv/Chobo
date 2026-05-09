@@ -13,7 +13,7 @@ public sealed class ChoboApiClientFactory
         var client = new ChoboApiClient(serverUrl, token);
         try
         {
-            await client.EnsureCompatibleServerAsync();
+            await EnsureCompatibleServerWithRetryAsync(client);
             return client;
         }
         catch
@@ -21,5 +21,30 @@ public sealed class ChoboApiClientFactory
             client.Dispose();
             throw;
         }
+    }
+
+    private static async Task EnsureCompatibleServerWithRetryAsync(ChoboApiClient client)
+    {
+        Exception? last = null;
+        for (var attempt = 1; attempt <= 3; attempt++)
+        {
+            try
+            {
+                await client.EnsureCompatibleServerAsync();
+                return;
+            }
+            catch (Exception ex)
+            {
+                last = ex;
+                if (attempt == 3)
+                {
+                    break;
+                }
+
+                await Task.Delay(TimeSpan.FromMilliseconds(200 * attempt));
+            }
+        }
+
+        throw last ?? new InvalidOperationException("Unable to verify server version.");
     }
 }

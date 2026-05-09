@@ -7,8 +7,10 @@ namespace ChoboServer.BackgroundServices;
 public sealed class DataRetentionBackgroundService(
     IServiceProvider services,
     IOptions<ChoboDataRetentionOptions> options,
-    ILogger<DataRetentionBackgroundService> logger) : BackgroundService
+    Serilog.ILogger logger) : BackgroundService
 {
+    private readonly Serilog.ILogger _logger = logger.ForContext<DataRetentionBackgroundService>();
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
@@ -19,7 +21,7 @@ public sealed class DataRetentionBackgroundService(
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Data retention purge failed.");
+                _logger.Error(ex, "Data retention purge failed.");
             }
 
             var interval = options.Value.Interval <= TimeSpan.Zero

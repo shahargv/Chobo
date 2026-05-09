@@ -6,6 +6,8 @@ public sealed class BackupPolicyEntity
     public string Name { get; set; } = "";
     public Guid SourceClusterId { get; set; }
     public ClickHouseClusterEntity? SourceCluster { get; set; }
+    public Guid TargetId { get; set; }
+    public BackupTargetEntity? Target { get; set; }
     public int SelectorJsonVersion { get; set; } = 1;
     public string SelectorJson { get; set; } = "";
     public bool IsDeleted { get; set; }

@@ -4,8 +4,11 @@ using ChoboServer.BackgroundServices;
 using ChoboServer.Options;
 using ChoboServer.Repositories;
 using ChoboServer.Services;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Serilog;
+using System.Text.Encodings.Web;
 using System.Text.Json.Serialization;
 
 namespace ChoboServer;
@@ -18,14 +21,26 @@ public static class ServiceCollectionExtensions
         services.AddOptions<ChoboSecurityOptions>().Bind(configuration.GetSection("Chobo"));
         services.AddOptions<ChoboInitOptions>().Bind(configuration.GetSection("Chobo:Init"));
         services.AddOptions<ChoboDataRetentionOptions>().Bind(configuration.GetSection("Chobo:DataRetention"));
+        services.AddOptions<ChoboBackupRestoreOptions>().Bind(configuration.GetSection("Chobo:BackupRestore"));
 
         services.AddControllers().AddJsonOptions(options =>
         {
             options.JsonSerializerOptions.PropertyNameCaseInsensitive = true;
+            options.JsonSerializerOptions.Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
             options.JsonSerializerOptions.WriteIndented = true;
             options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
         });
         services.AddOpenApi();
+        services.AddSingleton<Serilog.ILogger>(serviceProvider =>
+        {
+            var storage = serviceProvider.GetRequiredService<IOptions<ChoboStorageOptions>>().Value;
+            var dataDirectory = ChoboPaths.GetDataDirectory(storage.DataDirectory);
+            Directory.CreateDirectory(dataDirectory);
+            return new LoggerConfiguration()
+                .ReadFrom.Configuration(configuration)
+                .WriteTo.Sink(new ApplicationLogSqliteSink(dataDirectory))
+                .CreateLogger();
+        });
 
         services.AddDbContext<ChoboDbContext>((serviceProvider, options) =>
         {
@@ -33,13 +48,19 @@ public static class ServiceCollectionExtensions
             var dataDirectory = ChoboPaths.GetDataDirectory(storage.DataDirectory);
             Directory.CreateDirectory(dataDirectory);
             var dbPath = Path.Combine(dataDirectory, "chobo.db");
-            options.UseSqlite($"Data Source={dbPath}");
+            options.UseSqlite(new SqliteConnectionStringBuilder
+            {
+                DataSource = dbPath,
+                DefaultTimeout = 60
+            }.ToString());
         });
         services.AddScoped<ActorContext>();
         services.AddScoped<TokenService>();
         services.AddScoped<AuditService>();
         services.AddScoped<CredentialProtector>();
         services.AddScoped<ExportImportService>();
+        services.AddScoped<ClickHouseAdapter>();
+        services.AddScoped<IClickHouseAdapter>(serviceProvider => serviceProvider.GetRequiredService<ClickHouseAdapter>());
         services.AddScoped<ApplicationLogTimelineStore>();
         services.AddScoped<AuditTimelineStore>();
         services.AddScoped<IUnitOfWork, EfUnitOfWork>();
@@ -54,6 +75,15 @@ public static class ServiceCollectionExtensions
         services.AddScoped<PolicySelectorEvaluationService>();
         services.AddScoped<PolicyApplicationService>();
         services.AddScoped<ScheduleApplicationService>();
+        services.AddScoped<BackupApplicationService>();
+        services.AddScoped<RestoreApplicationService>();
+        services.AddScoped<BackupRunnerService>();
+        services.AddScoped<RestoreRunnerService>();
+        services.AddSingleton<BackupRestoreQueues>();
+        services.AddHostedService<BackupRestoreResumeBackgroundService>();
+        services.AddHostedService<BackupExecutorBackgroundService>();
+        services.AddHostedService<RestoreExecutorBackgroundService>();
+        services.AddHostedService<BackupSchedulerDispatcherBackgroundService>();
         services.AddHostedService<DataRetentionBackgroundService>();
         return services;
     }

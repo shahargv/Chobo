@@ -7,8 +7,6 @@ function Get-ChoboDeclarativeTokens {
         RunId = $Context.RunId
         TestName = $Context.TestName
         TestId = $Context.TestId
-        DatabaseName = $Context.DatabaseName
-        TableName = $Context.TableName
     }
 
     Ensure-ChoboContextVariables -Context $Context
@@ -24,8 +22,6 @@ function Get-ChoboDeclarativeTokens {
         $tokens["$resourceName.Replicas"] = $resource.Replicas
         $tokens["$resourceName.Host"] = $resource.Host
         $tokens["$resourceName.DnsName"] = $resource.DnsName
-        $tokens["$resourceName.DatabaseName"] = $resource.DatabaseName
-        $tokens["$resourceName.TableName"] = $resource.TableName
         $tokens["$resourceName.ClusterName"] = $resource.ClusterName
         $tokens["$resourceName.ReplicaHost"] = $resource.ReplicaHost
         $tokens["$resourceName.Endpoint"] = $resource.Endpoint
@@ -459,7 +455,7 @@ function New-ChoboDeclarativeTestDefinition {
         Path = $DefinitionPath
         Kind = 'Declarative'
         TestRoot = $testRoot
-        UseDefaultDatabaseSetup = if ($definition.ContainsKey('UseDefaultDatabaseSetup')) { [bool]$definition.UseDefaultDatabaseSetup } else { $true }
+        UseDefaultDatabaseSetup = if ($definition.ContainsKey('UseDefaultDatabaseSetup')) { [bool]$definition.UseDefaultDatabaseSetup } else { $false }
         UseDefaultReplicaSync = if ($definition.ContainsKey('UseDefaultReplicaSync')) { [bool]$definition.UseDefaultReplicaSync } else { $true }
         UseDefaultCleanup = if ($definition.ContainsKey('UseDefaultCleanup')) { [bool]$definition.UseDefaultCleanup } else { $true }
         SetupSteps = if ($definition.ContainsKey('Setup')) { @($definition.Setup) } else { @() }

@@ -34,13 +34,16 @@ public static class DatabaseBootstrap
     public static async Task TryInitializeFromOptionsAsync(IServiceProvider services)
     {
         var options = services.GetRequiredService<IOptions<ChoboInitOptions>>().Value;
+        var logger = services.GetService<Serilog.ILogger>()?.ForContext(typeof(DatabaseBootstrap));
         var user = options.AdminUser;
         if (string.IsNullOrWhiteSpace(user))
         {
+            logger?.Information("Skipping initial admin creation because Chobo:Init:AdminUser is not configured.");
             return;
         }
 
         var token = options.AccessToken ?? TokenService.GenerateToken();
+        logger?.Information("Initial admin configuration detected for user {AdminUser}; access token configured: {HasAccessToken}.", user, options.AccessToken is not null);
 
         await InitializeAsync(services, user, token);
     }
@@ -48,10 +51,12 @@ public static class DatabaseBootstrap
     public static async Task InitializeAsync(IServiceProvider services, string adminUser, string accessToken)
     {
         var db = services.GetRequiredService<ChoboDbContext>();
+        var logger = services.GetService<Serilog.ILogger>()?.ForContext(typeof(DatabaseBootstrap));
         await EnsureDatabaseObjectsAsync(db);
         await EnsureSchemaStateAsync(db);
         if (await db.Users.AnyAsync())
         {
+            logger?.Information("Skipping initial admin creation because users already exist.");
             return;
         }
 
@@ -70,5 +75,6 @@ public static class DatabaseBootstrap
             Details = "{}"
         });
         await db.SaveChangesAsync();
+        logger?.Information("Initialized Chobo admin user {AdminUser} ({UserId}) and initial access token.", adminUser, user.Id);
     }
 }

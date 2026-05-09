@@ -36,7 +36,7 @@ ChoboCli users remove-token --id <user-id> --token-id <token-id>
 
 ```powershell
 ChoboCli clusters list
-ChoboCli clusters add --name prod --mode Cluster --node ch1:9000,ch2:9000 --username default --password secret
+ChoboCli clusters add --name prod --mode Cluster --node ch1:9000,ch2:9000 --username default --password secret --backup-restore-maxdop 3
 ChoboCli clusters add --name local --mode SingleInstance --host localhost --port 9000
 ChoboCli clusters update --id <cluster-id> --name prod --mode Cluster --node ch1:9000,ch2:9000
 ChoboCli clusters remove --id <cluster-id>
@@ -59,9 +59,9 @@ S3 credentials are write-only.
 
 ```powershell
 ChoboCli policies list
-ChoboCli policies add --name all --source-cluster-id <cluster-id>
-ChoboCli policies add --name filtered --source-cluster-id <cluster-id> --selector-file .\policy-selector.json
-ChoboCli policies update --id <policy-id> --name filtered --source-cluster-id <cluster-id> --selector-file .\policy-selector.json
+ChoboCli policies add --name all --source-cluster-id <cluster-id> --target-id <target-id>
+ChoboCli policies add --name filtered --source-cluster-id <cluster-id> --target-id <target-id> --selector-file .\policy-selector.json
+ChoboCli policies update --id <policy-id> --name filtered --source-cluster-id <cluster-id> --target-id <target-id> --selector-file .\policy-selector.json
 ChoboCli policies evaluate --id <policy-id> --inventory-file .\inventory.json
 ChoboCli policies remove --id <policy-id>
 ```
@@ -139,6 +139,24 @@ ChoboCli schedules remove --id <schedule-id>
 ```
 
 Cron expressions use Quartz-style fields.
+
+## Backups And Restores
+
+```powershell
+ChoboCli backup manual --cluster-id <cluster-id> --target-id <target-id> --selector-file .\policy-selector.json
+ChoboCli backups list --policy-id <policy-id>
+ChoboCli backups list --cluster-name source --table-name orders
+ChoboCli backups show --id <backup-id>
+ChoboCli backups wait --id <backup-id> --timeout-seconds 300 --poll-seconds 2
+
+ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-id> --target-table restored_orders
+ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-id> --append
+ChoboCli restores list
+ChoboCli restores show --id <restore-id>
+ChoboCli restores wait --id <restore-id> --timeout-seconds 300 --poll-seconds 2
+```
+
+Backup and restore commands return run records immediately. `wait` is a client-side polling helper.
 
 ## Logs
 

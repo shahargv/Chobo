@@ -2,6 +2,7 @@ using ChoboServer;
 using ChoboServer.Data;
 using ChoboServer.Options;
 using ChoboServer.Services;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
 
@@ -13,12 +14,15 @@ if (args.Length > 0 && string.Equals(args[0], "init", StringComparison.OrdinalIg
 
 var builder = WebApplication.CreateBuilder(args);
 AddChoboEnvironmentAliases(builder.Configuration);
-AddChoboSerilogSqlitePath(builder.Configuration);
+var choboDataDirectory = GetChoboDataDirectory(builder.Configuration);
 
 await EnsureDatabaseSchemaBeforeLoggingAsync(builder.Configuration);
 
-builder.Host.UseSerilog((context, loggerConfiguration) =>
-    loggerConfiguration.ReadFrom.Configuration(context.Configuration));
+Log.Logger = new LoggerConfiguration()
+    .ReadFrom.Configuration(builder.Configuration)
+    .WriteTo.Sink(new ApplicationLogSqliteSink(choboDataDirectory))
+    .CreateLogger();
+builder.Host.UseSerilog();
 
 builder.Services.AddChoboServer(builder.Configuration);
 
@@ -40,8 +44,13 @@ static async Task EnsureDatabaseSchemaBeforeLoggingAsync(IConfiguration configur
     var storage = configuration.GetSection("Chobo").Get<ChoboStorageOptions>() ?? new ChoboStorageOptions();
     var dataDirectory = ChoboPaths.GetDataDirectory(storage.DataDirectory);
     Directory.CreateDirectory(dataDirectory);
+    var connectionString = new SqliteConnectionStringBuilder
+    {
+        DataSource = Path.Combine(dataDirectory, "chobo.db"),
+        DefaultTimeout = 60
+    }.ToString();
     var options = new DbContextOptionsBuilder<ChoboDbContext>()
-        .UseSqlite($"Data Source={Path.Combine(dataDirectory, "chobo.db")}")
+        .UseSqlite(connectionString)
         .Options;
 
     await using var db = new ChoboDbContext(options);
@@ -63,19 +72,12 @@ static void AddChoboEnvironmentAliases(IConfigurationBuilder configuration)
     }
 }
 
-static void AddChoboSerilogSqlitePath(IConfigurationBuilder configuration)
+static string GetChoboDataDirectory(IConfiguration configuration)
 {
-    var root = (IConfiguration)configuration;
-    var storage = root.GetSection("Chobo").Get<ChoboStorageOptions>() ?? new ChoboStorageOptions();
+    var storage = configuration.GetSection("Chobo").Get<ChoboStorageOptions>() ?? new ChoboStorageOptions();
     var dataDirectory = ChoboPaths.GetDataDirectory(storage.DataDirectory);
     Directory.CreateDirectory(dataDirectory);
-    var writeTo = root.GetSection("Serilog:WriteTo").GetChildren().ToList();
-    var sqliteSink = writeTo.FirstOrDefault(x => string.Equals(x["Name"], "SQLite", StringComparison.OrdinalIgnoreCase));
-    var sqliteSinkIndex = sqliteSink?.Key ?? "0";
-    configuration.AddInMemoryCollection(new Dictionary<string, string?>
-    {
-        [$"Serilog:WriteTo:{sqliteSinkIndex}:Args:sqliteDbPath"] = Path.Combine(dataDirectory, "chobo.db")
-    });
+    return dataDirectory;
 }
 
 static void AddAlias(IDictionary<string, string?> values, string environmentName, string configurationKey)

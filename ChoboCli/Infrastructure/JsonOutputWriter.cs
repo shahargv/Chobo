@@ -1,3 +1,4 @@
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -28,7 +29,11 @@ public sealed class JsonOutputWriter
 
     private static JsonSerializerOptions CreateJsonOptions()
     {
-        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true };
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            WriteIndented = true
+        };
         options.Converters.Add(new JsonStringEnumConverter());
         return options;
     }

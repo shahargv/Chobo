@@ -1,10 +1,14 @@
+using System.Text.Encodings.Web;
 using System.Text.Json;
 
 namespace ChoboServer.Services;
 
 public static class AuditDetails
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
 
     public static object Change(object? previous, object? current) =>
         new { previous, current };

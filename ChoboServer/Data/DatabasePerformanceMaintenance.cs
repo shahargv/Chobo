@@ -10,6 +10,11 @@ public static class DatabasePerformanceMaintenance
         await EnsureAccessTokenLookupColumnAsync(db);
 
         await db.Database.ExecuteSqlRawAsync("""
+            PRAGMA journal_mode=WAL;
+            PRAGMA synchronous=NORMAL;
+            """);
+
+        await db.Database.ExecuteSqlRawAsync("""
             CREATE INDEX IF NOT EXISTS IX_ApplicationLogEntries_Timestamp ON ApplicationLogEntries (Timestamp);
             CREATE INDEX IF NOT EXISTS IX_ApplicationLogEntries_Level_Timestamp ON ApplicationLogEntries (Level, Timestamp);
             CREATE INDEX IF NOT EXISTS IX_AuditEntries_Timestamp ON AuditEntries (Timestamp);
@@ -60,4 +65,3 @@ public static class DatabasePerformanceMaintenance
         await db.Database.ExecuteSqlRawAsync("ALTER TABLE AccessTokens ADD COLUMN TokenLookupHash TEXT NOT NULL DEFAULT '';");
     }
 }
-

@@ -213,24 +213,23 @@ Each `Sql` or `Csv` step should usually specify `Resource`. Use `Host` only when
 Useful tokens:
 
 - `{RunId}`, `{TestName}`, `{TestId}`
-- `{DatabaseName}`, `{TableName}` for the default resource
-- `{source.DatabaseName}`, `{source.TableName}`, `{source.Host}`, `{source.DnsName}`
+- `{source.Host}`, `{source.DnsName}`
 - `{source.ClusterName}`, `{source.ReplicaHost}`, `{source.Shards}`, `{source.Replicas}`
 - `{backupStore.Endpoint}`, `{backupStore.Bucket}`, `{backupStore.AccessKey}`, `{backupStore.SecretKey}`
 
-The infra handles common setup and cleanup:
+The test SQL owns database creation. Put `CREATE DATABASE` statements in setup SQL so each test can choose `Atomic`, replicated, or other database settings explicitly.
+Use explicit database and table names in SQL and CLI arguments instead of resource-derived database/table placeholders.
 
-- Creates one database per ClickHouse resource before setup.
-- Uses `Atomic` databases for `SingleNode`.
-- Uses `Replicated(...) ON CLUSTER <cluster-name>` databases for `Cluster`.
+The infra still handles common sync and cleanup:
+
 - Syncs replicated cluster tables after setup when a table exists.
 - Drops ClickHouse databases after successful tests.
 
-Only override these defaults when a test intentionally owns the behavior:
+Only override these defaults when a test intentionally owns that behavior:
 
 ```powershell
 @{
-    UseDefaultDatabaseSetup = $false
+    UseDefaultDatabaseSetup = $true
     UseDefaultReplicaSync = $false
     UseDefaultCleanup = $false
 }

@@ -4,8 +4,9 @@ namespace ChoboServer.Services;
 
 public sealed class TokenAuthMiddleware(RequestDelegate next)
 {
-    public async Task InvokeAsync(HttpContext context, TokenService tokenService, ActorContext actor)
+    public async Task InvokeAsync(HttpContext context, TokenService tokenService, ActorContext actor, Serilog.ILogger logger)
     {
+        var log = logger.ForContext<TokenAuthMiddleware>();
         if (context.Request.Path.StartsWithSegments("/health") ||
             context.Request.Path.StartsWithSegments("/openapi"))
         {
@@ -16,6 +17,7 @@ public sealed class TokenAuthMiddleware(RequestDelegate next)
         var header = context.Request.Headers.Authorization.ToString();
         if (!header.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
         {
+            log.Warning("Rejecting request {Method} {Path}: missing bearer token.", context.Request.Method, context.Request.Path);
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
             await context.Response.WriteAsJsonAsync(new ErrorResponse("Missing bearer token."));
             return;
@@ -23,14 +25,26 @@ public sealed class TokenAuthMiddleware(RequestDelegate next)
 
         try
         {
-            var (user, _) = await tokenService.AuthenticateAsync(header["Bearer ".Length..].Trim());
+            var token = header["Bearer ".Length..].Trim();
+            var lookupHash = TokenService.HashTokenLookup(token);
+            log.Debug("Authenticating request {Method} {Path} with token fingerprint {LookupFingerprint} length {TokenLength}.", context.Request.Method, context.Request.Path, TokenService.Fingerprint(lookupHash), token.Length);
+            var (user, _) = await tokenService.AuthenticateAsync(token);
             actor.UserId = user.Id;
             actor.ActorName = user.UserName;
+            log.Information("Authenticated request {Method} {Path} as {ActorName} ({ActorUserId}).", context.Request.Method, context.Request.Path, actor.ActorName, actor.UserId);
         }
-        catch
+        catch (UnauthorizedAccessException)
         {
+            log.Warning("Rejecting request {Method} {Path}: invalid bearer token.", context.Request.Method, context.Request.Path);
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
             await context.Response.WriteAsJsonAsync(new ErrorResponse("Invalid bearer token."));
+            return;
+        }
+        catch (Exception ex)
+        {
+            log.Error(ex, "Authentication failed unexpectedly for request {Method} {Path}.", context.Request.Method, context.Request.Path);
+            context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+            await context.Response.WriteAsJsonAsync(new ErrorResponse("Authentication failed."));
             return;
         }
 

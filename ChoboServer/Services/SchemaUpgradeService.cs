@@ -55,7 +55,7 @@ public static class SchemaUpgradeService
         await db.Database.ExecuteSqlRawAsync("""
             CREATE TABLE IF NOT EXISTS ApplicationLogEntries_v2 (
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
-                Timestamp TEXT,
+                Timestamp INTEGER,
                 Level VARCHAR(10),
                 Exception TEXT,
                 RenderedMessage TEXT,

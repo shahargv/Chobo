@@ -1,10 +1,15 @@
+using System.Text.Encodings.Web;
 using System.Text.Json;
 
 namespace ChoboCli.Infrastructure;
 
 public sealed class ProfileStore
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        WriteIndented = true
+    };
 
     public async Task SaveAsync(CliProfile profile)
     {
@@ -20,4 +25,3 @@ public sealed class ProfileStore
     public static string ProfilePath =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".chobo", "config.json");
 }
-

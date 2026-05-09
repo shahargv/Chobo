@@ -4,9 +4,9 @@ public enum PolicyMatchKind { All, Exact, Wildcard }
 
 public enum PolicySelectorAction { Include, Exclude }
 
-public sealed record BackupPolicyDto(Guid Id, string Name, Guid SourceClusterId, int SelectorJsonVersion, PolicySelector Selector, bool IsDeleted, DateTimeOffset CreatedAt, DateTimeOffset? UpdatedAt);
+public sealed record BackupPolicyDto(Guid Id, string Name, Guid SourceClusterId, Guid TargetId, int SelectorJsonVersion, PolicySelector Selector, bool IsDeleted, DateTimeOffset CreatedAt, DateTimeOffset? UpdatedAt);
 
-public sealed record UpsertPolicyRequest(string Name, Guid SourceClusterId, PolicySelector Selector);
+public sealed record UpsertPolicyRequest(string Name, Guid SourceClusterId, Guid TargetId, PolicySelector Selector);
 
 public sealed record PolicySelector(int Version, IReadOnlyList<PolicySelectorRule> Rules)
 {

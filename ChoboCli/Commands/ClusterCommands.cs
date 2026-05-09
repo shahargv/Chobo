@@ -47,7 +47,7 @@ public sealed class ClusterCommands : CliSubject
             options.Enum("--mode", ClusterMode.SingleInstance),
             nodes,
             options.Optional("--username"),
-            options.Optional("--password"));
+            options.Optional("--password"),
+            options.Optional("--backup-restore-maxdop") is { } maxDop ? int.Parse(maxDop) : null);
     }
 }
-

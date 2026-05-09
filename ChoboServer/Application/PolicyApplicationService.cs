@@ -1,3 +1,4 @@
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Chobo.Contracts;
@@ -10,6 +11,7 @@ namespace ChoboServer.Application;
 public sealed class PolicyApplicationService(
     IPolicyRepository policies,
     IClusterRepository clusters,
+    ITargetRepository targets,
     IUnitOfWork unitOfWork,
     AuditService audit,
     PolicySelectorEvaluationService selectorEvaluation)
@@ -26,6 +28,7 @@ public sealed class PolicyApplicationService(
         {
             Name = request.Name.Trim(),
             SourceClusterId = request.SourceClusterId,
+            TargetId = request.TargetId,
             SelectorJsonVersion = request.Selector.Version,
             SelectorJson = JsonSerializer.Serialize(request.Selector, JsonOptions)
         };
@@ -50,6 +53,7 @@ public sealed class PolicyApplicationService(
         var previous = ToDto(policy);
         policy.Name = request.Name.Trim();
         policy.SourceClusterId = request.SourceClusterId;
+        policy.TargetId = request.TargetId;
         policy.SelectorJsonVersion = request.Selector.Version;
         policy.SelectorJson = JsonSerializer.Serialize(request.Selector, JsonOptions);
         policy.UpdatedAt = DateTimeOffset.UtcNow;
@@ -106,9 +110,17 @@ public sealed class PolicyApplicationService(
         {
             throw new ArgumentException("Source cluster id is required.");
         }
+        if (request.TargetId == Guid.Empty)
+        {
+            throw new ArgumentException("Target id is required.");
+        }
         if (await clusters.FindActiveAsync(request.SourceClusterId) is null)
         {
             throw new ArgumentException("Source cluster was not found.");
+        }
+        if (await targets.FindActiveAsync(request.TargetId) is null)
+        {
+            throw new ArgumentException("Target was not found.");
         }
         if (request.Selector.Version != 1)
         {
@@ -125,7 +137,7 @@ public sealed class PolicyApplicationService(
         JsonSerializer.Deserialize<PolicySelector>(json, JsonOptions) ?? PolicySelector.Empty;
 
     private static BackupPolicyDto ToDto(BackupPolicyEntity x) =>
-        new(x.Id, x.Name, x.SourceClusterId, x.SelectorJsonVersion, Deserialize(x.SelectorJson), x.IsDeleted, x.CreatedAt, x.UpdatedAt);
+        new(x.Id, x.Name, x.SourceClusterId, x.TargetId, x.SelectorJsonVersion, Deserialize(x.SelectorJson), x.IsDeleted, x.CreatedAt, x.UpdatedAt);
 
     private static void ValidatePattern(SelectorPattern pattern, string name)
     {
@@ -138,6 +150,7 @@ public sealed class PolicyApplicationService(
     private static JsonSerializerOptions CreateJsonOptions()
     {
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        options.Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
         options.Converters.Add(new JsonStringEnumConverter());
         return options;
     }

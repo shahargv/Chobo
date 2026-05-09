@@ -32,7 +32,7 @@ public sealed class AuditTimelineStore(ChoboDbContext db)
         {
             results.Add(new AuditEntryDto(
                 reader.GetInt64(0),
-                DateTimeOffset.Parse(reader.GetString(1)),
+                DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(1)),
                 reader.IsDBNull(2) ? null : reader.GetGuid(2),
                 reader.GetString(3),
                 reader.GetString(4),
@@ -50,15 +50,12 @@ public sealed class AuditTimelineStore(ChoboDbContext db)
         await using var _ = await OpenIfNeededAsync(connection, cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = "DELETE FROM AuditEntries WHERE Timestamp < $before;";
-        command.Parameters.AddWithValue("$before", ToSqlText(before));
+        command.Parameters.AddWithValue("$before", ToSqlValue(before));
         return await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private static object ToSqlValue(DateTimeOffset? value) =>
-        value is null ? DBNull.Value : ToSqlText(value.Value);
-
-    private static string ToSqlText(DateTimeOffset value) =>
-        value.ToUniversalTime().ToString("O");
+        value is null ? DBNull.Value : value.Value.ToUniversalTime().ToUnixTimeMilliseconds();
 
     private static async Task<IAsyncDisposable> OpenIfNeededAsync(SqliteConnection connection, CancellationToken cancellationToken = default)
     {

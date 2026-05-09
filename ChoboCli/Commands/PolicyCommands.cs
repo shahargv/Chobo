@@ -33,5 +33,9 @@ public sealed class PolicyCommands : CliSubject
         CommandHelpers.WithClient(context, client => client.PostAsync($"policies/{context.Command.Options.Required("--id")}/evaluate", CommandHelpers.PolicyEvaluationRequestFromOption(context.Command.Options)));
 
     private static UpsertPolicyRequest Request(OptionBag options) =>
-        new(options.Required("--name"), Guid.Parse(options.Required("--source-cluster-id")), CommandHelpers.PolicySelectorFromOption(options));
+        new(
+            options.Required("--name"),
+            Guid.Parse(options.Required("--source-cluster-id")),
+            Guid.Parse(options.Required("--target-id")),
+            CommandHelpers.PolicySelectorFromOption(options));
 }

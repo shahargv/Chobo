@@ -16,7 +16,7 @@ public sealed class InitialCreate : Migration
                 Id INTEGER NOT NULL CONSTRAINT PK_SchemaStates PRIMARY KEY AUTOINCREMENT,
                 SchemaVersion INTEGER NOT NULL,
                 AppliedMigrationId TEXT NOT NULL,
-                AppliedAt TEXT NOT NULL,
+                AppliedAt INTEGER NOT NULL,
                 ProductVersion TEXT NOT NULL
             );
 
@@ -24,8 +24,8 @@ public sealed class InitialCreate : Migration
                 Id TEXT NOT NULL CONSTRAINT PK_Users PRIMARY KEY,
                 UserName TEXT NOT NULL,
                 IsActive INTEGER NOT NULL,
-                CreatedAt TEXT NOT NULL,
-                DeactivatedAt TEXT NULL
+                CreatedAt INTEGER NOT NULL,
+                DeactivatedAt INTEGER NULL
             );
 
             CREATE TABLE IF NOT EXISTS AccessTokens (
@@ -36,14 +36,14 @@ public sealed class InitialCreate : Migration
                 TokenLookupHash TEXT NOT NULL,
                 Salt TEXT NOT NULL,
                 IsActive INTEGER NOT NULL,
-                CreatedAt TEXT NOT NULL,
-                DeactivatedAt TEXT NULL,
+                CreatedAt INTEGER NOT NULL,
+                DeactivatedAt INTEGER NULL,
                 CONSTRAINT FK_AccessTokens_Users_UserId FOREIGN KEY (UserId) REFERENCES Users (Id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS AuditEntries (
                 Id INTEGER NOT NULL CONSTRAINT PK_AuditEntries PRIMARY KEY AUTOINCREMENT,
-                Timestamp TEXT NOT NULL,
+                Timestamp INTEGER NOT NULL,
                 ActorUserId TEXT NULL,
                 ActorName TEXT NOT NULL,
                 Action TEXT NOT NULL,
@@ -54,7 +54,7 @@ public sealed class InitialCreate : Migration
 
             CREATE TABLE IF NOT EXISTS ApplicationLogEntries (
                 Id INTEGER NOT NULL CONSTRAINT PK_ApplicationLogEntries PRIMARY KEY AUTOINCREMENT,
-                Timestamp TEXT,
+                Timestamp INTEGER,
                 Level VARCHAR(10),
                 Exception TEXT,
                 RenderedMessage TEXT,
@@ -68,9 +68,9 @@ public sealed class InitialCreate : Migration
                 EncryptedUserName TEXT NULL,
                 EncryptedPassword TEXT NULL,
                 IsDeleted INTEGER NOT NULL,
-                CreatedAt TEXT NOT NULL,
-                UpdatedAt TEXT NULL,
-                DeletedAt TEXT NULL
+                CreatedAt INTEGER NOT NULL,
+                UpdatedAt INTEGER NULL,
+                DeletedAt INTEGER NULL
             );
 
             CREATE TABLE IF NOT EXISTS ClickHouseAccessNodes (
@@ -94,9 +94,9 @@ public sealed class InitialCreate : Migration
                 EncryptedAccessKey TEXT NULL,
                 EncryptedSecretKey TEXT NULL,
                 IsDeleted INTEGER NOT NULL,
-                CreatedAt TEXT NOT NULL,
-                UpdatedAt TEXT NULL,
-                DeletedAt TEXT NULL
+                CreatedAt INTEGER NOT NULL,
+                UpdatedAt INTEGER NULL,
+                DeletedAt INTEGER NULL
             );
 
             CREATE TABLE IF NOT EXISTS BackupPolicies (
@@ -106,9 +106,9 @@ public sealed class InitialCreate : Migration
                 SelectorJsonVersion INTEGER NOT NULL,
                 SelectorJson TEXT NOT NULL,
                 IsDeleted INTEGER NOT NULL,
-                CreatedAt TEXT NOT NULL,
-                UpdatedAt TEXT NULL,
-                DeletedAt TEXT NULL,
+                CreatedAt INTEGER NOT NULL,
+                UpdatedAt INTEGER NULL,
+                DeletedAt INTEGER NULL,
                 CONSTRAINT FK_BackupPolicies_ClickHouseClusters_SourceClusterId FOREIGN KEY (SourceClusterId) REFERENCES ClickHouseClusters (Id) ON DELETE CASCADE
             );
 
@@ -122,9 +122,9 @@ public sealed class InitialCreate : Migration
                 IsEnabled INTEGER NOT NULL,
                 Description TEXT NULL,
                 IsDeleted INTEGER NOT NULL,
-                CreatedAt TEXT NOT NULL,
-                UpdatedAt TEXT NULL,
-                DeletedAt TEXT NULL,
+                CreatedAt INTEGER NOT NULL,
+                UpdatedAt INTEGER NULL,
+                DeletedAt INTEGER NULL,
                 CONSTRAINT FK_BackupSchedules_BackupPolicies_PolicyId FOREIGN KEY (PolicyId) REFERENCES BackupPolicies (Id) ON DELETE CASCADE
             );
             """);

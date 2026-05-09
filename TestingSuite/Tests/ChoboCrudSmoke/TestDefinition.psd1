@@ -92,10 +92,12 @@
         @{
             Name = 'add-policy'
             Type = 'Cli'
-            Args = @('policies', 'add', '--name', 'all')
+            Args = @('policies', 'add', '--name', 'all', '--source-cluster-id', '{cluster.id}', '--target-id', '{target.id}')
             SaveJsonAs = 'policy'
             ExpectJson = @(
                 @{ Path = 'name'; Equals = 'all' }
+                @{ Path = 'sourceClusterId'; Equals = '{cluster.id}' }
+                @{ Path = 'targetId'; Equals = '{target.id}' }
                 @{ Path = 'id'; NotEmpty = $true }
             )
         }

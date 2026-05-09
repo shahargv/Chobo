@@ -369,6 +369,7 @@ function New-ChoboComposeEnvironment {
     $services.Add('test-runner')
 
     if ($plan.HasStorage) {
+        $storageAliases = @($resources | Where-Object { $_.Type -eq 'S3' -and $_.DnsName } | ForEach-Object { $_.DnsName } | Select-Object -Unique)
         $lines.Add('  minio:')
         $lines.Add('    labels:')
         $lines.Add('      chobo.system-test: "true"')
@@ -378,7 +379,15 @@ function New-ChoboComposeEnvironment {
         $lines.Add('      MINIO_ROOT_USER: chobo-access-key')
         $lines.Add('      MINIO_ROOT_PASSWORD: chobo-secret-key')
         $lines.Add('    networks:')
-        $lines.Add('      - chobo-tests')
+        if ($storageAliases.Count -gt 0) {
+            $lines.Add('      chobo-tests:')
+            $lines.Add('        aliases:')
+            foreach ($alias in $storageAliases) {
+                $lines.Add("          - $alias")
+            }
+        } else {
+            $lines.Add('      - chobo-tests')
+        }
         $lines.Add('')
         $services.Add('minio')
 
@@ -448,6 +457,8 @@ function New-ChoboComposeEnvironment {
         $lines.Add('      CHOBO_INIT_ADMIN_USER: admin')
         $lines.Add('      CHOBO_INIT_ACCESS_TOKEN: static-test-token')
         $lines.Add('      Chobo__DataDirectory: /tmp/chobo-data')
+        $lines.Add('      Chobo__BackupRestore__SchedulerInterval: "00:00:01"')
+        $lines.Add('      Chobo__BackupRestore__PollInterval: "00:00:01"')
         $lines.Add('    networks:')
         $lines.Add('      - chobo-tests')
         $lines.Add('')
