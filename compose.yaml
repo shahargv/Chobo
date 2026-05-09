@@ -1,0 +1,7 @@
+﻿services:
+  choboserver:
+    image: choboserver
+    build:
+      context: .
+      dockerfile: ChoboServer/Dockerfile
+

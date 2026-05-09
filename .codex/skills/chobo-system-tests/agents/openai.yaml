@@ -1,0 +1,3 @@
+display_name: Chobo System Tests
+short_description: Run and extend Chobo Docker Compose system tests.
+default_prompt: Use the Chobo system test suite to run or add tests.

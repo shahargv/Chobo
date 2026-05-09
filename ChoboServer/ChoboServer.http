@@ -1,0 +1,6 @@
+@ChoboServer_HostAddress = http://localhost:5202
+
+GET {{ChoboServer_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
