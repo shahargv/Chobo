@@ -11,6 +11,16 @@ function ConvertTo-ChoboResourceHashtable {
         foreach ($entry in $Resource.GetEnumerator()) {
             $hash[$entry.Key] = $entry.Value
         }
+    } elseif ($Resource -is [System.Collections.IEnumerable] -and -not ($Resource -is [string])) {
+        foreach ($entry in $Resource) {
+            if ($entry -is [hashtable]) {
+                foreach ($hashEntry in $entry.GetEnumerator()) {
+                    $hash[$hashEntry.Key] = $hashEntry.Value
+                }
+            } elseif ($entry.PSObject.Properties.Name -contains 'Key' -and $entry.PSObject.Properties.Name -contains 'Value') {
+                $hash[$entry.Key] = $entry.Value
+            }
+        }
     } else {
         foreach ($property in $Resource.PSObject.Properties) {
             $hash[$property.Name] = $property.Value
@@ -337,7 +347,7 @@ function New-ChoboComposeEnvironment {
     $suitePath = ConvertTo-ChoboComposePath -Path $SuiteRoot
     $repoPath = ConvertTo-ChoboComposePath -Path $RepoRoot
     $outputPath = ConvertTo-ChoboComposePath -Path $OutputDirectory
-    $runnerBuildContext = ConvertTo-ChoboComposePath -Path (Join-Path $SuiteRoot 'Compose/test-runner')
+    $runnerDockerfile = ConvertTo-ChoboComposePath -Path (Join-Path $SuiteRoot 'Compose/test-runner/Dockerfile')
 
     $lines = New-Object System.Collections.Generic.List[string]
     $services = New-Object System.Collections.Generic.List[string]
@@ -347,7 +357,8 @@ function New-ChoboComposeEnvironment {
     $lines.Add('    labels:')
     $lines.Add('      chobo.system-test: "true"')
     $lines.Add('    build:')
-    $lines.Add("      context: `"$runnerBuildContext`"")
+    $lines.Add("      context: `"$repoPath`"")
+    $lines.Add("      dockerfile: `"$runnerDockerfile`"")
     $lines.Add('    command: ["sleep", "infinity"]')
     $lines.Add('    volumes:')
     $lines.Add("      - `"${suitePath}:/suite:ro`"")
@@ -433,6 +444,10 @@ function New-ChoboComposeEnvironment {
         $lines.Add('    build:')
         $lines.Add("      context: `"$repoPath`"")
         $lines.Add('      dockerfile: ChoboServer/Dockerfile')
+        $lines.Add('    environment:')
+        $lines.Add('      CHOBO_INIT_ADMIN_USER: admin')
+        $lines.Add('      CHOBO_INIT_ACCESS_TOKEN: static-test-token')
+        $lines.Add('      Chobo__DataDirectory: /tmp/chobo-data')
         $lines.Add('    networks:')
         $lines.Add('      - chobo-tests')
         $lines.Add('')

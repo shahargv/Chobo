@@ -73,7 +73,38 @@ Declarative step types:
 
 - `Sql`: run a SQL file or inline query.
 - `Csv`: run a query, write actual CSV, compare with expected CSV.
-- `Cli`: future Chobo CLI command execution.
+- `Cli`: run `ChoboCli`, validate exit/text/JSON output, retry until expectations pass, and save JSON values for later steps.
+
+Declarative CLI steps should use `Args` for exact argv entries. Use `Command`/`Query` only for simple command lines. Supported assertion fields:
+
+- `ExpectExitCode`, default `0`.
+- `ExpectTextContains` and `ExpectTextNotContains`.
+- `ExpectJson` with `Equals`, `NotEmpty`, `Count`, `Contains`, and `ContainsObject`.
+- `SaveJsonAs`, which exposes tokens such as `{policy.id}` from saved JSON.
+- `RetryTimeoutSeconds` and `RetryIntervalSeconds`.
+
+Example:
+
+```powershell
+@{
+    Name = 'add-policy'
+    Type = 'Cli'
+    Args = @('policies', 'add', '--name', 'all')
+    SaveJsonAs = 'policy'
+    ExpectJson = @(
+        @{ Path = 'name'; Equals = 'all' }
+        @{ Path = 'id'; NotEmpty = $true }
+    )
+}
+@{
+    Name = 'evaluate-policy'
+    Type = 'Cli'
+    Args = @('policies', 'evaluate', '--id', '{policy.id}')
+    ExpectJson = @(
+        @{ Path = 'policyId'; Equals = '{policy.id}' }
+    )
+}
+```
 
 Do not add database creation, replicated-table sync, or successful-test cleanup to normal tests. The infra creates one database per ClickHouse resource, syncs replicated cluster tables after setup, and drops databases after successful tests. Override with `UseDefaultDatabaseSetup`, `UseDefaultReplicaSync`, or `UseDefaultCleanup` only when the test intentionally owns that behavior.
 
