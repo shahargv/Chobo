@@ -19,18 +19,31 @@ public sealed class ClusterCommands : CliSubject
     private static Task<object?> ListAsync(CommandContext context) =>
         CommandHelpers.WithClient(context, client => client.GetAsync("clusters"));
 
-    private static Task<object?> AddAsync(CommandContext context) =>
-        CommandHelpers.WithClient(context, client => client.PostAsync("clusters", Request(context.Command.Options)));
+    private static Task<object?> AddAsync(CommandContext context)
+    {
+        var request = Request(context.Command.Options);
+        return CommandHelpers.WithClient(context, client => client.PostAsync("clusters", request));
+    }
 
-    private static Task<object?> UpdateAsync(CommandContext context) =>
-        CommandHelpers.WithClient(context, client => client.PutAsync($"clusters/{context.Command.Options.Required("--id")}", Request(context.Command.Options)));
+    private static Task<object?> UpdateAsync(CommandContext context)
+    {
+        var required = context.Command.Options.Require("--id");
+        var request = Request(context.Command.Options);
+        return CommandHelpers.WithClient(context, client => client.PutAsync($"clusters/{required["--id"]}", request));
+    }
 
     private static Task<object?> RemoveAsync(CommandContext context) =>
         CommandHelpers.WithClient(context, client => client.DeleteAsync($"clusters/{context.Command.Options.Required("--id")}"));
 
     private static UpsertClusterRequest Request(OptionBag options)
     {
-        var nodes = (options.Optional("--node") ?? options.Required("--host"))
+        var required = options.Require("--name");
+        if (options.Optional("--node") is null && options.Optional("--host") is null)
+        {
+            throw new InvalidOperationException("Missing required options: --host or --node.");
+        }
+
+        var nodes = (options.Optional("--node") ?? options.Optional("--host")!)
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Select(value =>
             {
@@ -43,7 +56,7 @@ public sealed class ClusterCommands : CliSubject
             .ToList();
 
         return new UpsertClusterRequest(
-            options.Required("--name"),
+            required["--name"],
             options.Enum("--mode", ClusterMode.SingleInstance),
             nodes,
             options.Optional("--username"),

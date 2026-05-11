@@ -53,7 +53,7 @@ public sealed class DataRetentionBackgroundService(
         if (retention.LogsBefore is not null || retention.AuditsBefore is not null)
         {
             var audit = scope.ServiceProvider.GetRequiredService<AuditService>();
-            await audit.RecordAsync("retention-purge", "data-retention", null, new
+            await audit.RecordAsync("retention-purge", AuditEntityType.DataRetention, null, new
             {
                 retention.LogsBefore,
                 retention.AuditsBefore,

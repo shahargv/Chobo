@@ -263,7 +263,7 @@ public sealed class ChoboFoundationTests
         Assert.Equal(1, eval.SelectorJsonVersion);
         Assert.Contains(eval.Tables, x => x.Database == "sales" && x.Table == "orders");
 
-        var schedule = await Post<BackupScheduleDto>(client, "/api/v1/schedules", new UpsertScheduleRequest("nightly", policy.Id, BackupType.Full, "0 0 2 * * ?", "UTC", true, "nightly full"));
+        var schedule = await Post<BackupScheduleDto>(client, "/api/v1/schedules", new UpsertScheduleRequest("nightly", policy.Id, BackupType.Full, "0 0 2 * * ?", "UTC", true, null, "nightly full"));
         Assert.True(schedule.IsEnabled);
         Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsync($"/api/v1/schedules/{schedule.Id}/disable", null)).StatusCode);
 

@@ -75,10 +75,12 @@ public static class ServiceCollectionExtensions
         services.AddScoped<PolicySelectorEvaluationService>();
         services.AddScoped<PolicyApplicationService>();
         services.AddScoped<ScheduleApplicationService>();
+        services.AddScoped<DashboardApplicationService>();
         services.AddScoped<BackupApplicationService>();
         services.AddScoped<RestoreApplicationService>();
         services.AddScoped<BackupRunnerService>();
         services.AddScoped<RestoreRunnerService>();
+        services.AddSingleton(TimeProvider.System);
         services.AddSingleton<BackupRestoreQueues>();
         services.AddHostedService<BackupRestoreResumeBackgroundService>();
         services.AddHostedService<BackupExecutorBackgroundService>();

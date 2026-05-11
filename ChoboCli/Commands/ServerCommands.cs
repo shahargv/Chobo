@@ -15,11 +15,11 @@ public sealed class ServerCommands : CliSubject
 
     private static async Task<object?> AuthAsync(CommandContext context)
     {
+        var required = context.Command.Options.Require("--server-url", "--access-token");
         var profile = new CliProfile(
-            context.Command.Options.Required("--server-url"),
-            context.Command.Options.Required("--access-token"));
+            required["--server-url"],
+            required["--access-token"]);
         await context.Profiles.SaveAsync(profile);
         return $"Authenticated to {profile.ServerUrl}.";
     }
 }
-

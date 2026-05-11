@@ -24,6 +24,7 @@ public sealed class ScheduleApplicationService(
             CronExpression = request.CronExpression,
             TimeZoneId = request.TimeZoneId,
             IsEnabled = request.IsEnabled,
+            MissedRunGracePeriod = request.MissedRunGracePeriod,
             Description = request.Description
         };
 
@@ -31,7 +32,7 @@ public sealed class ScheduleApplicationService(
         await unitOfWork.SaveChangesAsync();
 
         var current = ToDto(schedule);
-        await audit.RecordAsync("create", "backup-schedule", schedule.Id.ToString(), AuditDetails.Change(null, current));
+        await audit.RecordAsync("create", AuditEntityType.BackupSchedule, schedule.Id.ToString(), AuditDetails.Change(null, current));
         return current;
     }
 
@@ -51,12 +52,13 @@ public sealed class ScheduleApplicationService(
         schedule.CronExpression = request.CronExpression;
         schedule.TimeZoneId = request.TimeZoneId;
         schedule.IsEnabled = request.IsEnabled;
+        schedule.MissedRunGracePeriod = request.MissedRunGracePeriod;
         schedule.Description = request.Description;
         schedule.UpdatedAt = DateTimeOffset.UtcNow;
         await unitOfWork.SaveChangesAsync();
 
         var current = ToDto(schedule);
-        await audit.RecordAsync("update", "backup-schedule", id.ToString(), AuditDetails.Change(previous, current));
+        await audit.RecordAsync("update", AuditEntityType.BackupSchedule, id.ToString(), AuditDetails.Change(previous, current));
         return current;
     }
 
@@ -73,7 +75,7 @@ public sealed class ScheduleApplicationService(
         schedule.UpdatedAt = DateTimeOffset.UtcNow;
         await unitOfWork.SaveChangesAsync();
 
-        await audit.RecordAsync(enabled ? "enable" : "disable", "backup-schedule", id.ToString(), AuditDetails.Change(previous, ToDto(schedule)));
+        await audit.RecordAsync(enabled ? "enable" : "disable", AuditEntityType.BackupSchedule, id.ToString(), AuditDetails.Change(previous, ToDto(schedule)));
         return true;
     }
 
@@ -90,7 +92,7 @@ public sealed class ScheduleApplicationService(
         schedule.DeletedAt = DateTimeOffset.UtcNow;
         await unitOfWork.SaveChangesAsync();
 
-        await audit.RecordAsync("delete", "backup-schedule", id.ToString(), AuditDetails.Deactivation(previous, ToDto(schedule)));
+        await audit.RecordAsync("delete", AuditEntityType.BackupSchedule, id.ToString(), AuditDetails.Deactivation(previous, ToDto(schedule)));
         return true;
     }
 
@@ -107,6 +109,10 @@ public sealed class ScheduleApplicationService(
         if (request.CronExpression.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length < 6)
         {
             throw new ArgumentException("Quartz cron expressions must include at least 6 fields.");
+        }
+        if (request.MissedRunGracePeriod is not null && request.MissedRunGracePeriod <= TimeSpan.Zero)
+        {
+            throw new ArgumentException("MissedRunGracePeriod must be greater than zero when specified.");
         }
 
         try
@@ -133,6 +139,7 @@ public sealed class ScheduleApplicationService(
             x.CronExpression,
             x.TimeZoneId,
             x.IsEnabled,
+            x.MissedRunGracePeriod,
             x.Description,
             x.IsDeleted,
             x.CreatedAt,

@@ -12,6 +12,7 @@ public sealed class BackupScheduleEntity
     public string CronExpression { get; set; } = "";
     public string TimeZoneId { get; set; } = "UTC";
     public bool IsEnabled { get; set; } = true;
+    public TimeSpan? MissedRunGracePeriod { get; set; }
     public string? Description { get; set; }
     public bool IsDeleted { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;

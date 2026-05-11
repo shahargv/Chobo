@@ -40,7 +40,7 @@ public sealed class UserApplicationService(
         await users.AddTokenAsync(tokens.CreateToken(user.Id, "default", rawToken));
         await unitOfWork.SaveChangesAsync();
 
-        await audit.RecordAsync("create", "user", user.Id.ToString(), AuditDetails.Change(null, ToDto(user)));
+        await audit.RecordAsync("create", AuditEntityType.User, user.Id.ToString(), AuditDetails.Change(null, ToDto(user)));
         return new CreateUserResponse(user.Id, user.UserName, rawToken);
     }
 
@@ -62,7 +62,7 @@ public sealed class UserApplicationService(
         await users.AddTokenAsync(token);
         await unitOfWork.SaveChangesAsync();
 
-        await audit.RecordAsync("create", "access-token", token.Id.ToString(), AuditDetails.Change(null, ToDto(token)));
+        await audit.RecordAsync("create", AuditEntityType.AccessToken, token.Id.ToString(), AuditDetails.Change(null, ToDto(token)));
         return new CreateAccessTokenResponse(token.Id, user.Id, token.Name, rawToken);
     }
 
@@ -79,7 +79,7 @@ public sealed class UserApplicationService(
         token.DeactivatedAt = DateTimeOffset.UtcNow;
         await unitOfWork.SaveChangesAsync();
 
-        await audit.RecordAsync("deactivate", "access-token", token.Id.ToString(), AuditDetails.Deactivation(previous, ToDto(token)));
+        await audit.RecordAsync("deactivate", AuditEntityType.AccessToken, token.Id.ToString(), AuditDetails.Deactivation(previous, ToDto(token)));
         return true;
     }
 
@@ -97,7 +97,7 @@ public sealed class UserApplicationService(
         await users.DeactivateTokensAsync(id);
         await unitOfWork.SaveChangesAsync();
 
-        await audit.RecordAsync("deactivate", "user", id.ToString(), AuditDetails.Deactivation(previous, ToDto(user)));
+        await audit.RecordAsync("deactivate", AuditEntityType.User, id.ToString(), AuditDetails.Deactivation(previous, ToDto(user)));
         return true;
     }
 

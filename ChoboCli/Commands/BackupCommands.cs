@@ -13,11 +13,18 @@ public sealed class BackupCommand : CliSubject
     public override string Name => "backup";
     public override string Description => "Start backup operations.";
 
-    private static Task<object?> ManualAsync(CommandContext context) =>
-        CommandHelpers.WithClient(context, client => client.PostAsync("backups/manual", new ManualBackupRequest(
-            Guid.Parse(context.Command.Options.Required("--cluster-id")),
-            Guid.Parse(context.Command.Options.Required("--target-id")),
-            CommandHelpers.PolicySelectorFromOption(context.Command.Options))));
+    private static Task<object?> ManualAsync(CommandContext context)
+    {
+        var required = context.Command.Options.Require("--cluster-id", "--target-id");
+        var request = new ManualBackupRequest(
+            Guid.Parse(required["--cluster-id"]),
+            Guid.Parse(required["--target-id"]),
+            CommandHelpers.PolicySelectorFromOption(context.Command.Options));
+        return CommandHelpers.WithClient(context, client => client.PostAsync("backups/manual", new ManualBackupRequest(
+            request.ClusterId,
+            request.TargetId,
+            request.Selector)));
+    }
 }
 
 public sealed class BackupsCommands : CliSubject

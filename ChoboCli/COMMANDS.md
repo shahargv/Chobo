@@ -131,14 +131,27 @@ Inventory file for `policies evaluate`:
 
 ```powershell
 ChoboCli schedules list
-ChoboCli schedules add --name nightly --policy-id <policy-id> --backup-type Full --cron "0 0 2 * * ?" --timezone UTC
-ChoboCli schedules update --id <schedule-id> --name nightly --policy-id <policy-id> --backup-type Incremental --cron "0 0 */6 * * ?" --timezone UTC
+ChoboCli schedules add --name nightly --policy-id <policy-id> --backup-type Full --cron "0 0 2 * * ?" --timezone UTC --missed-run-grace-period 00:05:00
+ChoboCli schedules update --id <schedule-id> --name nightly --policy-id <policy-id> --backup-type Incremental --cron "0 0 */6 * * ?" --timezone UTC --missed-run-grace-period 00:10:00
 ChoboCli schedules enable --id <schedule-id>
 ChoboCli schedules disable --id <schedule-id>
 ChoboCli schedules remove --id <schedule-id>
 ```
 
-Cron expressions use Quartz-style fields.
+Cron expressions use Quartz-style fields. Omit `--missed-run-grace-period` to use the server default.
+
+## Dashboard
+
+```powershell
+ChoboCli dashboard
+ChoboCli dashboard --next-hours 12
+ChoboCli dashboard show --next-hours 12
+ChoboCli metrics show
+```
+
+The dashboard shows active backup runs, every schedule with last-run status and last successful completion time, and projected schedule runs for the next window. The default future window is 6 hours.
+
+The same server surface also exposes flat general metrics at `/api/v1/metrics`, available through `ChoboCli metrics show`. The first metric group reports seconds since the last successful backup completed for each policy, for example `Policies.TimeSecondsSinceLastPolicyBackup.nightly`.
 
 ## Backups And Restores
 

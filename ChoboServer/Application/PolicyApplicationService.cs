@@ -37,7 +37,7 @@ public sealed class PolicyApplicationService(
         await unitOfWork.SaveChangesAsync();
 
         var current = ToDto(policy);
-        await audit.RecordAsync("create", "backup-policy", policy.Id.ToString(), AuditDetails.Change(null, current));
+        await audit.RecordAsync("create", AuditEntityType.BackupPolicy, policy.Id.ToString(), AuditDetails.Change(null, current));
         return current;
     }
 
@@ -60,7 +60,7 @@ public sealed class PolicyApplicationService(
         await unitOfWork.SaveChangesAsync();
 
         var current = ToDto(policy);
-        await audit.RecordAsync("update", "backup-policy", id.ToString(), AuditDetails.Change(previous, current));
+        await audit.RecordAsync("update", AuditEntityType.BackupPolicy, id.ToString(), AuditDetails.Change(previous, current));
         return current;
     }
 
@@ -96,7 +96,7 @@ public sealed class PolicyApplicationService(
         policy.DeletedAt = DateTimeOffset.UtcNow;
         await unitOfWork.SaveChangesAsync();
 
-        await audit.RecordAsync("delete", "backup-policy", id.ToString(), AuditDetails.Deactivation(previous, ToDto(policy)));
+        await audit.RecordAsync("delete", AuditEntityType.BackupPolicy, id.ToString(), AuditDetails.Deactivation(previous, ToDto(policy)));
         return true;
     }
 

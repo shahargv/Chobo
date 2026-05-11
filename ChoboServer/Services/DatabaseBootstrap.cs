@@ -70,7 +70,7 @@ public static class DatabaseBootstrap
         {
             ActorName = "system",
             Action = "initialize",
-            EntityType = "server",
+            EntityType = AuditEntityTypes.ToStorageValue(AuditEntityType.Server),
             EntityId = user.Id.ToString(),
             Details = "{}"
         });

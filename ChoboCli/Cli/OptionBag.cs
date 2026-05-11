@@ -7,6 +7,17 @@ public sealed class OptionBag(Dictionary<string, string?> values)
     public string Required(string name) =>
         Optional(name) ?? throw new InvalidOperationException($"{name} is required.");
 
+    public IReadOnlyDictionary<string, string> Require(params string[] names)
+    {
+        var missing = names.Where(name => string.IsNullOrWhiteSpace(Optional(name))).ToList();
+        if (missing.Count > 0)
+        {
+            throw new InvalidOperationException($"Missing required options: {string.Join(", ", missing)}.");
+        }
+
+        return names.ToDictionary(name => name, name => Optional(name)!);
+    }
+
     public string? Optional(string name) =>
         values.TryGetValue(name, out var value) ? value : null;
 

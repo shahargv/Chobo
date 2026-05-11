@@ -22,6 +22,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Chobo.Contracts\Chobo.Contracts.csproj" />
+    <ProjectReference Include="..\ChoboCli\ChoboCli.csproj" />
     <ProjectReference Include="..\ChoboServer\ChoboServer.csproj" />
   </ItemGroup>
 

@@ -30,11 +30,17 @@ public sealed class UserCommands : CliSubject
     private static Task<object?> TokensAsync(CommandContext context) =>
         CommandHelpers.WithClient(context, client => client.GetAsync($"users/{context.Command.Options.Required("--id")}/tokens"));
 
-    private static Task<object?> AddTokenAsync(CommandContext context) =>
-        CommandHelpers.WithClient(context, client => client.PostAsync(
-            $"users/{context.Command.Options.Required("--id")}/tokens",
-            new CreateAccessTokenRequest(context.Command.Options.Required("--name"))));
+    private static Task<object?> AddTokenAsync(CommandContext context)
+    {
+        var required = context.Command.Options.Require("--id", "--name");
+        return CommandHelpers.WithClient(context, client => client.PostAsync(
+            $"users/{required["--id"]}/tokens",
+            new CreateAccessTokenRequest(required["--name"])));
+    }
 
-    private static Task<object?> RemoveTokenAsync(CommandContext context) =>
-        CommandHelpers.WithClient(context, client => client.DeleteAsync($"users/{context.Command.Options.Required("--id")}/tokens/{context.Command.Options.Required("--token-id")}"));
+    private static Task<object?> RemoveTokenAsync(CommandContext context)
+    {
+        var required = context.Command.Options.Require("--id", "--token-id");
+        return CommandHelpers.WithClient(context, client => client.DeleteAsync($"users/{required["--id"]}/tokens/{required["--token-id"]}"));
+    }
 }

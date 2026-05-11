@@ -15,7 +15,7 @@ public sealed class LogsAndAuditController(ApplicationLogTimelineStore logs, Aud
     public async Task<IActionResult> ClearLogs(ClearBeforeRequest request)
     {
         var deleted = await logs.DeleteBeforeAsync(request.Before);
-        await audit.RecordAsync("clear", "application-log", null, new { request.Before, deleted });
+        await audit.RecordAsync("clear", AuditEntityType.ApplicationLog, null, new { request.Before, deleted });
         return Ok(new { deleted });
     }
 
@@ -27,7 +27,7 @@ public sealed class LogsAndAuditController(ApplicationLogTimelineStore logs, Aud
     public async Task<IActionResult> ClearAudit(ClearBeforeRequest request)
     {
         var deleted = await audits.DeleteBeforeAsync(request.Before);
-        await audit.RecordAsync("clear", "audit", null, new { request.Before, deleted });
+        await audit.RecordAsync("clear", AuditEntityType.Audit, null, new { request.Before, deleted });
         return Ok(new { deleted });
     }
 }

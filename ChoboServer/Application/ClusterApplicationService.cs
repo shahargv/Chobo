@@ -31,7 +31,7 @@ public sealed class ClusterApplicationService(
         await unitOfWork.SaveChangesAsync();
 
         var current = ToDto(cluster);
-        await audit.RecordAsync("create", "cluster", cluster.Id.ToString(), AuditDetails.Change(null, current));
+        await audit.RecordAsync("create", AuditEntityType.Cluster, cluster.Id.ToString(), AuditDetails.Change(null, current));
         return current;
     }
 
@@ -67,7 +67,7 @@ public sealed class ClusterApplicationService(
         await unitOfWork.SaveChangesAsync();
         cluster.AccessNodes = replacementNodes;
         var current = ToDto(cluster);
-        await audit.RecordAsync("update", "cluster", id.ToString(), AuditDetails.Change(previous, current));
+        await audit.RecordAsync("update", AuditEntityType.Cluster, id.ToString(), AuditDetails.Change(previous, current));
         return current;
     }
 
@@ -84,7 +84,7 @@ public sealed class ClusterApplicationService(
         cluster.DeletedAt = DateTimeOffset.UtcNow;
         await unitOfWork.SaveChangesAsync();
 
-        await audit.RecordAsync("delete", "cluster", id.ToString(), AuditDetails.Deactivation(previous, ToDto(cluster)));
+        await audit.RecordAsync("delete", AuditEntityType.Cluster, id.ToString(), AuditDetails.Deactivation(previous, ToDto(cluster)));
         return true;
     }
 

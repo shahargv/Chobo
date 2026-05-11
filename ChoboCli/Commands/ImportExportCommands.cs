@@ -30,11 +30,16 @@ public sealed class ImportExportCommands : CliSubject
         });
 
     private Task<object?> ImportAsync(CommandContext context) =>
-        CommandHelpers.WithClient(context, async client =>
+        ImportValidatedAsync(context);
+
+    private Task<object?> ImportValidatedAsync(CommandContext context)
+    {
+        var required = context.Command.Options.Require("--file");
+        var envelope = JsonSerializer.Deserialize<ExportEnvelope>(File.ReadAllText(required["--file"]), JsonOutputWriter.JsonOptions)
+            ?? throw new InvalidOperationException("Invalid export file.");
+        return CommandHelpers.WithClient(context, async client =>
         {
-            var path = context.Command.Options.Required("--file");
-            var envelope = JsonSerializer.Deserialize<ExportEnvelope>(await File.ReadAllTextAsync(path), JsonOutputWriter.JsonOptions)
-                ?? throw new InvalidOperationException("Invalid export file.");
             return await client.PostAsync($"{Name}/import", envelope);
         });
+    }
 }

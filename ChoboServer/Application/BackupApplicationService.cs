@@ -55,10 +55,10 @@ public sealed class BackupApplicationService(
         db.Backups.Add(backup);
         await db.SaveChangesAsync(cancellationToken);
         _logger.Information("Manual backup {BackupId} created by {ActorName} for cluster {ClusterId} target {TargetId}.", backup.Id, actor.ActorName, request.ClusterId, request.TargetId);
-        await audit.RecordAsync("created", "backup", backup.Id.ToString(), new { backup.TriggerType, backup.SourceClusterId, backup.TargetId });
+        await audit.RecordAsync("created", AuditEntityType.Backup, backup.Id.ToString(), new { backup.TriggerType, backup.SourceClusterId, backup.TargetId });
         await queues.QueueBackupAsync(backup.Id, cancellationToken);
         _logger.Information("Manual backup {BackupId} queued.", backup.Id);
-        await audit.RecordAsync("queued", "backup", backup.Id.ToString(), new { reason = "manual" });
+        await audit.RecordAsync("queued", AuditEntityType.Backup, backup.Id.ToString(), new { reason = "manual" });
 
         return BackupRestoreMapping.ToDto(await LoadAsync(backup.Id, cancellationToken) ?? backup);
     }

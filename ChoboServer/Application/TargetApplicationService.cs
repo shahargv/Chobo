@@ -33,7 +33,7 @@ public sealed class TargetApplicationService(
         await unitOfWork.SaveChangesAsync();
 
         var current = ToDto(target);
-        await audit.RecordAsync("create", "backup-target", target.Id.ToString(), AuditDetails.Change(null, current));
+        await audit.RecordAsync("create", AuditEntityType.BackupTarget, target.Id.ToString(), AuditDetails.Change(null, current));
         return current;
     }
 
@@ -65,7 +65,7 @@ public sealed class TargetApplicationService(
 
         await unitOfWork.SaveChangesAsync();
         var current = ToDto(target);
-        await audit.RecordAsync("update", "backup-target", id.ToString(), AuditDetails.Change(previous, current));
+        await audit.RecordAsync("update", AuditEntityType.BackupTarget, id.ToString(), AuditDetails.Change(previous, current));
         return current;
     }
 
@@ -82,7 +82,7 @@ public sealed class TargetApplicationService(
         target.DeletedAt = DateTimeOffset.UtcNow;
         await unitOfWork.SaveChangesAsync();
 
-        await audit.RecordAsync("delete", "backup-target", id.ToString(), AuditDetails.Deactivation(previous, ToDto(target)));
+        await audit.RecordAsync("delete", AuditEntityType.BackupTarget, id.ToString(), AuditDetails.Deactivation(previous, ToDto(target)));
         return true;
     }
 

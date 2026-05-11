@@ -36,6 +36,12 @@ public static class SchemaUpgradeService
                     schema.AppliedMigrationId = "0004_policy_selector_json_version";
                     schema.AppliedAt = DateTimeOffset.UtcNow;
                     break;
+                case 4:
+                    await UpgradeFromV4ToV5Async(db);
+                    schema.SchemaVersion = 5;
+                    schema.AppliedMigrationId = "0005_schedule_missed_run_grace_period";
+                    schema.AppliedAt = DateTimeOffset.UtcNow;
+                    break;
                 default:
                     throw new InvalidOperationException($"No upgrade path is registered from schema version {schema.SchemaVersion}.");
             }
@@ -127,6 +133,18 @@ public static class SchemaUpgradeService
 
         await db.Database.ExecuteSqlRawAsync("""
             ALTER TABLE BackupPolicies ADD COLUMN SelectorJsonVersion INTEGER NOT NULL DEFAULT 1;
+            """);
+    }
+
+    private static async Task UpgradeFromV4ToV5Async(ChoboDbContext db)
+    {
+        if (await ColumnExistsAsync(db, "BackupSchedules", "MissedRunGracePeriod"))
+        {
+            return;
+        }
+
+        await db.Database.ExecuteSqlRawAsync("""
+            ALTER TABLE BackupSchedules ADD COLUMN MissedRunGracePeriod TEXT NULL;
             """);
     }
 }

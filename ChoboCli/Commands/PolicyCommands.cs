@@ -20,11 +20,18 @@ public sealed class PolicyCommands : CliSubject
     private static Task<object?> ListAsync(CommandContext context) =>
         CommandHelpers.WithClient(context, client => client.GetAsync("policies"));
 
-    private static Task<object?> AddAsync(CommandContext context) =>
-        CommandHelpers.WithClient(context, client => client.PostAsync("policies", Request(context.Command.Options)));
+    private static Task<object?> AddAsync(CommandContext context)
+    {
+        var request = Request(context.Command.Options);
+        return CommandHelpers.WithClient(context, client => client.PostAsync("policies", request));
+    }
 
-    private static Task<object?> UpdateAsync(CommandContext context) =>
-        CommandHelpers.WithClient(context, client => client.PutAsync($"policies/{context.Command.Options.Required("--id")}", Request(context.Command.Options)));
+    private static Task<object?> UpdateAsync(CommandContext context)
+    {
+        var required = context.Command.Options.Require("--id");
+        var request = Request(context.Command.Options);
+        return CommandHelpers.WithClient(context, client => client.PutAsync($"policies/{required["--id"]}", request));
+    }
 
     private static Task<object?> RemoveAsync(CommandContext context) =>
         CommandHelpers.WithClient(context, client => client.DeleteAsync($"policies/{context.Command.Options.Required("--id")}"));
@@ -32,10 +39,13 @@ public sealed class PolicyCommands : CliSubject
     private static Task<object?> EvaluateAsync(CommandContext context) =>
         CommandHelpers.WithClient(context, client => client.PostAsync($"policies/{context.Command.Options.Required("--id")}/evaluate", CommandHelpers.PolicyEvaluationRequestFromOption(context.Command.Options)));
 
-    private static UpsertPolicyRequest Request(OptionBag options) =>
-        new(
-            options.Required("--name"),
-            Guid.Parse(options.Required("--source-cluster-id")),
-            Guid.Parse(options.Required("--target-id")),
+    private static UpsertPolicyRequest Request(OptionBag options)
+    {
+        var required = options.Require("--name", "--source-cluster-id", "--target-id");
+        return new UpsertPolicyRequest(
+            required["--name"],
+            Guid.Parse(required["--source-cluster-id"]),
+            Guid.Parse(required["--target-id"]),
             CommandHelpers.PolicySelectorFromOption(options));
+    }
 }

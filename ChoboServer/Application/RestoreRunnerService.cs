@@ -39,7 +39,7 @@ public sealed class RestoreRunnerService(
             restore.Status = RestoreRunStatus.Running;
             restore.StartedAt ??= DateTimeOffset.UtcNow;
             await db.SaveChangesAsync(cancellationToken);
-            await audit.RecordAsync("started", "restore", restore.Id.ToString(), new { restore.BackupId, restore.TargetClusterId });
+            await audit.RecordAsync("started", AuditEntityType.Restore, restore.Id.ToString(), new { restore.BackupId, restore.TargetClusterId });
 
             var maxDop = EffectiveMaxDop(restore.TargetCluster!);
             _logger.Information("Executing restore {RestoreId} with effective maxdop {MaxDop} and {TableCount} table(s).", restore.Id, maxDop, restore.Tables.Count);
@@ -62,7 +62,7 @@ public sealed class RestoreRunnerService(
             restore.Error = restore.Status == RestoreRunStatus.Failed ? "One or more tables failed." : null;
             await db.SaveChangesAsync(cancellationToken);
             _logger.Information("Restore {RestoreId} finished with status {Status}.", restore.Id, restore.Status);
-            await audit.RecordAsync(restore.Status == RestoreRunStatus.Succeeded ? "succeeded" : "failed", "restore", restore.Id.ToString(), new { tableCount });
+            await audit.RecordAsync(restore.Status == RestoreRunStatus.Succeeded ? "succeeded" : "failed", AuditEntityType.Restore, restore.Id.ToString(), new { tableCount });
         }
         catch (Exception ex)
         {
@@ -71,7 +71,7 @@ public sealed class RestoreRunnerService(
             restore.Error = ex.Message;
             restore.CompletedAt = DateTimeOffset.UtcNow;
             await db.SaveChangesAsync(CancellationToken.None);
-            await audit.RecordAsync("failed", "restore", restore.Id.ToString(), new { error = ex.Message });
+            await audit.RecordAsync("failed", AuditEntityType.Restore, restore.Id.ToString(), new { error = ex.Message });
         }
     }
 
@@ -95,7 +95,7 @@ public sealed class RestoreRunnerService(
         table.StartedAt ??= DateTimeOffset.UtcNow;
         await scopedDb.SaveChangesAsync(cancellationToken);
         _logger.Information("Restore table {RestoreTableId} {TargetDatabase}.{TargetTable} started.", table.Id, table.TargetDatabase, table.TargetTable);
-        await scopedAudit.RecordAsync("table-started", "restore-table", table.Id.ToString(), new { table.TargetDatabase, table.TargetTable });
+        await scopedAudit.RecordAsync("table-started", AuditEntityType.RestoreTable, table.Id.ToString(), new { table.TargetDatabase, table.TargetTable });
 
         try
         {
@@ -130,7 +130,7 @@ public sealed class RestoreRunnerService(
                 table.CompletedAt = DateTimeOffset.UtcNow;
                 await scopedDb.SaveChangesAsync(cancellationToken);
                 _logger.Information("Restore table {RestoreTableId} {TargetDatabase}.{TargetTable} completed as schema-only.", table.Id, table.TargetDatabase, table.TargetTable);
-                await scopedAudit.RecordAsync("table-skipped", "restore-table", table.Id.ToString(), new { reason = "schema-only" });
+                await scopedAudit.RecordAsync("table-skipped", AuditEntityType.RestoreTable, table.Id.ToString(), new { reason = "schema-only" });
                 return;
             }
 
@@ -155,7 +155,7 @@ public sealed class RestoreRunnerService(
                 }
                 else
                 {
-                    await scopedAudit.RecordAsync("table-restarted", "restore-table", table.Id.ToString(), new { reason = "operation-not-found", table.ClickHouseOperationId });
+                    await scopedAudit.RecordAsync("table-restarted", AuditEntityType.RestoreTable, table.Id.ToString(), new { reason = "operation-not-found", table.ClickHouseOperationId });
                     table.ClickHouseOperationId = null;
                     table.ClickHouseStatus = null;
                 }
@@ -168,7 +168,7 @@ public sealed class RestoreRunnerService(
                 table.ClickHouseStatus = operation.Status;
                 await scopedDb.SaveChangesAsync(cancellationToken);
                 _logger.Information("Restore table {RestoreTableId} submitted ClickHouse operation {OperationId} status {Status}.", table.Id, operation.OperationId, operation.Status);
-                await scopedAudit.RecordAsync("clickhouse-operation-submitted", "restore-table", table.Id.ToString(), new { operation.OperationId, operation.Status });
+                await scopedAudit.RecordAsync("clickhouse-operation-submitted", AuditEntityType.RestoreTable, table.Id.ToString(), new { operation.OperationId, operation.Status });
                 await PollRestoreAsync(scopedClickHouse, restore.TargetCluster!, table, new ClickHouseOperationStatus(true, operation.Status, null), scopedOptions.Value.PollInterval, cancellationToken);
             }
 
@@ -186,7 +186,7 @@ public sealed class RestoreRunnerService(
             table.CompletedAt = DateTimeOffset.UtcNow;
             await scopedDb.SaveChangesAsync(cancellationToken);
             _logger.Information("Restore table {RestoreTableId} {TargetDatabase}.{TargetTable} completed with ClickHouse status {Status}.", table.Id, table.TargetDatabase, table.TargetTable, table.ClickHouseStatus);
-            await scopedAudit.RecordAsync("table-succeeded", "restore-table", table.Id.ToString(), new { table.TargetDatabase, table.TargetTable });
+            await scopedAudit.RecordAsync("table-succeeded", AuditEntityType.RestoreTable, table.Id.ToString(), new { table.TargetDatabase, table.TargetTable });
         }
         catch (Exception ex)
         {
@@ -195,7 +195,7 @@ public sealed class RestoreRunnerService(
             table.Error = ex.Message;
             table.CompletedAt = DateTimeOffset.UtcNow;
             await scopedDb.SaveChangesAsync(CancellationToken.None);
-            await scopedAudit.RecordAsync("table-failed", "restore-table", table.Id.ToString(), new { error = ex.Message });
+            await scopedAudit.RecordAsync("table-failed", AuditEntityType.RestoreTable, table.Id.ToString(), new { error = ex.Message });
         }
     }
 

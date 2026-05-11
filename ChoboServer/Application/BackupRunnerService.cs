@@ -45,7 +45,7 @@ public sealed class BackupRunnerService(
             backup.Status = BackupRunStatus.Running;
             backup.StartedAt ??= DateTimeOffset.UtcNow;
             await db.SaveChangesAsync(cancellationToken);
-            await audit.RecordAsync("started", "backup", backup.Id.ToString(), new { backup.SourceClusterId, backup.TargetId });
+            await audit.RecordAsync("started", AuditEntityType.Backup, backup.Id.ToString(), new { backup.SourceClusterId, backup.TargetId });
 
             ValidateBackup(backup);
             if (backup.Tables.Count == 0)
@@ -85,7 +85,7 @@ public sealed class BackupRunnerService(
             backup.Error = backup.Status == BackupRunStatus.Failed ? "One or more tables failed." : null;
             await db.SaveChangesAsync(cancellationToken);
             _logger.Information("Backup {BackupId} finished with status {Status}.", backup.Id, backup.Status);
-            await audit.RecordAsync(backup.Status == BackupRunStatus.Succeeded ? "succeeded" : "failed", "backup", backup.Id.ToString(), new { tableCount });
+            await audit.RecordAsync(backup.Status == BackupRunStatus.Succeeded ? "succeeded" : "failed", AuditEntityType.Backup, backup.Id.ToString(), new { tableCount });
         }
         catch (Exception ex)
         {
@@ -94,7 +94,7 @@ public sealed class BackupRunnerService(
             backup.Error = ex.Message;
             backup.CompletedAt = DateTimeOffset.UtcNow;
             await db.SaveChangesAsync(CancellationToken.None);
-            await audit.RecordAsync("failed", "backup", backup.Id.ToString(), new { error = ex.Message });
+            await audit.RecordAsync("failed", AuditEntityType.Backup, backup.Id.ToString(), new { error = ex.Message });
         }
     }
 
@@ -107,7 +107,7 @@ public sealed class BackupRunnerService(
             table.ClickHouseStatus = "SCHEMA_ONLY";
             table.CompletedAt = DateTimeOffset.UtcNow;
             await db.SaveChangesAsync(cancellationToken);
-            await audit.RecordAsync("table-skipped", "backup-table", table.Id.ToString(), new { reason = "schema-only", table.Database, table.Table });
+            await audit.RecordAsync("table-skipped", AuditEntityType.BackupTable, table.Id.ToString(), new { reason = "schema-only", table.Database, table.Table });
             return;
         }
 
@@ -115,7 +115,7 @@ public sealed class BackupRunnerService(
         table.StartedAt ??= DateTimeOffset.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
         _logger.Information("Backup table {BackupTableId} {Database}.{Table} started.", table.Id, table.Database, table.Table);
-        await audit.RecordAsync("table-started", "backup-table", table.Id.ToString(), new { table.Database, table.Table });
+        await audit.RecordAsync("table-started", AuditEntityType.BackupTable, table.Id.ToString(), new { table.Database, table.Table });
 
         try
         {
@@ -128,11 +128,11 @@ public sealed class BackupRunnerService(
                     await PollBackupAsync(clickHouse, backup.SourceCluster!, table, status, options.Value.PollInterval, cancellationToken);
                     await db.SaveChangesAsync(cancellationToken);
                     _logger.Information("Backup table {BackupTableId} {Database}.{Table} completed with ClickHouse status {Status}.", table.Id, table.Database, table.Table, table.ClickHouseStatus);
-                    await audit.RecordAsync("table-succeeded", "backup-table", table.Id.ToString(), new { table.Database, table.Table, table.ClickHouseStatus });
+                    await audit.RecordAsync("table-succeeded", AuditEntityType.BackupTable, table.Id.ToString(), new { table.Database, table.Table, table.ClickHouseStatus });
                     return;
                 }
 
-                await audit.RecordAsync("table-restarted", "backup-table", table.Id.ToString(), new { reason = "operation-not-found", table.ClickHouseOperationId });
+                await audit.RecordAsync("table-restarted", AuditEntityType.BackupTable, table.Id.ToString(), new { reason = "operation-not-found", table.ClickHouseOperationId });
                 table.ClickHouseOperationId = null;
                 table.ClickHouseStatus = null;
             }
@@ -142,11 +142,11 @@ public sealed class BackupRunnerService(
             table.ClickHouseStatus = operation.Status;
             await db.SaveChangesAsync(cancellationToken);
             _logger.Information("Backup table {BackupTableId} submitted ClickHouse operation {OperationId} status {Status}.", table.Id, operation.OperationId, operation.Status);
-            await audit.RecordAsync("clickhouse-operation-submitted", "backup-table", table.Id.ToString(), new { operation.OperationId, operation.Status });
+            await audit.RecordAsync("clickhouse-operation-submitted", AuditEntityType.BackupTable, table.Id.ToString(), new { operation.OperationId, operation.Status });
             await PollBackupAsync(clickHouse, backup.SourceCluster!, table, new ClickHouseOperationStatus(true, operation.Status, null), options.Value.PollInterval, cancellationToken);
             await db.SaveChangesAsync(cancellationToken);
             _logger.Information("Backup table {BackupTableId} {Database}.{Table} completed with ClickHouse status {Status}.", table.Id, table.Database, table.Table, table.ClickHouseStatus);
-            await audit.RecordAsync("table-succeeded", "backup-table", table.Id.ToString(), new { table.Database, table.Table, table.ClickHouseStatus });
+            await audit.RecordAsync("table-succeeded", AuditEntityType.BackupTable, table.Id.ToString(), new { table.Database, table.Table, table.ClickHouseStatus });
         }
         catch (Exception ex)
         {
@@ -155,7 +155,7 @@ public sealed class BackupRunnerService(
             table.Error = ex.Message;
             table.CompletedAt = DateTimeOffset.UtcNow;
             await db.SaveChangesAsync(CancellationToken.None);
-            await audit.RecordAsync("table-failed", "backup-table", table.Id.ToString(), new { error = ex.Message });
+            await audit.RecordAsync("table-failed", AuditEntityType.BackupTable, table.Id.ToString(), new { error = ex.Message });
         }
     }
 
@@ -215,7 +215,7 @@ public sealed class BackupRunnerService(
         await db.SaveChangesAsync(cancellationToken);
         await db.Entry(backup).Collection(x => x.Tables).LoadAsync(cancellationToken);
         _logger.Information("Backup {BackupId} prepared {TableCount} table row(s).", backup.Id, backup.Tables.Count);
-        await audit.RecordAsync("tables-prepared", "backup", backup.Id.ToString(), new { tableCount = backup.Tables.Count });
+        await audit.RecordAsync("tables-prepared", AuditEntityType.Backup, backup.Id.ToString(), new { tableCount = backup.Tables.Count });
     }
 
     private async Task RunTableAsync(Guid backupId, Guid tableId, CancellationToken cancellationToken)
@@ -240,7 +240,7 @@ public sealed class BackupRunnerService(
             table.ClickHouseStatus = "SCHEMA_ONLY";
             table.CompletedAt = DateTimeOffset.UtcNow;
             await scopedDb.SaveChangesAsync(cancellationToken);
-            await scopedAudit.RecordAsync("table-skipped", "backup-table", table.Id.ToString(), new { reason = "schema-only", table.Database, table.Table });
+            await scopedAudit.RecordAsync("table-skipped", AuditEntityType.BackupTable, table.Id.ToString(), new { reason = "schema-only", table.Database, table.Table });
             return;
         }
 
@@ -248,7 +248,7 @@ public sealed class BackupRunnerService(
         table.StartedAt ??= DateTimeOffset.UtcNow;
         await scopedDb.SaveChangesAsync(cancellationToken);
         _logger.Information("Backup table {BackupTableId} {Database}.{Table} started.", table.Id, table.Database, table.Table);
-        await scopedAudit.RecordAsync("table-started", "backup-table", table.Id.ToString(), new { table.Database, table.Table });
+        await scopedAudit.RecordAsync("table-started", AuditEntityType.BackupTable, table.Id.ToString(), new { table.Database, table.Table });
 
         try
         {
@@ -261,11 +261,11 @@ public sealed class BackupRunnerService(
                     await PollBackupAsync(scopedClickHouse, backup.SourceCluster!, table, status, scopedOptions.Value.PollInterval, cancellationToken);
                     await scopedDb.SaveChangesAsync(cancellationToken);
                     _logger.Information("Backup table {BackupTableId} {Database}.{Table} completed with ClickHouse status {Status}.", table.Id, table.Database, table.Table, table.ClickHouseStatus);
-                    await scopedAudit.RecordAsync("table-succeeded", "backup-table", table.Id.ToString(), new { table.Database, table.Table, table.ClickHouseStatus });
+                    await scopedAudit.RecordAsync("table-succeeded", AuditEntityType.BackupTable, table.Id.ToString(), new { table.Database, table.Table, table.ClickHouseStatus });
                     return;
                 }
 
-                await scopedAudit.RecordAsync("table-restarted", "backup-table", table.Id.ToString(), new { reason = "operation-not-found", table.ClickHouseOperationId });
+                await scopedAudit.RecordAsync("table-restarted", AuditEntityType.BackupTable, table.Id.ToString(), new { reason = "operation-not-found", table.ClickHouseOperationId });
                 table.ClickHouseOperationId = null;
                 table.ClickHouseStatus = null;
             }
@@ -275,11 +275,11 @@ public sealed class BackupRunnerService(
             table.ClickHouseStatus = operation.Status;
             await scopedDb.SaveChangesAsync(cancellationToken);
             _logger.Information("Backup table {BackupTableId} submitted ClickHouse operation {OperationId} status {Status}.", table.Id, operation.OperationId, operation.Status);
-            await scopedAudit.RecordAsync("clickhouse-operation-submitted", "backup-table", table.Id.ToString(), new { operation.OperationId, operation.Status });
+            await scopedAudit.RecordAsync("clickhouse-operation-submitted", AuditEntityType.BackupTable, table.Id.ToString(), new { operation.OperationId, operation.Status });
             await PollBackupAsync(scopedClickHouse, backup.SourceCluster!, table, new ClickHouseOperationStatus(true, operation.Status, null), scopedOptions.Value.PollInterval, cancellationToken);
             await scopedDb.SaveChangesAsync(cancellationToken);
             _logger.Information("Backup table {BackupTableId} {Database}.{Table} completed with ClickHouse status {Status}.", table.Id, table.Database, table.Table, table.ClickHouseStatus);
-            await scopedAudit.RecordAsync("table-succeeded", "backup-table", table.Id.ToString(), new { table.Database, table.Table, table.ClickHouseStatus });
+            await scopedAudit.RecordAsync("table-succeeded", AuditEntityType.BackupTable, table.Id.ToString(), new { table.Database, table.Table, table.ClickHouseStatus });
         }
         catch (Exception ex)
         {
@@ -288,7 +288,7 @@ public sealed class BackupRunnerService(
             table.Error = ex.Message;
             table.CompletedAt = DateTimeOffset.UtcNow;
             await scopedDb.SaveChangesAsync(CancellationToken.None);
-            await scopedAudit.RecordAsync("table-failed", "backup-table", table.Id.ToString(), new { error = ex.Message });
+            await scopedAudit.RecordAsync("table-failed", AuditEntityType.BackupTable, table.Id.ToString(), new { error = ex.Message });
         }
     }
 

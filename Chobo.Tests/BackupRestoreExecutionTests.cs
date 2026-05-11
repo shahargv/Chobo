@@ -181,6 +181,203 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Scheduler_enqueues_only_when_cron_is_due()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var schedule = await fixture.SeedPolicyAndScheduleAsync();
+        schedule.CronExpression = "0 0 0 1 1 ? 2099";
+        await fixture.Db.SaveChangesAsync();
+
+        await fixture.Services.GetRequiredService<BackupSchedulerDispatcherBackgroundService>().DispatchOnceAsync();
+
+        Assert.False(await fixture.Db.Backups.AnyAsync(x => x.ScheduleId == schedule.Id));
+    }
+
+    [Fact]
+    public async Task Scheduler_enqueues_due_cron_schedule()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var schedule = await fixture.SeedPolicyAndScheduleAsync();
+        schedule.CronExpression = "0/1 * * * * ?";
+        await fixture.Db.SaveChangesAsync();
+
+        await fixture.Services.GetRequiredService<BackupSchedulerDispatcherBackgroundService>().DispatchOnceAsync();
+
+        var backup = await fixture.Db.Backups.SingleAsync(x => x.ScheduleId == schedule.Id);
+        Assert.Equal(schedule.PolicyId, backup.PolicyId);
+        Assert.Equal(BackupTriggerType.Scheduled, backup.TriggerType);
+        Assert.Equal(BackupRunStatus.Queued, backup.Status);
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "scheduled-backup-enqueued" && x.EntityId == schedule.Id.ToString()));
+    }
+
+    [Fact]
+    public async Task Scheduler_enqueues_schedule_that_is_due_within_grace_period_since_last_decision()
+    {
+        var now = new DateTimeOffset(2026, 5, 11, 8, 2, 0, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(
+            options: new ChoboBackupRestoreOptions
+            {
+                MaxDop = 3,
+                PollInterval = TimeSpan.FromMilliseconds(1),
+                SchedulerInterval = TimeSpan.FromMinutes(1),
+                SchedulerMissedRunGracePeriod = TimeSpan.FromMinutes(5)
+            },
+            timeProvider: new FixedTimeProvider(now));
+        var schedule = await fixture.SeedPolicyAndScheduleAsync();
+        schedule.CronExpression = "0 0 8 ? * MON";
+        schedule.CreatedAt = now.AddHours(-1);
+        await fixture.Db.SaveChangesAsync();
+
+        await fixture.Services.GetRequiredService<BackupSchedulerDispatcherBackgroundService>().DispatchOnceAsync();
+
+        var backup = await fixture.Db.Backups.SingleAsync(x => x.ScheduleId == schedule.Id);
+        Assert.Equal(BackupRunStatus.Queued, backup.Status);
+        var audit = await fixture.Db.AuditEntries.SingleAsync(x => x.Action == "scheduled-backup-enqueued" && x.EntityId == schedule.Id.ToString());
+        Assert.Contains("plannedRunAt", audit.Details);
+    }
+
+    [Fact]
+    public async Task Scheduler_audits_and_skips_schedule_that_is_due_but_outside_grace_period()
+    {
+        var now = new DateTimeOffset(2026, 5, 11, 8, 50, 0, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(
+            options: new ChoboBackupRestoreOptions
+            {
+                MaxDop = 3,
+                PollInterval = TimeSpan.FromMilliseconds(1),
+                SchedulerInterval = TimeSpan.FromMinutes(1),
+                SchedulerMissedRunGracePeriod = TimeSpan.FromMinutes(5)
+            },
+            timeProvider: new FixedTimeProvider(now));
+        var schedule = await fixture.SeedPolicyAndScheduleAsync();
+        schedule.CronExpression = "0 0 8 ? * MON";
+        schedule.CreatedAt = now.AddHours(-2);
+        await fixture.Db.SaveChangesAsync();
+
+        await fixture.Services.GetRequiredService<BackupSchedulerDispatcherBackgroundService>().DispatchOnceAsync();
+
+        Assert.False(await fixture.Db.Backups.AnyAsync(x => x.ScheduleId == schedule.Id));
+        var audit = await fixture.Db.AuditEntries.SingleAsync(x => x.Action == "scheduled-backup-missed" && x.EntityId == schedule.Id.ToString());
+        Assert.Contains("plannedRunAt", audit.Details);
+        Assert.Contains("latenessSeconds", audit.Details);
+    }
+
+    [Fact]
+    public async Task Scheduler_uses_schedule_grace_period_override_when_specified()
+    {
+        var now = new DateTimeOffset(2026, 5, 11, 8, 50, 0, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(
+            options: new ChoboBackupRestoreOptions
+            {
+                MaxDop = 3,
+                PollInterval = TimeSpan.FromMilliseconds(1),
+                SchedulerInterval = TimeSpan.FromMinutes(1),
+                SchedulerMissedRunGracePeriod = TimeSpan.FromMinutes(5)
+            },
+            timeProvider: new FixedTimeProvider(now));
+        var schedule = await fixture.SeedPolicyAndScheduleAsync();
+        schedule.CronExpression = "0 0 8 ? * MON";
+        schedule.CreatedAt = now.AddHours(-2);
+        schedule.MissedRunGracePeriod = TimeSpan.FromHours(1);
+        await fixture.Db.SaveChangesAsync();
+
+        await fixture.Services.GetRequiredService<BackupSchedulerDispatcherBackgroundService>().DispatchOnceAsync();
+
+        var backup = await fixture.Db.Backups.SingleAsync(x => x.ScheduleId == schedule.Id);
+        Assert.Equal(BackupRunStatus.Queued, backup.Status);
+        Assert.False(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "scheduled-backup-missed" && x.EntityId == schedule.Id.ToString()));
+    }
+
+    [Fact]
+    public async Task Scheduler_skips_due_schedule_when_same_policy_already_has_active_backup()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var firstSchedule = await fixture.SeedPolicyAndScheduleAsync();
+        var secondSchedule = new BackupScheduleEntity
+        {
+            Name = "same-policy-fast",
+            PolicyId = firstSchedule.PolicyId,
+            BackupType = BackupType.Full,
+            CronExpression = "* * * * * ?",
+            TimeZoneId = "UTC",
+            IsEnabled = true,
+            CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-10)
+        };
+        fixture.Db.BackupSchedules.Add(secondSchedule);
+        fixture.Db.Backups.Add(new BackupEntity
+        {
+            TriggerType = BackupTriggerType.Scheduled,
+            Status = BackupRunStatus.Running,
+            SourceClusterId = fixture.SourceClusterId,
+            TargetId = fixture.TargetId,
+            PolicyId = firstSchedule.PolicyId,
+            ScheduleId = firstSchedule.Id
+        });
+        await fixture.Db.SaveChangesAsync();
+
+        await fixture.Services.GetRequiredService<BackupSchedulerDispatcherBackgroundService>().DispatchOnceAsync();
+
+        Assert.Equal(1, await fixture.Db.Backups.CountAsync(x => x.PolicyId == firstSchedule.PolicyId));
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "schedule-skip-active-policy" && x.EntityId == secondSchedule.Id.ToString()));
+    }
+
+    [Fact]
+    public async Task Dashboard_reports_active_runs_schedule_history_future_runs_and_policy_freshness()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var schedule = await fixture.SeedPolicyAndScheduleAsync();
+        var completedAt = DateTimeOffset.UtcNow.AddMinutes(-5);
+        fixture.Db.Backups.AddRange(
+            new BackupEntity
+            {
+                TriggerType = BackupTriggerType.Scheduled,
+                Status = BackupRunStatus.Succeeded,
+                SourceClusterId = fixture.SourceClusterId,
+                TargetId = fixture.TargetId,
+                PolicyId = schedule.PolicyId,
+                ScheduleId = schedule.Id,
+                CreatedAt = completedAt.AddMinutes(-1),
+                StartedAt = completedAt.AddMinutes(-1),
+                CompletedAt = completedAt
+            },
+            new BackupEntity
+            {
+                TriggerType = BackupTriggerType.Scheduled,
+                Status = BackupRunStatus.Running,
+                SourceClusterId = fixture.SourceClusterId,
+                TargetId = fixture.TargetId,
+                PolicyId = schedule.PolicyId,
+                ScheduleId = schedule.Id,
+                CreatedAt = DateTimeOffset.UtcNow.AddSeconds(-10),
+                StartedAt = DateTimeOffset.UtcNow.AddSeconds(-8)
+            });
+        await fixture.Db.SaveChangesAsync();
+
+        var service = fixture.Services.GetRequiredService<DashboardApplicationService>();
+        var dashboard = await service.GetDashboardAsync(nextHours: 1);
+        var metrics = await service.GetMetricsAsync();
+
+        var running = Assert.Single(dashboard.RunningBackups);
+        Assert.Equal("hourly", running.PolicyName);
+        Assert.Equal("hourly", running.ScheduleName);
+        Assert.Equal(BackupRunStatus.Running, running.Status);
+
+        var summary = Assert.Single(dashboard.Schedules);
+        Assert.Equal("hourly", summary.ScheduleName);
+        Assert.Equal("hourly", summary.PolicyName);
+        Assert.Equal(BackupRunStatus.Running, summary.LastRunStatus);
+        Assert.NotNull(summary.LastSuccessfulRunCompletedAt);
+        Assert.True(Math.Abs((summary.LastSuccessfulRunCompletedAt.Value - completedAt).TotalSeconds) < 1);
+        Assert.NotEmpty(dashboard.FutureSchedules);
+        Assert.All(dashboard.FutureSchedules, x => Assert.Equal(schedule.Id, x.ScheduleId));
+
+        var freshness = Assert.Single(metrics);
+        Assert.Equal("Policies.TimeSecondsSinceLastPolicyBackup.hourly", freshness.Key);
+        Assert.NotNull(freshness.Value);
+        Assert.True(freshness.Value >= 0);
+    }
+
+    [Fact]
     public async Task Schema_definitions_are_reused_by_hash()
     {
         await using var fixture = await TestFixture.CreateAsync();
@@ -333,7 +530,7 @@ public sealed class BackupRestoreExecutionTests
             TargetId = targetId;
         }
 
-        public static async Task<TestFixture> CreateAsync(int? clusterMaxDop = null, ChoboBackupRestoreOptions? options = null)
+        public static async Task<TestFixture> CreateAsync(int? clusterMaxDop = null, ChoboBackupRestoreOptions? options = null, TimeProvider? timeProvider = null)
         {
             var connection = new SqliteConnection("DataSource=:memory:");
             await connection.OpenAsync();
@@ -346,10 +543,12 @@ public sealed class BackupRestoreExecutionTests
                 .AddScoped<PolicySelectorEvaluationService>()
                 .AddScoped<ActorContext>()
                 .AddScoped<AuditService>()
+                .AddScoped<DashboardApplicationService>()
                 .AddScoped<BackupRunnerService>()
                 .AddScoped<RestoreRunnerService>()
                 .AddSingleton<BackupRestoreQueues>()
                 .AddSingleton(Options.Create(options ?? new ChoboBackupRestoreOptions { MaxDop = 3, PollInterval = TimeSpan.FromMilliseconds(1), SchedulerInterval = TimeSpan.FromSeconds(1) }))
+                .AddSingleton(timeProvider ?? TimeProvider.System)
                 .AddSingleton<BackupSchedulerDispatcherBackgroundService>()
                 .AddSingleton<Serilog.ILogger>(Serilog.Core.Logger.None)
                 .BuildServiceProvider();
@@ -492,9 +691,10 @@ public sealed class BackupRestoreExecutionTests
                 Name = "hourly",
                 Policy = policy,
                 BackupType = BackupType.Full,
-                CronExpression = "* * * * *",
+                CronExpression = "* * * * * ?",
                 TimeZoneId = "UTC",
-                IsEnabled = true
+                IsEnabled = true,
+                CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-10)
             };
             Db.BackupSchedules.Add(schedule);
             await Db.SaveChangesAsync();
@@ -556,5 +756,10 @@ public sealed class BackupRestoreExecutionTests
                     table.StartedAt,
                     table.CompletedAt,
                     table.Error)).ToList());
+    }
+
+    private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utcNow;
     }
 }

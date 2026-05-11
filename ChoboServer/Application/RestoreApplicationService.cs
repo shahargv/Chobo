@@ -74,10 +74,10 @@ public sealed class RestoreApplicationService(
         db.Restores.Add(restore);
         await db.SaveChangesAsync(cancellationToken);
         _logger.Information("Restore {RestoreId} created by {ActorName} for backup {BackupId} into cluster {TargetClusterId} with {TableCount} table(s).", restore.Id, actor.ActorName, restore.BackupId, restore.TargetClusterId, restore.Tables.Count);
-        await audit.RecordAsync("created", "restore", restore.Id.ToString(), new { restore.BackupId, restore.TargetClusterId, tableCount = restore.Tables.Count });
+        await audit.RecordAsync("created", AuditEntityType.Restore, restore.Id.ToString(), new { restore.BackupId, restore.TargetClusterId, tableCount = restore.Tables.Count });
         await queues.QueueRestoreAsync(restore.Id, cancellationToken);
         _logger.Information("Restore {RestoreId} queued.", restore.Id);
-        await audit.RecordAsync("queued", "restore", restore.Id.ToString(), new { reason = "user" });
+        await audit.RecordAsync("queued", AuditEntityType.Restore, restore.Id.ToString(), new { reason = "user" });
         return BackupRestoreMapping.ToDto(await LoadAsync(restore.Id, cancellationToken) ?? restore);
     }
 

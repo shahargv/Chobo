@@ -19,24 +19,33 @@ public sealed class TargetCommands : CliSubject
     private static Task<object?> ListAsync(CommandContext context) =>
         CommandHelpers.WithClient(context, client => client.GetAsync("targets"));
 
-    private static Task<object?> AddS3Async(CommandContext context) =>
-        CommandHelpers.WithClient(context, client => client.PostAsync("targets/s3", S3Request(context.Command.Options)));
+    private static Task<object?> AddS3Async(CommandContext context)
+    {
+        var request = S3Request(context.Command.Options);
+        return CommandHelpers.WithClient(context, client => client.PostAsync("targets/s3", request));
+    }
 
-    private static Task<object?> UpdateS3Async(CommandContext context) =>
-        CommandHelpers.WithClient(context, client => client.PutAsync($"targets/{context.Command.Options.Required("--id")}/s3", S3Request(context.Command.Options)));
+    private static Task<object?> UpdateS3Async(CommandContext context)
+    {
+        var required = context.Command.Options.Require("--id");
+        var request = S3Request(context.Command.Options);
+        return CommandHelpers.WithClient(context, client => client.PutAsync($"targets/{required["--id"]}/s3", request));
+    }
 
     private static Task<object?> RemoveAsync(CommandContext context) =>
         CommandHelpers.WithClient(context, client => client.DeleteAsync($"targets/{context.Command.Options.Required("--id")}"));
 
-    private static UpsertS3TargetRequest S3Request(OptionBag options) =>
-        new(
-            options.Required("--name"),
-            options.Required("--endpoint"),
+    private static UpsertS3TargetRequest S3Request(OptionBag options)
+    {
+        var required = options.Require("--name", "--endpoint", "--bucket");
+        return new UpsertS3TargetRequest(
+            required["--name"],
+            required["--endpoint"],
             options.Optional("--region") ?? "us-east-1",
-            options.Required("--bucket"),
+            required["--bucket"],
             options.Optional("--path-prefix"),
             options.Has("--force-path-style"),
             options.Optional("--access-key"),
             options.Optional("--secret-key"));
+    }
 }
-

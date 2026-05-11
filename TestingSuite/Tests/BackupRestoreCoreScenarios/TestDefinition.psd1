@@ -21,6 +21,13 @@
             )
         }
         @{
+            Name = 'partial-schedule-add-shows-all-required-options'
+            Type = 'Cli'
+            Args = @('schedules', 'add')
+            ExpectExitCode = 1
+            ExpectTextContains = @('Missing required options: --name, --policy-id, --cron.')
+        }
+        @{
             Name = 'auth-profile'
             Type = 'Cli'
             Args = @('server', 'auth', '--server-url', 'http://choboserver:8080', '--access-token', 'static-test-token')
@@ -448,6 +455,34 @@
             RetryIntervalSeconds = 1
             ExpectJson = @(
                 @{ Path = '$'; ContainsObject = @{ policyId = '{scheduledPolicy.id}'; sourceClusterId = '{sourceCluster.id}' } }
+            )
+        }
+        @{
+            Name = 'scheduled-backup-succeeded'
+            Type = 'Cli'
+            Args = @('backups', 'list', '--policy-id', '{scheduledPolicy.id}')
+            RetryTimeoutSeconds = 30
+            RetryIntervalSeconds = 1
+            ExpectJson = @(
+                @{ Path = '$'; ContainsObject = @{ policyId = '{scheduledPolicy.id}'; scheduleId = '{fastSchedule.id}'; status = 'Succeeded' } }
+            )
+        }
+        @{
+            Name = 'dashboard-shows-scheduled-policy'
+            Type = 'Cli'
+            Args = @('dashboard', '--next-hours', '1')
+            ExpectTextContains = @(
+                'Schedules'
+                'Future schedule runs'
+                'scheduled-orders'
+            )
+        }
+        @{
+            Name = 'metrics-show-policy-freshness'
+            Type = 'Cli'
+            Args = @('metrics', 'show')
+            ExpectTextContains = @(
+                'Policies.TimeSecondsSinceLastPolicyBackup.scheduled-orders'
             )
         }
         @{

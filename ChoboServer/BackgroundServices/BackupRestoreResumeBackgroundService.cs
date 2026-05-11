@@ -26,7 +26,7 @@ public sealed class BackupRestoreResumeBackgroundService(
             foreach (var id in backups)
             {
                 await queues.QueueBackupAsync(id, stoppingToken);
-                await audit.RecordAsync("resumed", "backup", id.ToString(), new { reason = "server-startup" });
+                await audit.RecordAsync("resumed", AuditEntityType.Backup, id.ToString(), new { reason = "server-startup" });
             }
 
             var restores = await db.Restores
@@ -36,7 +36,7 @@ public sealed class BackupRestoreResumeBackgroundService(
             foreach (var id in restores)
             {
                 await queues.QueueRestoreAsync(id, stoppingToken);
-                await audit.RecordAsync("resumed", "restore", id.ToString(), new { reason = "server-startup" });
+                await audit.RecordAsync("resumed", AuditEntityType.Restore, id.ToString(), new { reason = "server-startup" });
             }
         }
         catch (Exception ex)

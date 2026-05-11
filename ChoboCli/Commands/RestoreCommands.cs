@@ -13,16 +13,20 @@ public sealed class RestoreCommand : CliSubject
     public override string Name => "restore";
     public override string Description => "Start restore operations.";
 
-    private static Task<object?> InitiateAsync(CommandContext context) =>
-        CommandHelpers.WithClient(context, client => client.PostAsync("restores/initiate", new InitiateRestoreRequest(
-            Guid.Parse(context.Command.Options.Required("--backup-id")),
-            Guid.Parse(context.Command.Options.Required("--target-cluster-id")),
+    private static Task<object?> InitiateAsync(CommandContext context)
+    {
+        var required = context.Command.Options.Require("--backup-id", "--target-cluster-id");
+        var request = new InitiateRestoreRequest(
+            Guid.Parse(required["--backup-id"]),
+            Guid.Parse(required["--target-cluster-id"]),
             context.Command.Options.Optional("--database"),
             context.Command.Options.Optional("--table"),
             context.Command.Options.Optional("--target-database"),
             context.Command.Options.Optional("--target-table"),
             context.Command.Options.Has("--append"),
-            context.Command.Options.Has("--allow-schema-mismatch"))));
+            context.Command.Options.Has("--allow-schema-mismatch"));
+        return CommandHelpers.WithClient(context, client => client.PostAsync("restores/initiate", request));
+    }
 }
 
 public sealed class RestoresCommands : CliSubject

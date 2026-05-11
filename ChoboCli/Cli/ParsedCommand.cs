@@ -43,6 +43,11 @@ public sealed class ParsedCommand
             }
         }
 
+        if (positionals.Count == 1 && string.Equals(positionals[0], "dashboard", StringComparison.OrdinalIgnoreCase))
+        {
+            return new ParsedCommand(positionals[0], "show", new OptionBag(options), isHelp: false);
+        }
+
         if (positionals.Count < 2)
         {
             throw new InvalidOperationException("Command must include subject and verb. Use --help for examples.");
@@ -51,4 +56,3 @@ public sealed class ParsedCommand
         return new ParsedCommand(positionals[0], positionals[1], new OptionBag(options), isHelp: false);
     }
 }
-

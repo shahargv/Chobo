@@ -16,7 +16,7 @@ public sealed class ImportExportController(ExportImportService exports, AuditSer
         try
         {
             await exports.ImportAsync(envelope, configOnly: false);
-            await audit.RecordAsync("import", "data", null, new { envelope.ExportVersion, envelope.SchemaVersion });
+            await audit.RecordAsync("import", AuditEntityType.Data, null, new { envelope.ExportVersion, envelope.SchemaVersion });
             return NoContent();
         }
         catch (InvalidOperationException ex)
@@ -34,7 +34,7 @@ public sealed class ImportExportController(ExportImportService exports, AuditSer
         try
         {
             await exports.ImportAsync(envelope, configOnly: true);
-            await audit.RecordAsync("import", "config", null, new { envelope.ExportVersion, envelope.SchemaVersion });
+            await audit.RecordAsync("import", AuditEntityType.Config, null, new { envelope.ExportVersion, envelope.SchemaVersion });
             return NoContent();
         }
         catch (InvalidOperationException ex)
