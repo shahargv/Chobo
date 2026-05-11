@@ -6,3 +6,5 @@ riderModule.iml
 .artifacts/
 .idea
 Chobo.Tests/TestResults
+ChoboServer/logs/
+ChoboServer/data-dev/
