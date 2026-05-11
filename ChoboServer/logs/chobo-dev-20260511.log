@@ -1,0 +1,2 @@
+2026-05-11T22:02:17.6366692+03:00 [INF] ChoboServer.Services.DatabaseBootstrap Initial admin configuration detected for user admin; access token configured: true.
+2026-05-11T22:02:17.7848396+03:00 [INF] ChoboServer.Services.DatabaseBootstrap Initialized Chobo admin user admin ("320e6da7-e156-4d74-8c18-026a3ec51c1f") and initial access token.

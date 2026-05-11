@@ -1,0 +1,233 @@
+using System.Security.Cryptography;
+using System.Text.Encodings.Web;
+using System.Text;
+using System.Text.Json;
+using ChoboServer.Data;
+
+namespace ChoboServer.Services;
+
+public sealed record ClickHouseTableInfo(string Database, string Table, string Engine, string CreateTableSql, string ColumnsJson, string SchemaHash);
+
+public sealed record ClickHouseOperationResult(string OperationId, string Status);
+
+public sealed record ClickHouseOperationStatus(bool Exists, string? Status, string? Error);
+
+public interface IClickHouseAdapter
+{
+    Task<IReadOnlyList<ClickHouseTableInfo>> GetTablesAsync(ClickHouseClusterEntity cluster, CancellationToken cancellationToken);
+    Task<ClickHouseTableInfo?> GetTableAsync(ClickHouseClusterEntity cluster, string database, string table, CancellationToken cancellationToken);
+    Task ExecuteAsync(ClickHouseClusterEntity cluster, string sql, CancellationToken cancellationToken);
+    Task<ClickHouseOperationResult> StartBackupAsync(ClickHouseClusterEntity cluster, BackupTargetEntity target, BackupTableEntity table, CancellationToken cancellationToken);
+    Task<ClickHouseOperationResult> StartRestoreAsync(ClickHouseClusterEntity cluster, BackupTargetEntity target, RestoreTableEntity table, BackupTableEntity backupTable, CancellationToken cancellationToken);
+    Task<ClickHouseOperationStatus> GetOperationStatusAsync(ClickHouseClusterEntity cluster, string operationId, CancellationToken cancellationToken);
+}
+
+public sealed class ClickHouseAdapter(CredentialProtector protector, Serilog.ILogger logger) : IClickHouseAdapter
+{
+    private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(20);
+    private readonly Serilog.ILogger _logger = logger.ForContext<ClickHouseAdapter>();
+
+    public async Task<IReadOnlyList<ClickHouseTableInfo>> GetTablesAsync(ClickHouseClusterEntity cluster, CancellationToken cancellationToken)
+    {
+        _logger.Information("Reading ClickHouse inventory for cluster {ClusterId} ({ClusterName}).", cluster.Id, cluster.Name);
+        var rows = await QueryAsync(cluster, """
+            SELECT database, name, engine, create_table_query
+            FROM system.tables
+            WHERE database NOT IN ('system', 'information_schema', 'INFORMATION_SCHEMA')
+            ORDER BY database, name
+            """, cancellationToken);
+
+        var result = new List<ClickHouseTableInfo>();
+        foreach (var row in rows)
+        {
+            var database = row[0];
+            var table = row[1];
+            var engine = row[2];
+            var createSql = row[3];
+            var columnsJson = await GetColumnsJsonAsync(cluster, database, table, cancellationToken);
+            var hash = Hash($"{engine}\n{ClickHouseSql.NormalizeCreateTableName(createSql)}\n{columnsJson}");
+            result.Add(new ClickHouseTableInfo(database, table, engine, createSql, columnsJson, hash));
+        }
+
+        _logger.Information("Read {TableCount} ClickHouse tables for cluster {ClusterId}.", result.Count, cluster.Id);
+        return result;
+    }
+
+    public async Task<ClickHouseTableInfo?> GetTableAsync(ClickHouseClusterEntity cluster, string database, string table, CancellationToken cancellationToken)
+    {
+        _logger.Information("Reading ClickHouse table schema for {Database}.{Table} on cluster {ClusterId}.", database, table, cluster.Id);
+        var rows = await QueryAsync(cluster, $"""
+            SELECT database, name, engine, create_table_query
+            FROM system.tables
+            WHERE database = {ClickHouseSql.Literal(database)} AND name = {ClickHouseSql.Literal(table)}
+            LIMIT 1
+            """, cancellationToken);
+        if (rows.Count == 0)
+        {
+            return null;
+        }
+
+        var row = rows[0];
+        var columnsJson = await GetColumnsJsonAsync(cluster, database, table, cancellationToken);
+        var hash = Hash($"{row[2]}\n{ClickHouseSql.NormalizeCreateTableName(row[3])}\n{columnsJson}");
+        return new ClickHouseTableInfo(row[0], row[1], row[2], row[3], columnsJson, hash);
+    }
+
+    public async Task ExecuteAsync(ClickHouseClusterEntity cluster, string sql, CancellationToken cancellationToken)
+    {
+        _logger.Information("Executing ClickHouse command on cluster {ClusterId}: {SqlPreview}", cluster.Id, Preview(sql));
+        await QueryAsync(cluster, sql, cancellationToken);
+    }
+
+    public async Task<ClickHouseOperationResult> StartBackupAsync(ClickHouseClusterEntity cluster, BackupTargetEntity target, BackupTableEntity table, CancellationToken cancellationToken)
+    {
+        var s3 = S3Endpoint(target, table.S3Path);
+        var sql = $"BACKUP TABLE {ClickHouseSql.Qualified(table.Database, table.Table)} TO {ClickHouseSql.S3(s3, protector.Unprotect(target.EncryptedAccessKey) ?? "", protector.Unprotect(target.EncryptedSecretKey) ?? "")} ASYNC";
+        _logger.Information("Submitting ClickHouse backup for {Database}.{Table} to {S3Path}.", table.Database, table.Table, table.S3Path);
+        return await StartOperationAsync(cluster, sql, cancellationToken);
+    }
+
+    public async Task<ClickHouseOperationResult> StartRestoreAsync(ClickHouseClusterEntity cluster, BackupTargetEntity target, RestoreTableEntity table, BackupTableEntity backupTable, CancellationToken cancellationToken)
+    {
+        var s3 = S3Endpoint(target, backupTable.S3Path);
+        var from = ClickHouseSql.Qualified(backupTable.Database, backupTable.Table);
+        var to = ClickHouseSql.Qualified(table.TargetDatabase, table.TargetTable);
+        var sql = $"RESTORE TABLE {from} AS {to} FROM {ClickHouseSql.S3(s3, protector.Unprotect(target.EncryptedAccessKey) ?? "", protector.Unprotect(target.EncryptedSecretKey) ?? "")} ASYNC";
+        _logger.Information("Submitting ClickHouse restore for {SourceDatabase}.{SourceTable} to {TargetDatabase}.{TargetTable}.", backupTable.Database, backupTable.Table, table.TargetDatabase, table.TargetTable);
+        return await StartOperationAsync(cluster, sql, cancellationToken);
+    }
+
+    public async Task<ClickHouseOperationStatus> GetOperationStatusAsync(ClickHouseClusterEntity cluster, string operationId, CancellationToken cancellationToken)
+    {
+        _logger.Debug("Polling ClickHouse operation {OperationId} on cluster {ClusterId}.", operationId, cluster.Id);
+        var rows = await QueryAsync(cluster, $"""
+            SELECT status, error
+            FROM system.backups
+            WHERE id = {ClickHouseSql.Literal(operationId)}
+            ORDER BY start_time DESC
+            LIMIT 1
+            """, cancellationToken);
+        if (rows.Count == 0)
+        {
+            _logger.Warning("ClickHouse operation {OperationId} was not found on cluster {ClusterId}.", operationId, cluster.Id);
+            return new ClickHouseOperationStatus(false, null, null);
+        }
+
+        _logger.Information("ClickHouse operation {OperationId} status is {Status}.", operationId, rows[0][0]);
+        return new ClickHouseOperationStatus(true, rows[0][0], rows[0].Count > 1 ? rows[0][1] : null);
+    }
+
+    private async Task<ClickHouseOperationResult> StartOperationAsync(ClickHouseClusterEntity cluster, string sql, CancellationToken cancellationToken)
+    {
+        var rows = await QueryAsync(cluster, sql, cancellationToken);
+        if (rows.Count == 0 || rows[0].Count < 2)
+        {
+            throw new InvalidOperationException("ClickHouse did not return an async operation id.");
+        }
+
+        var operation = new ClickHouseOperationResult(rows[0][0], rows[0][1]);
+        _logger.Information("ClickHouse async operation submitted: {OperationId} status {Status}.", operation.OperationId, operation.Status);
+        return operation;
+    }
+
+    private async Task<string> GetColumnsJsonAsync(ClickHouseClusterEntity cluster, string database, string table, CancellationToken cancellationToken)
+    {
+        var rows = await QueryAsync(cluster, $"""
+            SELECT name, type, default_kind, default_expression
+            FROM system.columns
+            WHERE database = {ClickHouseSql.Literal(database)} AND table = {ClickHouseSql.Literal(table)}
+            ORDER BY position
+            """, cancellationToken);
+        return JsonSerializer.Serialize(rows.Select(x => new
+        {
+            name = x.ElementAtOrDefault(0) ?? "",
+            type = x.ElementAtOrDefault(1) ?? "",
+            defaultKind = x.ElementAtOrDefault(2) ?? "",
+            defaultExpression = x.ElementAtOrDefault(3) ?? ""
+        }), JsonOptions);
+    }
+
+    private async Task<List<List<string>>> QueryAsync(ClickHouseClusterEntity cluster, string sql, CancellationToken cancellationToken)
+    {
+        if (cluster.AccessNodes.Count == 0)
+        {
+            throw new InvalidOperationException("Cluster has no access nodes.");
+        }
+
+        var node = cluster.AccessNodes[0];
+        var httpPort = node.Port == 9000 ? 8123 : node.Port;
+        var scheme = node.UseTls ? "https" : "http";
+        using var client = new HttpClient { Timeout = RequestTimeout };
+        var user = protector.Unprotect(cluster.EncryptedUserName);
+        var password = protector.Unprotect(cluster.EncryptedPassword);
+        if (!string.IsNullOrWhiteSpace(user))
+        {
+            var token = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{user}:{password ?? ""}"));
+            client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", token);
+        }
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{scheme}://{node.Host}:{httpPort}/")
+        {
+            Content = new StringContent(WithFormat(sql), Encoding.UTF8, "text/plain")
+        };
+        using var response = await client.SendAsync(request, cancellationToken);
+        var text = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            _logger.Error("ClickHouse HTTP query failed on {Host}:{Port}: {StatusCode} {Response}. SQL: {SqlPreview}", node.Host, httpPort, response.StatusCode, text, Preview(sql));
+            throw new InvalidOperationException(text);
+        }
+
+        var result = new List<List<string>>();
+        foreach (var line in text.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            result.Add(line.TrimEnd('\r').Split('\t').Select(UnescapeTsv).ToList());
+        }
+
+        return result;
+    }
+
+    private static string UnescapeTsv(string value) =>
+        value
+            .Replace("\\N", "", StringComparison.Ordinal)
+            .Replace("\\t", "\t", StringComparison.Ordinal)
+            .Replace("\\n", "\n", StringComparison.Ordinal)
+            .Replace("\\'", "'", StringComparison.Ordinal)
+            .Replace("\\\\", "\\", StringComparison.Ordinal);
+
+    private static string WithFormat(string sql)
+    {
+        var trimmed = sql.TrimEnd();
+        if (trimmed.EndsWith("FORMAT TSV", StringComparison.OrdinalIgnoreCase))
+        {
+            return sql;
+        }
+
+        return trimmed.StartsWith("SELECT", StringComparison.OrdinalIgnoreCase) ||
+               trimmed.StartsWith("BACKUP", StringComparison.OrdinalIgnoreCase) ||
+               trimmed.StartsWith("RESTORE", StringComparison.OrdinalIgnoreCase)
+            ? trimmed + "\nFORMAT TSV"
+            : trimmed;
+    }
+
+    private static string Preview(string sql)
+    {
+        var compact = string.Join(' ', sql.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return compact.Length <= 400 ? compact : compact[..400] + "...";
+    }
+
+    private static string S3Endpoint(BackupTargetEntity target, string path)
+    {
+        var endpoint = target.Endpoint.TrimEnd('/');
+        var prefix = string.IsNullOrWhiteSpace(target.PathPrefix) ? "" : target.PathPrefix.Trim('/').Trim() + "/";
+        return $"{endpoint}/{target.Bucket.Trim('/')}/{prefix}{path.TrimStart('/')}";
+    }
+
+    private static string Hash(string value) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
+}

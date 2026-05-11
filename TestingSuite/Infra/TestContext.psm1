@@ -91,6 +91,20 @@ function New-ChoboResourceContext {
         }
     }
 
+    if ($type -eq 'ChoboServer') {
+        $host = if ($Definition.Host) { $Definition.Host } else { 'choboserver' }
+        $dnsName = if ($Definition.DnsName) { $Definition.DnsName } else { $host }
+        return [pscustomobject]@{
+            Name = $name
+            Type = 'ChoboServer'
+            Host = $host
+            DnsName = $dnsName
+            Port = 8080
+            DatabaseName = $null
+            TableName = $null
+        }
+    }
+
     if ($type -eq 'Cluster') {
         $shards = if ($Definition.Shards) { [int]$Definition.Shards } else { 1 }
         $replicas = if ($Definition.Replicas) { [int]$Definition.Replicas } else { 2 }
@@ -150,6 +164,16 @@ function New-ChoboTestContext {
         if ($definition -is [hashtable]) {
             foreach ($entry in $definition.GetEnumerator()) {
                 $hash[$entry.Key] = $entry.Value
+            }
+        } elseif ($definition -is [System.Collections.IEnumerable] -and -not ($definition -is [string])) {
+            foreach ($entry in $definition) {
+                if ($entry -is [hashtable]) {
+                    foreach ($hashEntry in $entry.GetEnumerator()) {
+                        $hash[$hashEntry.Key] = $hashEntry.Value
+                    }
+                } elseif ($entry.PSObject.Properties.Name -contains 'Key' -and $entry.PSObject.Properties.Name -contains 'Value') {
+                    $hash[$entry.Key] = $entry.Value
+                }
             }
         } else {
             foreach ($property in $definition.PSObject.Properties) {

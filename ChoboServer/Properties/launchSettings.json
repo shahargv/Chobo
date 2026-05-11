@@ -10,6 +10,19 @@
         "ASPNETCORE_ENVIRONMENT": "Development"
       }
     },
+    "debug-local": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": false,
+      "applicationUrl": "http://localhost:5202",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "CHOBO_DATA_DIRECTORY": "data-dev",
+        "CHOBO_ENCRYPTION_KEY_BASE64": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+        "CHOBO_INIT_ADMIN_USER": "admin",
+        "CHOBO_INIT_ACCESS_TOKEN": "dev-static-access-token"
+      }
+    },
     "https": {
       "commandName": "Project",
       "dotnetRunMessages": true,

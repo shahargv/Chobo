@@ -1,0 +1,28 @@
+using Chobo.Contracts;
+
+namespace ChoboServer.Data;
+
+public sealed class BackupEntity
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public BackupTriggerType TriggerType { get; set; }
+    public BackupRunStatus Status { get; set; } = BackupRunStatus.Queued;
+    public BackupType BackupType { get; set; } = BackupType.Full;
+    public Guid SourceClusterId { get; set; }
+    public ClickHouseClusterEntity? SourceCluster { get; set; }
+    public Guid TargetId { get; set; }
+    public BackupTargetEntity? Target { get; set; }
+    public Guid? PolicyId { get; set; }
+    public BackupPolicyEntity? Policy { get; set; }
+    public Guid? ScheduleId { get; set; }
+    public BackupScheduleEntity? Schedule { get; set; }
+    public string? ManualRequestJson { get; set; }
+    public Guid? RequestedByUserId { get; set; }
+    public string RequestedByName { get; set; } = "system";
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? QueuedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? StartedAt { get; set; }
+    public DateTimeOffset? CompletedAt { get; set; }
+    public string? Error { get; set; }
+    public List<BackupTableEntity> Tables { get; set; } = [];
+}

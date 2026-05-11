@@ -20,6 +20,7 @@ Import-Module (Join-Path $InfraRoot 'ResourceRequirements.psm1') -Force
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 
 $tests = Get-ChoboTests -TestsRoot $TestsRoot
+$TestName = @($TestName | ForEach-Object { ([string]$_).Split(',', [System.StringSplitOptions]::RemoveEmptyEntries) } | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 
 if ($TestName.Count -gt 0) {
     $nameSet = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)

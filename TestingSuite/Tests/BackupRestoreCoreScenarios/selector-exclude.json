@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "action": "include",
+      "database": { "kind": "exact", "value": "backup_core_source" },
+      "table": { "kind": "all", "value": "*" }
+    },
+    {
+      "action": "exclude",
+      "database": { "kind": "exact", "value": "backup_core_source" },
+      "table": { "kind": "exact", "value": "line_items" }
+    }
+  ]
+}

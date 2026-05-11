@@ -106,7 +106,25 @@ Minimal example:
     )
 
     Action = @(
-        @{ Name = 'run-command'; Type = 'Cli'; Query = 'backup create --host {source.DnsName} --s3 {backupStore.Endpoint}' }
+        @{
+            Name = 'add-policy'
+            Type = 'Cli'
+            Args = @('policies', 'add', '--name', 'all')
+            SaveJsonAs = 'policy'
+            ExpectJson = @(
+                @{ Path = 'name'; Equals = 'all' }
+                @{ Path = 'id'; NotEmpty = $true }
+            )
+        }
+        @{
+            Name = 'add-schedule'
+            Type = 'Cli'
+            Args = @('schedules', 'add', '--name', 'nightly', '--policy-id', '{policy.id}', '--backup-type', 'Full', '--cron', '0 0 2 * * ?', '--timezone', 'UTC')
+            ExpectJson = @(
+                @{ Path = 'policyId'; Equals = '{policy.id}' }
+                @{ Path = 'isEnabled'; Equals = $true }
+            )
+        }
     )
 
     Verify = @(
@@ -128,31 +146,90 @@ Step types:
 
 - `Sql`: runs a SQL file or inline `Query`.
 - `Csv`: runs a query, writes actual CSV, and compares it to `Expected`.
-- `Cli`: runs a future Chobo CLI command from the `test-runner` container.
+- `Cli`: runs `ChoboCli` from the `test-runner` container and can validate exit code, text output, JSON output, retries, and saved JSON values.
+
+### Declarative CLI Steps
+
+Prefer declarative `Cli` steps for ChoboServer/ChoboCli smoke coverage. Use `Args` for exact argv entries, especially when values contain spaces, and use `Command` or `Query` only for simple command lines.
+
+```powershell
+@{
+    Name = 'wait-server-api'
+    Type = 'Cli'
+    Args = @('users', 'list', '--server-url', 'http://choboserver:8080', '--access-token', 'static-test-token')
+    RetryTimeoutSeconds = 90
+    RetryIntervalSeconds = 2
+    ExpectJson = @(
+        @{ Path = '$'; ContainsObject = @{ userName = 'admin'; isActive = $true } }
+    )
+}
+@{
+    Name = 'auth-profile'
+    Type = 'Cli'
+    Args = @('server', 'auth', '--server-url', 'http://choboserver:8080', '--access-token', 'static-test-token')
+    ExpectTextContains = 'Authenticated'
+}
+@{
+    Name = 'add-policy'
+    Type = 'Cli'
+    Args = @('policies', 'add', '--name', 'all')
+    SaveJsonAs = 'policy'
+    ExpectJson = @(
+        @{ Path = 'name'; Equals = 'all' }
+        @{ Path = 'id'; NotEmpty = $true }
+    )
+}
+@{
+    Name = 'evaluate-policy'
+    Type = 'Cli'
+    Args = @('policies', 'evaluate', '--id', '{policy.id}')
+    ExpectJson = @(
+        @{ Path = 'policyId'; Equals = '{policy.id}' }
+    )
+}
+```
+
+CLI step fields:
+
+- `Args`: array of command arguments passed to `ChoboCli`.
+- `Command` or `Query`: string command line; tokens are parsed with PowerShell tokenization.
+- `ExpectExitCode`: expected process exit code, default `0`.
+- `ExpectTextContains`: string or array of strings that must appear in stdout/stderr.
+- `ExpectTextNotContains`: string or array of strings that must not appear in stdout/stderr, useful for credential non-disclosure checks.
+- `ExpectJson`: JSON assertions. The command output must be valid JSON.
+- `SaveJsonAs`: stores JSON output as a variable. Top-level values become tokens such as `{policy.id}` for later steps.
+- `RetryTimeoutSeconds` and `RetryIntervalSeconds`: retry the command and assertions until they pass or timeout.
+
+JSON expectations support:
+
+- `@{ Path = 'name'; Equals = 'all' }`
+- `@{ Path = 'id'; NotEmpty = $true }`
+- `@{ Path = 'accessNodes'; Count = 1 }`
+- `@{ Path = '$'; ContainsObject = @{ name = 'source'; mode = 'Cluster' } }`
+- `@{ Path = '$'; Contains = 'some-scalar-value' }`
 
 Each `Sql` or `Csv` step should usually specify `Resource`. Use `Host` only when targeting a specific node, such as `{source.ReplicaHost}`.
 
 Useful tokens:
 
 - `{RunId}`, `{TestName}`, `{TestId}`
-- `{DatabaseName}`, `{TableName}` for the default resource
-- `{source.DatabaseName}`, `{source.TableName}`, `{source.Host}`, `{source.DnsName}`
+- `{source.Host}`, `{source.DnsName}`
 - `{source.ClusterName}`, `{source.ReplicaHost}`, `{source.Shards}`, `{source.Replicas}`
 - `{backupStore.Endpoint}`, `{backupStore.Bucket}`, `{backupStore.AccessKey}`, `{backupStore.SecretKey}`
 
-The infra handles common setup and cleanup:
+The test SQL owns database creation. Put `CREATE DATABASE` statements in setup SQL so each test can choose `Atomic`, replicated, or other database settings explicitly.
+Use explicit database and table names in SQL and CLI arguments instead of resource-derived database/table placeholders.
 
-- Creates one database per ClickHouse resource before setup.
-- Uses `Atomic` databases for `SingleNode`.
-- Uses `Replicated(...) ON CLUSTER <cluster-name>` databases for `Cluster`.
+The infra still handles common sync and cleanup:
+
 - Syncs replicated cluster tables after setup when a table exists.
 - Drops ClickHouse databases after successful tests.
 
-Only override these defaults when a test intentionally owns the behavior:
+Only override these defaults when a test intentionally owns that behavior:
 
 ```powershell
 @{
-    UseDefaultDatabaseSetup = $false
+    UseDefaultDatabaseSetup = $true
     UseDefaultReplicaSync = $false
     UseDefaultCleanup = $false
 }

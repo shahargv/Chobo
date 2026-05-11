@@ -30,6 +30,8 @@ Results default to `.artifacts/TestResults/<test-id>`. Inspect:
 
 Use `-GlobalTimeoutSeconds` for the whole run and `-TestTimeoutSeconds` for each test. After a mission succeeds, run the final verification with `-CleanTestResults` so only the final result folder remains. Do not clean before debugging a failure.
 
+Avoid running multiple `TestManager.ps1` invocations at the same time. Docker-heavy Chobo system tests should be run sequentially so local CPU/memory pressure does not disturb results.
+
 ## Create Tests
 
 Prefer declarative tests:
@@ -65,7 +67,7 @@ S3 constants:
 Useful tokens:
 
 - `{RunId}`, `{TestName}`, `{TestId}`
-- `{source.DatabaseName}`, `{source.TableName}`, `{source.Host}`, `{source.DnsName}`
+- `{source.Host}`, `{source.DnsName}`
 - `{source.ClusterName}`, `{source.ReplicaHost}`, `{source.Shards}`, `{source.Replicas}`
 - `{backupStore.Endpoint}`, `{backupStore.Bucket}`, `{backupStore.AccessKey}`, `{backupStore.SecretKey}`
 
@@ -73,9 +75,40 @@ Declarative step types:
 
 - `Sql`: run a SQL file or inline query.
 - `Csv`: run a query, write actual CSV, compare with expected CSV.
-- `Cli`: future Chobo CLI command execution.
+- `Cli`: run `ChoboCli`, validate exit/text/JSON output, retry until expectations pass, and save JSON values for later steps.
 
-Do not add database creation, replicated-table sync, or successful-test cleanup to normal tests. The infra creates one database per ClickHouse resource, syncs replicated cluster tables after setup, and drops databases after successful tests. Override with `UseDefaultDatabaseSetup`, `UseDefaultReplicaSync`, or `UseDefaultCleanup` only when the test intentionally owns that behavior.
+Declarative CLI steps should use `Args` for exact argv entries. Use `Command`/`Query` only for simple command lines. Supported assertion fields:
+
+- `ExpectExitCode`, default `0`.
+- `ExpectTextContains` and `ExpectTextNotContains`.
+- `ExpectJson` with `Equals`, `NotEmpty`, `Count`, `Contains`, and `ContainsObject`.
+- `SaveJsonAs`, which exposes tokens such as `{policy.id}` from saved JSON.
+- `RetryTimeoutSeconds` and `RetryIntervalSeconds`.
+
+Example:
+
+```powershell
+@{
+    Name = 'add-policy'
+    Type = 'Cli'
+    Args = @('policies', 'add', '--name', 'all')
+    SaveJsonAs = 'policy'
+    ExpectJson = @(
+        @{ Path = 'name'; Equals = 'all' }
+        @{ Path = 'id'; NotEmpty = $true }
+    )
+}
+@{
+    Name = 'evaluate-policy'
+    Type = 'Cli'
+    Args = @('policies', 'evaluate', '--id', '{policy.id}')
+    ExpectJson = @(
+        @{ Path = 'policyId'; Equals = '{policy.id}' }
+    )
+}
+```
+
+Normal test SQL should create its own databases explicitly, using test-owned database and table names rather than resource-derived database/table placeholders. The infra syncs replicated cluster tables after setup when a table exists and drops databases after successful tests. Set `UseDefaultDatabaseSetup = $true`, `UseDefaultReplicaSync = $false`, or `UseDefaultCleanup = $false` only when a test intentionally wants to override those defaults.
 
 Keep SQL readable. Prefer one explicit SQL file per resource/table shape over conditional placeholder-heavy SQL.
 

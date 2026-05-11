@@ -8,6 +8,7 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 ARG BUILD_CONFIGURATION=Release
 WORKDIR /src
 COPY ["ChoboServer/ChoboServer.csproj", "ChoboServer/"]
+COPY ["Chobo.Contracts/Chobo.Contracts.csproj", "Chobo.Contracts/"]
 RUN dotnet restore "ChoboServer/ChoboServer.csproj"
 COPY . .
 WORKDIR "/src/ChoboServer"
