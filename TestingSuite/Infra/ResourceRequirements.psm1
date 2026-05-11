@@ -3,11 +3,21 @@ function Get-ChoboResourceDefinitions {
         [Parameter(Mandatory)] $TestDefinition
     )
 
-    if ($TestDefinition.Resources) {
-        return @($TestDefinition.Resources)
+    if ($TestDefinition -is [hashtable] -and $TestDefinition.ContainsKey('Resources')) {
+        foreach ($resource in @($TestDefinition['Resources'])) {
+            Write-Output -NoEnumerate $resource
+        }
+        return
     }
 
-    @(@{ Name = 'source'; Type = 'SingleNode' })
+    if ($TestDefinition.Resources) {
+        foreach ($resource in @($TestDefinition.Resources)) {
+            Write-Output -NoEnumerate $resource
+        }
+        return
+    }
+
+    Write-Output -NoEnumerate @{ Name = 'source'; Type = 'SingleNode' }
 }
 
 Export-ModuleMember -Function Get-ChoboResourceDefinitions

@@ -54,7 +54,7 @@ function Wait-ChoboClickHouse {
 
     foreach ($resourceName in $Context.Resources.PSObject.Properties.Name) {
         $resource = $Context.Resources.$resourceName
-        if ($resource.Type -eq 'S3') {
+        if ($resource.Type -eq 'S3' -or $resource.Type -eq 'ChoboServer') {
             continue
         }
         $deadline = (Get-Date).AddSeconds($TimeoutSeconds)

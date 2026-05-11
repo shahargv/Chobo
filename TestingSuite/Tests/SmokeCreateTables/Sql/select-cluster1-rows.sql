@@ -1,4 +1,4 @@
 SELECT Id, PartitionNumber, Name, Amount
-FROM {cluster1.DatabaseName}.{cluster1.TableName}
+FROM smoke_cluster1_db.smoke_cluster1_orders
 ORDER BY PartitionNumber, Id
 FORMAT CSV

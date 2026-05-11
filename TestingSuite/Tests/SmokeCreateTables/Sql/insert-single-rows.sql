@@ -1,4 +1,4 @@
-INSERT INTO {single.DatabaseName}.{single.TableName} (Id, Name, Amount)
+INSERT INTO smoke_single_db.smoke_single_orders (Id, Name, Amount)
 VALUES
     (1, 'single-alpha', 10),
     (2, 'single-bravo', 20),

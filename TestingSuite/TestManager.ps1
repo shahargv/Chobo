@@ -159,6 +159,19 @@ function Copy-ChoboComposeLogs {
     }
 }
 
+function Copy-ChoboServerFileLogs {
+    if ($ComposeServices -notcontains 'choboserver') {
+        return
+    }
+
+    $destination = Join-Path $LogsDirectory 'choboserver-files'
+    New-Item -ItemType Directory -Force -Path $destination | Out-Null
+    $result = Invoke-ChoboCompose -ComposeArguments @('cp', 'choboserver:/app/logs/.', $destination) -TimeoutSeconds 60 -Name 'copy-choboserver-file-logs'
+    if ($result.ExitCode -ne 0) {
+        Write-Warning "Could not copy ChoboServer file logs. See $LogsDirectory."
+    }
+}
+
 try {
     Write-Host "Chobo system test id: $TestId"
     Write-Host "Output: $OutputDirectory"
@@ -207,8 +220,8 @@ try {
     if ($ListTests) {
         $runnerArgs += '-ListTests'
     }
-    foreach ($name in $TestName) {
-        $runnerArgs += @('-TestName', $name)
+    if ($TestName.Count -gt 0) {
+        $runnerArgs += @('-TestName', ($TestName -join ','))
     }
     if ($NoCleanupOnSuccess) {
         $runnerArgs += '-NoCleanupOnSuccess'
@@ -230,6 +243,7 @@ try {
 } finally {
     if ($ComposeFile) {
         Copy-ChoboComposeLogs
+        Copy-ChoboServerFileLogs
     }
 
     if (-not $KeepEnvironment -and $ComposeFile) {
@@ -241,6 +255,7 @@ try {
     } elseif ($KeepEnvironment -and $ComposeFile) {
         Write-Host "Environment kept: docker compose -f `"$ComposeFile`" -p $ProjectName ps"
     }
+
 }
 
 Write-Host "Results: $OutputDirectory"

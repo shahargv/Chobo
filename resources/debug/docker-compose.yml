@@ -1,0 +1,204 @@
+name: chobo-debug
+
+services:
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    container_name: chobo-debug-minio
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: chobo-access-key
+      MINIO_ROOT_PASSWORD: chobo-secret-key
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    networks:
+      - chobo-debug
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    container_name: chobo-debug-minio-init
+    depends_on:
+      - minio
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        until mc alias set chobo http://minio:9000 chobo-access-key chobo-secret-key; do sleep 1; done
+        mc mb --ignore-existing chobo/data-bucket
+    networks:
+      - chobo-debug
+
+  clickhouse-keeper:
+    image: clickhouse/clickhouse-server:25.4
+    container_name: chobo-debug-clickhouse-keeper
+    command: ["clickhouse-keeper", "--config-file=/etc/clickhouse-keeper/keeper_config.xml"]
+    ports:
+      - "9181:9181"
+      - "9234:9234"
+    volumes:
+      - ./clickhouse-keeper/keeper_config.xml:/etc/clickhouse-keeper/keeper_config.xml:ro
+      - keeper-data:/var/lib/clickhouse
+    networks:
+      - chobo-debug
+
+  clickhouse-single:
+    image: clickhouse/clickhouse-server:25.4
+    container_name: chobo-debug-clickhouse-single
+    environment:
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ports:
+      - "18100:8123"
+      - "19100:9000"
+    volumes:
+      - ./clickhouse-single/config.d/listen.xml:/etc/clickhouse-server/config.d/listen.xml:ro
+      - clickhouse-single-data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    networks:
+      - chobo-debug
+
+  clickhouse-cluster-s1-r1:
+    image: clickhouse/clickhouse-server:25.4
+    container_name: chobo-debug-clickhouse-cluster-s1-r1
+    environment:
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    depends_on:
+      - clickhouse-keeper
+    ports:
+      - "18111:8123"
+      - "19111:9000"
+    volumes:
+      - ./clickhouse-cluster/config.d/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+      - ./clickhouse-cluster/config.d/macros-s1-r1.xml:/etc/clickhouse-server/config.d/macros.xml:ro
+      - clickhouse-cluster-s1-r1-data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    networks:
+      - chobo-debug
+
+  clickhouse-cluster-s1-r2:
+    image: clickhouse/clickhouse-server:25.4
+    container_name: chobo-debug-clickhouse-cluster-s1-r2
+    environment:
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    depends_on:
+      - clickhouse-keeper
+    ports:
+      - "18112:8123"
+      - "19112:9000"
+    volumes:
+      - ./clickhouse-cluster/config.d/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+      - ./clickhouse-cluster/config.d/macros-s1-r2.xml:/etc/clickhouse-server/config.d/macros.xml:ro
+      - clickhouse-cluster-s1-r2-data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    networks:
+      - chobo-debug
+
+  clickhouse-cluster-s2-r1:
+    image: clickhouse/clickhouse-server:25.4
+    container_name: chobo-debug-clickhouse-cluster-s2-r1
+    environment:
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    depends_on:
+      - clickhouse-keeper
+    ports:
+      - "18121:8123"
+      - "19121:9000"
+    volumes:
+      - ./clickhouse-cluster/config.d/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+      - ./clickhouse-cluster/config.d/macros-s2-r1.xml:/etc/clickhouse-server/config.d/macros.xml:ro
+      - clickhouse-cluster-s2-r1-data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    networks:
+      - chobo-debug
+
+  clickhouse-cluster-s2-r2:
+    image: clickhouse/clickhouse-server:25.4
+    container_name: chobo-debug-clickhouse-cluster-s2-r2
+    environment:
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    depends_on:
+      - clickhouse-keeper
+    ports:
+      - "18122:8123"
+      - "19122:9000"
+    volumes:
+      - ./clickhouse-cluster/config.d/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+      - ./clickhouse-cluster/config.d/macros-s2-r2.xml:/etc/clickhouse-server/config.d/macros.xml:ro
+      - clickhouse-cluster-s2-r2-data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    networks:
+      - chobo-debug
+
+  clickhouse-cluster-s3-r1:
+    image: clickhouse/clickhouse-server:25.4
+    container_name: chobo-debug-clickhouse-cluster-s3-r1
+    environment:
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    depends_on:
+      - clickhouse-keeper
+    ports:
+      - "18131:8123"
+      - "19131:9000"
+    volumes:
+      - ./clickhouse-cluster/config.d/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+      - ./clickhouse-cluster/config.d/macros-s3-r1.xml:/etc/clickhouse-server/config.d/macros.xml:ro
+      - clickhouse-cluster-s3-r1-data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    networks:
+      - chobo-debug
+
+  clickhouse-cluster-s3-r2:
+    image: clickhouse/clickhouse-server:25.4
+    container_name: chobo-debug-clickhouse-cluster-s3-r2
+    environment:
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    depends_on:
+      - clickhouse-keeper
+    ports:
+      - "18132:8123"
+      - "19132:9000"
+    volumes:
+      - ./clickhouse-cluster/config.d/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+      - ./clickhouse-cluster/config.d/macros-s3-r2.xml:/etc/clickhouse-server/config.d/macros.xml:ro
+      - clickhouse-cluster-s3-r2-data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    networks:
+      - chobo-debug
+
+networks:
+  chobo-debug:
+    name: chobo-debug
+    driver: bridge
+
+volumes:
+  minio-data:
+  keeper-data:
+  clickhouse-single-data:
+  clickhouse-cluster-s1-r1-data:
+  clickhouse-cluster-s1-r2-data:
+  clickhouse-cluster-s2-r1-data:
+  clickhouse-cluster-s2-r2-data:
+  clickhouse-cluster-s3-r1-data:
+  clickhouse-cluster-s3-r2-data:
