@@ -1,14 +1,16 @@
 namespace Chobo.Contracts;
 
-public enum BackupRunStatus { Queued, Running, Succeeded, Failed, Canceled }
+public enum BackupRunStatus { Queued, Running, Succeeded, PartiallySucceeded, Failed, Canceled }
 
-public enum BackupTableStatus { Queued, Running, Succeeded, Failed, Skipped }
+public enum BackupTableStatus { Queued, Running, Succeeded, PartiallySucceeded, Failed, Skipped }
 
 public enum BackupTriggerType { Manual, Scheduled }
 
-public enum RestoreRunStatus { Queued, Running, Succeeded, Failed, Canceled }
+public enum RestoreRunStatus { Queued, Running, Succeeded, PartiallySucceeded, Failed, Canceled }
 
-public enum RestoreTableStatus { Queued, Running, Succeeded, Failed, Skipped }
+public enum RestoreTableStatus { Queued, Running, Succeeded, PartiallySucceeded, Failed, Skipped }
+
+public enum RestoreLayout { Preserve, SingleNode, Redistribute }
 
 public sealed record BackupDto(
     Guid Id,
@@ -41,6 +43,24 @@ public sealed record BackupTableDto(
     string? ClickHouseStatus,
     DateTimeOffset? StartedAt,
     DateTimeOffset? CompletedAt,
+    string? Error,
+    IReadOnlyList<BackupTableShardDto> Shards);
+
+public sealed record BackupTableShardDto(
+    Guid Id,
+    Guid BackupTableId,
+    int SourceShardNumber,
+    string? SourceShardName,
+    int ReplicaNumber,
+    string Host,
+    int Port,
+    bool UseTls,
+    string S3Path,
+    BackupTableStatus Status,
+    string? ClickHouseOperationId,
+    string? ClickHouseStatus,
+    DateTimeOffset? StartedAt,
+    DateTimeOffset? CompletedAt,
     string? Error);
 
 public sealed record ManualBackupRequest(Guid ClusterId, Guid TargetId, PolicySelector Selector);
@@ -54,6 +74,9 @@ public sealed record RestoreDto(
     RestoreRunStatus Status,
     bool Append,
     bool AllowSchemaMismatch,
+    RestoreLayout Layout,
+    int? SourceShard,
+    int? TargetShard,
     Guid? RequestedByUserId,
     string RequestedByName,
     string RequestJson,
@@ -77,6 +100,29 @@ public sealed record RestoreTableDto(
     string? Warning,
     DateTimeOffset? StartedAt,
     DateTimeOffset? CompletedAt,
+    string? Error,
+    IReadOnlyList<RestoreTableShardDto> Shards);
+
+public sealed record RestoreTableShardDto(
+    Guid Id,
+    Guid RestoreTableId,
+    Guid BackupTableShardId,
+    int SourceShardNumber,
+    int? TargetShardNumber,
+    string? TargetShardName,
+    int? TargetReplicaNumber,
+    string TargetHost,
+    int TargetPort,
+    bool TargetUseTls,
+    string LayoutRole,
+    string RestoreDatabase,
+    string RestoreTableName,
+    RestoreTableStatus Status,
+    string? ClickHouseOperationId,
+    string? ClickHouseStatus,
+    string? Warning,
+    DateTimeOffset? StartedAt,
+    DateTimeOffset? CompletedAt,
     string? Error);
 
 public sealed record InitiateRestoreRequest(
@@ -87,4 +133,7 @@ public sealed record InitiateRestoreRequest(
     string? TargetDatabase,
     string? TargetTable,
     bool Append,
-    bool AllowSchemaMismatch);
+    bool AllowSchemaMismatch,
+    RestoreLayout? Layout = null,
+    int? SourceShard = null,
+    int? TargetShard = null);

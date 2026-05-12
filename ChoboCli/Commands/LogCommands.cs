@@ -18,6 +18,6 @@ public sealed class LogCommands : CliSubject
         CommandHelpers.WithClient(context, client => client.GetAsync("logs" + CommandHelpers.QueryString(context.Command.Options)));
 
     private static Task<object?> ClearAsync(CommandContext context) =>
-        CommandHelpers.WithClient(context, client => client.PostAsync("logs/clear", new ClearBeforeRequest(DateTimeOffset.Parse(context.Command.Options.Required("--before")))));
+        CommandHelpers.WithClient(context, client => client.PostAsync("logs/clear", new ClearApplicationLogsRequest(DateTimeOffset.Parse(context.Command.Options.Required("--before")))));
 }
 

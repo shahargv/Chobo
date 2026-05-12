@@ -61,8 +61,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ExportImportService>();
         services.AddScoped<ClickHouseAdapter>();
         services.AddScoped<IClickHouseAdapter>(serviceProvider => serviceProvider.GetRequiredService<ClickHouseAdapter>());
-        services.AddScoped<ApplicationLogTimelineStore>();
-        services.AddScoped<AuditTimelineStore>();
+        services.AddScoped<ApplicationLogStore>();
+        services.AddScoped<AuditStore>();
         services.AddScoped<IUnitOfWork, EfUnitOfWork>();
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddScoped<IClusterRepository, ClusterRepository>();

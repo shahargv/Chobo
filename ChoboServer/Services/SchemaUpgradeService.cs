@@ -42,6 +42,12 @@ public static class SchemaUpgradeService
                     schema.AppliedMigrationId = "0005_schedule_missed_run_grace_period";
                     schema.AppliedAt = DateTimeOffset.UtcNow;
                     break;
+                case 5:
+                    await UpgradeFromV5ToV6Async(db);
+                    schema.SchemaVersion = 6;
+                    schema.AppliedMigrationId = "0006_sharded_backup_restore";
+                    schema.AppliedAt = DateTimeOffset.UtcNow;
+                    break;
                 default:
                     throw new InvalidOperationException($"No upgrade path is registered from schema version {schema.SchemaVersion}.");
             }
@@ -145,6 +151,78 @@ public static class SchemaUpgradeService
 
         await db.Database.ExecuteSqlRawAsync("""
             ALTER TABLE BackupSchedules ADD COLUMN MissedRunGracePeriod TEXT NULL;
+            """);
+    }
+
+    private static async Task UpgradeFromV5ToV6Async(ChoboDbContext db)
+    {
+        if (!await ColumnExistsAsync(db, "ClickHouseClusters", "ClickHouseClusterName"))
+        {
+            await db.Database.ExecuteSqlRawAsync("""
+                ALTER TABLE ClickHouseClusters ADD COLUMN ClickHouseClusterName TEXT NULL;
+                """);
+        }
+
+        if (!await ColumnExistsAsync(db, "Restores", "Layout"))
+        {
+            await db.Database.ExecuteSqlRawAsync("""
+                ALTER TABLE Restores ADD COLUMN Layout INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE Restores ADD COLUMN SourceShard INTEGER NULL;
+                ALTER TABLE Restores ADD COLUMN TargetShard INTEGER NULL;
+                """);
+        }
+
+        await db.Database.ExecuteSqlRawAsync("""
+            CREATE TABLE IF NOT EXISTS BackupTableShards (
+                Id TEXT NOT NULL CONSTRAINT PK_BackupTableShards PRIMARY KEY,
+                BackupTableId TEXT NOT NULL,
+                SourceShardNumber INTEGER NOT NULL,
+                SourceShardName TEXT NULL,
+                ReplicaNumber INTEGER NOT NULL,
+                Host TEXT NOT NULL,
+                Port INTEGER NOT NULL,
+                UseTls INTEGER NOT NULL,
+                S3Path TEXT NOT NULL,
+                Status INTEGER NOT NULL,
+                ClickHouseOperationId TEXT NULL,
+                ClickHouseStatus TEXT NULL,
+                StartedAt INTEGER NULL,
+                CompletedAt INTEGER NULL,
+                Error TEXT NULL,
+                CONSTRAINT FK_BackupTableShards_BackupTables_BackupTableId FOREIGN KEY (BackupTableId) REFERENCES BackupTables (Id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS RestoreTableShards (
+                Id TEXT NOT NULL CONSTRAINT PK_RestoreTableShards PRIMARY KEY,
+                RestoreTableId TEXT NOT NULL,
+                BackupTableShardId TEXT NOT NULL,
+                SourceShardNumber INTEGER NOT NULL,
+                TargetShardNumber INTEGER NULL,
+                TargetShardName TEXT NULL,
+                TargetReplicaNumber INTEGER NULL,
+                TargetHost TEXT NOT NULL,
+                TargetPort INTEGER NOT NULL,
+                TargetUseTls INTEGER NOT NULL,
+                LayoutRole TEXT NOT NULL,
+                RestoreDatabase TEXT NOT NULL,
+                RestoreTableName TEXT NOT NULL,
+                Status INTEGER NOT NULL,
+                ClickHouseOperationId TEXT NULL,
+                ClickHouseStatus TEXT NULL,
+                Warning TEXT NULL,
+                StartedAt INTEGER NULL,
+                CompletedAt INTEGER NULL,
+                Error TEXT NULL,
+                CONSTRAINT FK_RestoreTableShards_RestoreTables_RestoreTableId FOREIGN KEY (RestoreTableId) REFERENCES RestoreTables (Id) ON DELETE CASCADE,
+                CONSTRAINT FK_RestoreTableShards_BackupTableShards_BackupTableShardId FOREIGN KEY (BackupTableShardId) REFERENCES BackupTableShards (Id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS IX_BackupTableShards_BackupTableId ON BackupTableShards (BackupTableId);
+            CREATE INDEX IF NOT EXISTS IX_BackupTableShards_BackupTableId_SourceShardNumber ON BackupTableShards (BackupTableId, SourceShardNumber);
+            CREATE INDEX IF NOT EXISTS IX_BackupTableShards_Status ON BackupTableShards (Status);
+            CREATE INDEX IF NOT EXISTS IX_RestoreTableShards_RestoreTableId ON RestoreTableShards (RestoreTableId);
+            CREATE INDEX IF NOT EXISTS IX_RestoreTableShards_BackupTableShardId ON RestoreTableShards (BackupTableShardId);
+            CREATE INDEX IF NOT EXISTS IX_RestoreTableShards_Status ON RestoreTableShards (Status);
             """);
     }
 }

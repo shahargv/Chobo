@@ -40,7 +40,7 @@ public sealed class DashboardCommands : CliSubject
                 var trigger = backup.TriggerType == BackupTriggerType.Scheduled
                     ? backup.ScheduleName ?? backup.ScheduleId?.ToString() ?? "scheduled"
                     : "manual";
-                builder.AppendLine($"  {backup.BackupId}  {backup.Status,-7}  policy={DisplayName(backup.PolicyName, backup.PolicyId)}  trigger={trigger}  started={FormatOptionalTime(backup.StartedAt)}");
+                builder.AppendLine($"  {backup.BackupId}  {backup.Status,-18}  policy={DisplayName(backup.PolicyName, backup.PolicyId)}  trigger={trigger}  started={FormatOptionalTime(backup.StartedAt)}  tables={backup.TableCount}  shards={backup.SucceededShardCount}/{backup.ShardCount} ok failed={backup.FailedShardCount} running={backup.RunningShardCount}");
             }
         }
 

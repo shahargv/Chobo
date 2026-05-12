@@ -38,6 +38,25 @@ internal static class BackupRestoreMapping
             x.ClickHouseStatus,
             x.StartedAt,
             x.CompletedAt,
+            x.Error,
+            x.Shards.OrderBy(s => s.SourceShardNumber).ThenBy(s => s.ReplicaNumber).Select(ToDto).ToList());
+
+    public static BackupTableShardDto ToDto(BackupTableShardEntity x) =>
+        new(
+            x.Id,
+            x.BackupTableId,
+            x.SourceShardNumber,
+            x.SourceShardName,
+            x.ReplicaNumber,
+            x.Host,
+            x.Port,
+            x.UseTls,
+            x.S3Path,
+            x.Status,
+            x.ClickHouseOperationId,
+            x.ClickHouseStatus,
+            x.StartedAt,
+            x.CompletedAt,
             x.Error);
 
     public static RestoreDto ToDto(RestoreEntity x) =>
@@ -48,6 +67,9 @@ internal static class BackupRestoreMapping
             x.Status,
             x.Append,
             x.AllowSchemaMismatch,
+            x.Layout,
+            x.SourceShard,
+            x.TargetShard,
             x.RequestedByUserId,
             x.RequestedByName,
             x.RequestJson,
@@ -66,6 +88,30 @@ internal static class BackupRestoreMapping
             x.SourceTable,
             x.TargetDatabase,
             x.TargetTable,
+            x.Status,
+            x.ClickHouseOperationId,
+            x.ClickHouseStatus,
+            x.Warning,
+            x.StartedAt,
+            x.CompletedAt,
+            x.Error,
+            x.Shards.OrderBy(s => s.SourceShardNumber).ThenBy(s => s.TargetShardNumber).Select(ToDto).ToList());
+
+    public static RestoreTableShardDto ToDto(RestoreTableShardEntity x) =>
+        new(
+            x.Id,
+            x.RestoreTableId,
+            x.BackupTableShardId,
+            x.SourceShardNumber,
+            x.TargetShardNumber,
+            x.TargetShardName,
+            x.TargetReplicaNumber,
+            x.TargetHost,
+            x.TargetPort,
+            x.TargetUseTls,
+            x.LayoutRole,
+            x.RestoreDatabase,
+            x.RestoreTableName,
             x.Status,
             x.ClickHouseOperationId,
             x.ClickHouseStatus,

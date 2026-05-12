@@ -11,6 +11,7 @@ namespace ChoboServer.Application;
 public sealed class RestoreApplicationService(
     ChoboDbContext db,
     BackupRestoreQueues queues,
+    IClickHouseAdapter clickHouse,
     AuditService audit,
     ActorContext actor,
     Serilog.ILogger logger)
@@ -21,17 +22,19 @@ public sealed class RestoreApplicationService(
     public async Task<RestoreDto> InitiateAsync(InitiateRestoreRequest request, CancellationToken cancellationToken = default)
     {
         var backup = await db.Backups
-            .Include(x => x.Tables)
+            .Include(x => x.SourceCluster).ThenInclude(x => x!.AccessNodes)
+            .Include(x => x.Tables).ThenInclude(x => x.Shards)
             .FirstOrDefaultAsync(x => x.Id == request.BackupId, cancellationToken);
         if (backup is null)
         {
             throw new ArgumentException("Backup was not found.");
         }
-        if (backup.Status != BackupRunStatus.Succeeded)
+        if (backup.Status is not (BackupRunStatus.Succeeded or BackupRunStatus.PartiallySucceeded))
         {
-            throw new ArgumentException("Only succeeded backups can be restored.");
+            throw new ArgumentException("Only succeeded or partially succeeded backups can be restored.");
         }
-        if (!await db.ClickHouseClusters.AnyAsync(x => x.Id == request.TargetClusterId && !x.IsDeleted, cancellationToken))
+        var targetCluster = await db.ClickHouseClusters.Include(x => x.AccessNodes).FirstOrDefaultAsync(x => x.Id == request.TargetClusterId && !x.IsDeleted, cancellationToken);
+        if (targetCluster is null)
         {
             throw new ArgumentException("Target cluster was not found.");
         }
@@ -44,10 +47,17 @@ public sealed class RestoreApplicationService(
         {
             throw new ArgumentException("No backup tables match the restore request.");
         }
+        if (request.SourceShard is <= 0 || request.TargetShard is <= 0)
+        {
+            throw new ArgumentException("Shard numbers must be positive.");
+        }
+        var layout = request.Layout ?? RestoreLayout.Preserve;
         if (selected.Count > 1 && (!string.IsNullOrWhiteSpace(request.TargetDatabase) || !string.IsNullOrWhiteSpace(request.TargetTable)))
         {
             throw new ArgumentException("Target database/table overrides are supported only for a single table restore.");
         }
+
+        var targetRepresentatives = SelectShardRepresentatives(await clickHouse.GetTopologyAsync(targetCluster, cancellationToken));
 
         var restore = new RestoreEntity
         {
@@ -55,26 +65,66 @@ public sealed class RestoreApplicationService(
             TargetClusterId = request.TargetClusterId,
             Append = request.Append,
             AllowSchemaMismatch = request.AllowSchemaMismatch,
+            Layout = layout,
+            SourceShard = request.SourceShard,
+            TargetShard = request.TargetShard,
             RequestJson = JsonSerializer.Serialize(request, JsonOptions),
             RequestedByUserId = actor.UserId,
             RequestedByName = actor.ActorName
         };
         foreach (var table in selected)
         {
-            restore.Tables.Add(new RestoreTableEntity
+            var backupShards = table.Shards
+                .Where(x => x.Status == BackupTableStatus.Succeeded)
+                .Where(x => request.SourceShard is null || x.SourceShardNumber == request.SourceShard.Value)
+                .OrderBy(x => x.SourceShardNumber)
+                .ToList();
+            if (table.DataBackedUp && backupShards.Count == 0)
+            {
+                throw new ArgumentException($"No succeeded backup shards match {table.Database}.{table.Table}.");
+            }
+
+            var restoreTable = new RestoreTableEntity
             {
                 BackupTableId = table.Id,
                 SourceDatabase = table.Database,
                 SourceTable = table.Table,
                 TargetDatabase = request.TargetDatabase ?? table.Database,
                 TargetTable = request.TargetTable ?? table.Table
-            });
+            };
+            if (table.DataBackedUp)
+            {
+                var shardPlans = PlanShardRestores(layout, backupShards, targetRepresentatives, request.TargetShard);
+                var useTemporaryRestoreTables = request.Append || shardPlans.Count > 1;
+                foreach (var plan in shardPlans)
+                {
+                    var shard = new RestoreTableShardEntity
+                    {
+                        BackupTableShardId = plan.BackupShard.Id,
+                        SourceShardNumber = plan.BackupShard.SourceShardNumber,
+                        TargetShardNumber = plan.Target?.ShardNumber,
+                        TargetShardName = plan.Target?.ShardName,
+                        TargetReplicaNumber = plan.Target?.ReplicaNumber,
+                        TargetHost = plan.Endpoint.Host,
+                        TargetPort = plan.Endpoint.Port,
+                        TargetUseTls = plan.Endpoint.UseTls,
+                        LayoutRole = plan.LayoutRole,
+                        RestoreDatabase = restoreTable.TargetDatabase
+                    };
+                    shard.RestoreTableName = useTemporaryRestoreTables
+                        ? $"__chobo_restore_{shard.Id:N}"
+                        : restoreTable.TargetTable;
+                    restoreTable.Shards.Add(shard);
+                }
+            }
+
+            restore.Tables.Add(restoreTable);
         }
 
         db.Restores.Add(restore);
         await db.SaveChangesAsync(cancellationToken);
         _logger.Information("Restore {RestoreId} created by {ActorName} for backup {BackupId} into cluster {TargetClusterId} with {TableCount} table(s).", restore.Id, actor.ActorName, restore.BackupId, restore.TargetClusterId, restore.Tables.Count);
-        await audit.RecordAsync("created", AuditEntityType.Restore, restore.Id.ToString(), new { restore.BackupId, restore.TargetClusterId, tableCount = restore.Tables.Count });
+        await audit.RecordAsync("created", AuditEntityType.Restore, restore.Id.ToString(), new { restore.BackupId, restore.TargetClusterId, tableCount = restore.Tables.Count, shardCount = restore.Tables.Sum(x => x.Shards.Count), layout, request.SourceShard, request.TargetShard });
         await queues.QueueRestoreAsync(restore.Id, cancellationToken);
         _logger.Information("Restore {RestoreId} queued.", restore.Id);
         await audit.RecordAsync("queued", AuditEntityType.Restore, restore.Id.ToString(), new { reason = "user" });
@@ -90,7 +140,69 @@ public sealed class RestoreApplicationService(
         await LoadAsync(id, cancellationToken) is { } restore ? BackupRestoreMapping.ToDto(restore) : null;
 
     private Task<RestoreEntity?> LoadAsync(Guid id, CancellationToken cancellationToken) =>
-        db.Restores.Include(x => x.Tables).FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+        db.Restores.Include(x => x.Tables).ThenInclude(x => x.Shards).FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+
+    private static IReadOnlyList<ClickHouseShardReplicaInfo> SelectShardRepresentatives(IReadOnlyList<ClickHouseShardReplicaInfo> topology) =>
+        topology
+            .GroupBy(x => x.ShardNumber)
+            .OrderBy(x => x.Key)
+            .Select(group => group
+                .OrderBy(x => x.ErrorsCount)
+                .ThenBy(x => x.ReplicaNumber)
+                .ThenBy(x => x.Host, StringComparer.Ordinal)
+                .ThenBy(x => x.Port)
+                .First())
+            .ToList();
+
+    private static IReadOnlyList<ShardRestorePlan> PlanShardRestores(RestoreLayout layout, IReadOnlyList<BackupTableShardEntity> backupShards, IReadOnlyList<ClickHouseShardReplicaInfo> targetRepresentatives, int? requestedTargetShard)
+    {
+        if (targetRepresentatives.Count == 0)
+        {
+            throw new ArgumentException("Target cluster has no restorable shards.");
+        }
+
+        if (requestedTargetShard is { } targetShard && !targetRepresentatives.Any(x => x.ShardNumber == targetShard))
+        {
+            throw new ArgumentException($"Target shard {targetShard} was not found.");
+        }
+
+        var plans = new List<ShardRestorePlan>();
+        for (var i = 0; i < backupShards.Count; i++)
+        {
+            var backupShard = backupShards[i];
+            ClickHouseShardReplicaInfo? target;
+            var role = layout.ToString();
+            if (requestedTargetShard is { } fixedTargetShard)
+            {
+                target = targetRepresentatives.Single(x => x.ShardNumber == fixedTargetShard);
+                role = "target-shard";
+            }
+            else if (layout == RestoreLayout.SingleNode)
+            {
+                target = targetRepresentatives[0];
+            }
+            else if (layout == RestoreLayout.Redistribute)
+            {
+                target = targetRepresentatives[i % targetRepresentatives.Count];
+            }
+            else
+            {
+                if (backupShards.Select(x => x.SourceShardNumber).Distinct().Count() != targetRepresentatives.Count)
+                {
+                    throw new ArgumentException("Preserve layout requires matching source and target shard counts. Specify --layout single-node or --layout redistribute for different topologies.");
+                }
+
+                target = targetRepresentatives.FirstOrDefault(x => x.ShardNumber == backupShard.SourceShardNumber)
+                    ?? throw new ArgumentException($"Target shard {backupShard.SourceShardNumber} was not found for preserve layout.");
+            }
+
+            plans.Add(new ShardRestorePlan(backupShard, target, target.Endpoint, role));
+        }
+
+        return plans;
+    }
+
+    private sealed record ShardRestorePlan(BackupTableShardEntity BackupShard, ClickHouseShardReplicaInfo? Target, ClickHouseNodeEndpoint Endpoint, string LayoutRole);
 
     private static JsonSerializerOptions CreateJsonOptions()
     {

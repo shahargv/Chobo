@@ -61,6 +61,7 @@ public sealed class ClusterCommands : CliSubject
             nodes,
             options.Optional("--username"),
             options.Optional("--password"),
-            options.Optional("--backup-restore-maxdop") is { } maxDop ? int.Parse(maxDop) : null);
+            options.Optional("--backup-restore-maxdop") is { } maxDop ? int.Parse(maxDop) : null,
+            options.Optional("--clickhouse-cluster-name") ?? options.Optional("--cluster-name-in-clickhouse"));
     }
 }

@@ -267,9 +267,9 @@ public sealed class ChoboFoundationTests
         Assert.True(schedule.IsEnabled);
         Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsync($"/api/v1/schedules/{schedule.Id}/disable", null)).StatusCode);
 
-        var logs = await client.GetFromJsonAsync<List<LogEntryDto>>("/api/v1/logs?last=10", JsonOptions);
+        var logs = await client.GetFromJsonAsync<List<ApplicationLogEntryDto>>("/api/v1/logs?last=10", JsonOptions);
         Assert.NotNull(logs);
-        var clear = await client.PostAsJsonAsync("/api/v1/logs/clear", new ClearBeforeRequest(DateTimeOffset.UtcNow.AddDays(1)), JsonOptions);
+        var clear = await client.PostAsJsonAsync("/api/v1/logs/clear", new ClearApplicationLogsRequest(DateTimeOffset.UtcNow.AddDays(1)), JsonOptions);
         Assert.True(clear.IsSuccessStatusCode);
     }
 
@@ -306,7 +306,7 @@ public sealed class ChoboFoundationTests
             await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO AuditEntries (Timestamp, ActorName, Action, EntityType, Details) VALUES ({ToUnixMilliseconds(cutoff.AddMinutes(10))}, 'system', 'new-audit', 'test', '{{}}');");
         }
 
-        var response = await client.PostAsJsonAsync("/api/v1/audit/clear", new ClearBeforeRequest(cutoff), JsonOptions);
+        var response = await client.PostAsJsonAsync("/api/v1/audit/clear", new ClearAuditEntriesRequest(cutoff), JsonOptions);
         Assert.True(response.IsSuccessStatusCode);
 
         using var scope = factory.Services.CreateScope();
@@ -371,7 +371,7 @@ public sealed class ChoboFoundationTests
         Assert.Equal("INTEGER", await GetColumnTypeAsync(db, "BackupSchedules", "CreatedAt"));
 
         var audits = await client.GetFromJsonAsync<List<AuditEntryDto>>("/api/v1/audit?last=5", JsonOptions);
-        var logs = await client.GetFromJsonAsync<List<LogEntryDto>>("/api/v1/logs?last=5", JsonOptions);
+        var logs = await client.GetFromJsonAsync<List<ApplicationLogEntryDto>>("/api/v1/logs?last=5", JsonOptions);
         var rawAuditJson = await client.GetStringAsync("/api/v1/audit?last=5");
         Assert.Contains(audits!, x => x.Action == "initialize" && x.Timestamp > DateTimeOffset.UnixEpoch);
         Assert.Contains(logs!, x => x.Message.Contains("Timestamp storage regression log entry") && x.Timestamp > DateTimeOffset.UnixEpoch);
