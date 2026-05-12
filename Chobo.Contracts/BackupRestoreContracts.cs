@@ -27,6 +27,7 @@ public sealed record BackupDto(
     DateTimeOffset? StartedAt,
     DateTimeOffset? CompletedAt,
     string? Error,
+    string? FailureReason,
     IReadOnlyList<BackupTableDto> Tables);
 
 public sealed record BackupTableDto(
@@ -84,6 +85,7 @@ public sealed record RestoreDto(
     DateTimeOffset? StartedAt,
     DateTimeOffset? CompletedAt,
     string? Error,
+    string? FailureReason,
     IReadOnlyList<RestoreTableDto> Tables);
 
 public sealed record RestoreTableDto(

@@ -32,6 +32,7 @@ public sealed class DashboardApplicationService(ChoboDbContext db)
                     x.Schedule == null ? null : x.Schedule.Name,
                     x.CreatedAt,
                     x.StartedAt,
+                    x.FailureReason,
                     x.Tables.Count,
                     shards.Count,
                     shards.Count(s => s.Status == BackupTableStatus.Succeeded),
@@ -52,7 +53,7 @@ public sealed class DashboardApplicationService(ChoboDbContext db)
             var lastRun = await db.Backups
                 .Where(x => x.ScheduleId == schedule.Id)
                 .OrderByDescending(x => x.CreatedAt)
-                .Select(x => new { x.CreatedAt, x.Status })
+                .Select(x => new { x.CreatedAt, x.Status, x.FailureReason })
                 .FirstOrDefaultAsync(cancellationToken);
 
             var lastSuccessfulRunCompletedAt = await db.Backups
@@ -73,6 +74,7 @@ public sealed class DashboardApplicationService(ChoboDbContext db)
                 schedule.MissedRunGracePeriod,
                 lastRun?.CreatedAt,
                 lastRun?.Status,
+                lastRun?.FailureReason,
                 lastSuccessfulRunCompletedAt));
         }
 

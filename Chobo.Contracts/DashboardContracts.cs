@@ -17,6 +17,7 @@ public sealed record DashboardRunningBackupDto(
     string? ScheduleName,
     DateTimeOffset CreatedAt,
     DateTimeOffset? StartedAt,
+    string? FailureReason,
     int TableCount,
     int ShardCount,
     int SucceededShardCount,
@@ -35,6 +36,7 @@ public sealed record DashboardScheduleDto(
     TimeSpan? MissedRunGracePeriod,
     DateTimeOffset? LastRunAt,
     BackupRunStatus? LastRunStatus,
+    string? LastRunFailureReason,
     DateTimeOffset? LastSuccessfulRunCompletedAt);
 
 public sealed record DashboardFutureScheduleDto(

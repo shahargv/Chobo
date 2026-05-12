@@ -52,6 +52,10 @@ Server runtime code should use typed options, not raw `IConfiguration`.
 
 Do not run open-ended test commands.
 
+## Failure handling
+
+Backup and restore work must be failure-friendly, not only success-oriented. Failure paths should finish instead of getting stuck, write a clear audit record, produce useful logs, and expose enough user-facing metadata to diagnose the issue from CLI/API output without spelunking first. Persist concise failure reasons on the relevant run records and keep detailed table/shard errors correlated with operation ids, nodes, and storage paths.
+
 ## Build artifacts
 
 Builds must support both standalone binaries and Docker images. Docker images should build inside Docker from source. Release artifacts should go under `.artifacts/build/<Configuration>/`.

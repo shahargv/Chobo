@@ -149,8 +149,9 @@
             Args = @('restores', 'wait', '--id', '{partialRestore.id}', '--timeout-seconds', '45', '--poll-seconds', '1')
             ExpectJson = @(
                 @{ Path = 'status'; Equals = 'PartiallySucceeded' }
+                @{ Path = 'failureReason'; NotEmpty = $true }
                 @{ Path = 'tables[0].status'; Equals = 'PartiallySucceeded' }
-                @{ Path = 'tables[0].error'; Contains = 'shards failed' }
+                @{ Path = 'tables[0].error'; NotEmpty = $true }
                 @{ Path = 'tables[0].shards'; ContainsObject = @{ sourceShardNumber = 1; targetShardNumber = 1; status = 'Succeeded' } }
                 @{ Path = 'tables[0].shards'; ContainsObject = @{ sourceShardNumber = 2; targetShardNumber = 2; status = 'Failed' } }
             )
