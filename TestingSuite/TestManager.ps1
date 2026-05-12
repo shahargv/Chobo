@@ -150,6 +150,121 @@ function Remove-ChoboSystemTestContainers {
     }
 }
 
+function Get-ChoboRunAllTests {
+    Import-Module (Join-Path $SuiteRoot 'Infra/TestDiscovery.psm1') -Force
+    @(Get-ChoboTests -TestsRoot (Join-Path $SuiteRoot 'Tests') |
+        Where-Object { -not $_.ExcludeFromRunAll } |
+        Sort-Object Name)
+}
+
+function Invoke-ChoboRunAllTests {
+    $tests = Get-ChoboRunAllTests
+    if ($tests.Count -eq 0) {
+        throw 'No matching tests found.'
+    }
+
+    $runStarted = Get-Date
+    $results = New-Object System.Collections.Generic.List[object]
+    $hostPwsh = (Get-Process -Id $PID).Path
+
+    foreach ($test in $tests) {
+        $safeName = ($test.Name -replace '[^a-zA-Z0-9-]', '-').ToLowerInvariant()
+        $childTestId = "$TestId-$safeName"
+        Write-Host "Running $($test.Name) as $childTestId"
+
+        $arguments = @(
+            '-NoProfile',
+            '-ExecutionPolicy',
+            'Bypass',
+            '-File',
+            $PSCommandPath,
+            '-TestId',
+            $childTestId,
+            '-OutputDirectory',
+            $OutputDirectory,
+            '-TestName',
+            $test.Name,
+            '-GlobalTimeoutSeconds',
+            "$GlobalTimeoutSeconds",
+            '-TestTimeoutSeconds',
+            "$TestTimeoutSeconds"
+        )
+        if ($NoCleanupOnSuccess) {
+            $arguments += '-NoCleanupOnSuccess'
+        }
+        if ($KeepEnvironment) {
+            $arguments += '-KeepEnvironment'
+        }
+
+        $stdoutPath = Join-Path $LogsDirectory "run-all-$safeName.stdout.log"
+        $stderrPath = Join-Path $LogsDirectory "run-all-$safeName.stderr.log"
+        $run = Invoke-ChoboProcess -FileName $hostPwsh -Arguments $arguments -WorkingDirectory $RepoRoot -TimeoutSeconds $GlobalTimeoutSeconds -StdOutPath $stdoutPath -StdErrPath $stderrPath
+        if ($run.StdOut) {
+            Write-Host $run.StdOut
+        }
+        if ($run.StdErr) {
+            Write-Error $run.StdErr
+        }
+
+        $childOutputDirectory = Join-Path $OutputDirectory $childTestId
+        $childResultsPath = Join-Path $childOutputDirectory 'results.json'
+        if (Test-Path -LiteralPath $childResultsPath) {
+            $childSummary = Get-Content -LiteralPath $childResultsPath -Raw | ConvertFrom-Json
+            foreach ($result in @($childSummary.Results)) {
+                $results.Add([pscustomobject]@{
+                    Test = $result.Test
+                    Status = $result.Status
+                    TimedOut = [bool]$result.TimedOut
+                    Error = $result.Error
+                    StartedAt = $result.StartedAt
+                    FinishedAt = $result.FinishedAt
+                    DurationSeconds = $result.DurationSeconds
+                    ArtifactDirectory = Join-Path $childOutputDirectory ("artifacts/{0}" -f $result.Test)
+                    RunId = $childTestId
+                })
+            }
+        } else {
+            $errorText = if ($run.TimedOut) {
+                "Global timeout of $GlobalTimeoutSeconds seconds expired."
+            } elseif ($run.StdErr) {
+                $run.StdErr
+            } else {
+                "Test manager failed with exit code $($run.ExitCode)."
+            }
+            $results.Add([pscustomobject]@{
+                Test = $test.Name
+                Status = 'Failed'
+                TimedOut = [bool]$run.TimedOut
+                Error = $errorText
+                StartedAt = $null
+                FinishedAt = (Get-Date).ToString('o')
+                DurationSeconds = $null
+                ArtifactDirectory = $childOutputDirectory
+                RunId = $childTestId
+            })
+        }
+    }
+
+    $runFinished = Get-Date
+    $summary = [pscustomobject]@{
+        RunId = $RunId
+        StartedAt = $runStarted.ToString('o')
+        FinishedAt = $runFinished.ToString('o')
+        DurationSeconds = [math]::Round(($runFinished - $runStarted).TotalSeconds, 3)
+        TestTimeoutSeconds = $TestTimeoutSeconds
+        Total = $results.Count
+        Passed = @($results | Where-Object Status -eq 'Passed').Count
+        Failed = @($results | Where-Object Status -ne 'Passed').Count
+        Results = @($results.ToArray())
+    }
+
+    Import-Module (Join-Path $SuiteRoot 'Infra/Reporting.psm1') -Force
+    Write-ChoboReports -RunSummary $summary -OutputDirectory $OutputDirectory
+    if ($summary.Failed -gt 0) {
+        throw "Run-all failed: $($summary.Failed) of $($summary.Total) test(s) failed."
+    }
+}
+
 function Copy-ChoboComposeLogs {
     foreach ($service in @($ComposeServices)) {
         $result = Invoke-ChoboCompose -ComposeArguments @('logs', '--no-color', $service) -TimeoutSeconds 60 -Name "logs-$service"
@@ -175,6 +290,11 @@ function Copy-ChoboServerFileLogs {
 try {
     Write-Host "Chobo system test id: $TestId"
     Write-Host "Output: $OutputDirectory"
+
+    if ($TestName.Count -eq 0) {
+        Invoke-ChoboRunAllTests
+        exit 0
+    }
 
     Remove-ChoboSystemTestContainers
 

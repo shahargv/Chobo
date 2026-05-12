@@ -412,10 +412,7 @@ public sealed class BackupRunnerService(
         Math.Max(1, cluster.BackupRestoreMaxDop is > 0 ? cluster.BackupRestoreMaxDop.Value : options.Value.MaxDop <= 0 ? 3 : options.Value.MaxDop);
 
     private static bool IsMergeTreeDataEngine(string engine) =>
-        engine.Contains("MergeTree", StringComparison.OrdinalIgnoreCase) && !IsReplicatedMergeTree(engine);
-
-    private static bool IsReplicatedMergeTree(string engine) =>
-        engine.StartsWith("Replicated", StringComparison.OrdinalIgnoreCase) && engine.Contains("MergeTree", StringComparison.OrdinalIgnoreCase);
+        engine.Contains("MergeTree", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsExcludedSystemDatabase(string database) =>
         string.Equals(database, "system", StringComparison.Ordinal) ||
