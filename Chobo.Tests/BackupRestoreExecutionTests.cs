@@ -67,6 +67,12 @@ public sealed class BackupRestoreExecutionTests
         fixture.Db.ChangeTracker.Clear();
         var backup = await fixture.Db.Backups.SingleAsync(x => x.Id == backupId);
         Assert.Equal(BackupRunStatus.Succeeded, backup.Status);
+        var table = await fixture.Db.BackupTables.Include(x => x.Shards).SingleAsync(x => x.BackupId == backupId);
+        Assert.True(table.DataBackedUp);
+        Assert.Equal(BackupTableStatus.Succeeded, table.Status);
+        var shard = Assert.Single(table.Shards);
+        Assert.Equal(BackupTableStatus.Succeeded, shard.Status);
+        Assert.Contains("replicated_orders", fixture.ClickHouse.BackupStartTables);
     }
 
     [Fact]
@@ -155,6 +161,27 @@ public sealed class BackupRestoreExecutionTests
         Assert.All(tables, table => Assert.Equal(RestoreTableStatus.Succeeded, table.Status));
         Assert.DoesNotContain("orders", fixture.ClickHouse.RestoreStartTables);
         Assert.Contains("items", fixture.ClickHouse.RestoreStartTables);
+    }
+
+    [Fact]
+    public async Task Restore_list_includes_shard_details()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Succeeded, "backup-op", true)
+        ]);
+        var restore = await fixture.SeedRestoreAsync(backup, [
+            new SeedRestoreTable("sales", "orders", RestoreTableStatus.Succeeded, "restore-op")
+        ]);
+
+        using var scope = fixture.Services.CreateScope();
+        var restores = await scope.ServiceProvider.GetRequiredService<RestoreApplicationService>().ListAsync();
+
+        var dto = Assert.Single(restores, x => x.Id == restore.Id);
+        var table = Assert.Single(dto.Tables);
+        var shard = Assert.Single(table.Shards);
+        Assert.Equal(1, shard.SourceShardNumber);
+        Assert.Equal(RestoreTableStatus.Succeeded, shard.Status);
     }
 
     [Fact]
@@ -572,6 +599,7 @@ public sealed class BackupRestoreExecutionTests
                 .AddScoped<ActorContext>()
                 .AddScoped<AuditService>()
                 .AddScoped<DashboardApplicationService>()
+                .AddScoped<RestoreApplicationService>()
                 .AddScoped<BackupRunnerService>()
                 .AddScoped<RestoreRunnerService>()
                 .AddSingleton<BackupRestoreQueues>()

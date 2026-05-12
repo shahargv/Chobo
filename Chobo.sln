@@ -3,9 +3,6 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ChoboServer", "ChoboServer\ChoboServer.csproj", "{066D9977-FB38-401B-B47C-4401526B61E9}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{CF753E16-8A67-450D-AE4D-42BA3CA9F15F}"
-	ProjectSection(SolutionItems) = preProject
-		compose.yaml = compose.yaml
-	EndProjectSection
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Chobo.Contracts", "Chobo.Contracts\Chobo.Contracts.csproj", "{89A0B819-C068-451E-B65D-DC2244211DE9}"
 EndProject
