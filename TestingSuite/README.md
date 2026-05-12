@@ -84,6 +84,20 @@ The generated Compose file includes only resources required by the selected test
 
 For cluster resources, `{source.Host}` resolves to shard 1 replica 1. `{source.ReplicaHost}` resolves to shard 1 replica 2 when at least two replicas exist.
 
+When registering a generated cluster with Chobo, pass the generated ClickHouse cluster name to the CLI:
+
+```powershell
+Args = @(
+    'clusters', 'add',
+    '--name', 'source',
+    '--mode', 'Cluster',
+    '--node', 'clickhouse-source-s1-r1:9000',
+    '--clickhouse-cluster-name', '{source.ClusterName}'
+)
+```
+
+For backup/restore tests, prefer a concrete service name such as `clickhouse-source-s1-r1:9000` over a `DnsName` alias for Chobo's access node. ChoboServer runs in its own container and must be able to resolve the node name; `DnsName` aliases are primarily registered for the `test-runner` container.
+
 ## Declarative Tests
 
 Most tests should be declarative: one `TestDefinition.psd1`, SQL files under `Sql`, and expected CSV files under `Expected`.
@@ -236,6 +250,33 @@ Only override these defaults when a test intentionally owns that behavior:
 ```
 
 Keep SQL readable. Prefer separate explicit SQL files for different resources/table shapes instead of placeholder-heavy SQL.
+
+## Sharded Backup/Restore Tests
+
+`BackupRestoreSharded` is the reference suite for clustered backup/restore behavior. It covers:
+
+- backing up a 2-shard MergeTree table with one selected replica per shard;
+- restore with preserved layout into another 2-shard cluster;
+- restore of one source shard into a single-node target;
+- explicit failure when preserve layout is requested for mismatched shard counts;
+- redistribute restore from 2 source shards into a 3-shard target;
+- append restore of a selected shard into an existing table;
+- backup from a single node and restore into a sharded target;
+- operational partial restore where one shard appends successfully and another fails because its target table is incompatible.
+
+The partial restore case is especially important. The expected Chobo behavior is:
+
+- restore run status: `PartiallySucceeded`;
+- restore table status: `PartiallySucceeded`;
+- successful shard status: `Succeeded`;
+- failed shard status: `Failed` with the ClickHouse error in the shard row;
+- audit contains `shard-failed`, `table-partially-succeeded`, and restore-level `partially-succeeded`.
+
+Use `backups show`, `restores show`, `audit show`, and per-node `Csv` assertions to verify both metadata and actual data placement. When checking a specific shard, set `Host` to the generated service name, for example:
+
+```powershell
+@{ Name = 'verify-shard-two'; Type = 'Csv'; Resource = 'restore'; Host = 'clickhouse-restore-s2-r1'; Path = 'Sql/select-shard-two.sql'; Expected = 'Expected/shard-two.csv' }
+```
 
 ## Adding A New Test
 

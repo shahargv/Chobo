@@ -22,6 +22,7 @@ public sealed class ClusterApplicationService(
             Name = request.Name.Trim(),
             Mode = request.Mode,
             BackupRestoreMaxDop = NormalizeMaxDop(request.BackupRestoreMaxDop),
+            ClickHouseClusterName = NormalizeClusterName(request.ClickHouseClusterName),
             EncryptedUserName = protector.Protect(request.UserName),
             EncryptedPassword = protector.Protect(request.Password),
             AccessNodes = request.AccessNodes.Select(ToEntity).ToList()
@@ -48,6 +49,7 @@ public sealed class ClusterApplicationService(
         cluster.Name = request.Name.Trim();
         cluster.Mode = request.Mode;
         cluster.BackupRestoreMaxDop = NormalizeMaxDop(request.BackupRestoreMaxDop);
+        cluster.ClickHouseClusterName = NormalizeClusterName(request.ClickHouseClusterName);
         cluster.UpdatedAt = DateTimeOffset.UtcNow;
         if (request.UserName is not null)
         {
@@ -114,10 +116,14 @@ public sealed class ClusterApplicationService(
             x.Mode,
             x.AccessNodes.Select(n => new AccessNodeDto(n.Id, n.Host, n.Port, n.UseTls)).ToList(),
             x.BackupRestoreMaxDop,
+            x.ClickHouseClusterName,
             x.IsDeleted,
             x.CreatedAt,
             x.UpdatedAt);
 
     private static int? NormalizeMaxDop(int? maxDop) =>
         maxDop is null or <= 0 ? null : maxDop;
+
+    private static string? NormalizeClusterName(string? clusterName) =>
+        string.IsNullOrWhiteSpace(clusterName) ? null : clusterName.Trim();
 }

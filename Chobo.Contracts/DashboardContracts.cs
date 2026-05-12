@@ -16,7 +16,12 @@ public sealed record DashboardRunningBackupDto(
     Guid? ScheduleId,
     string? ScheduleName,
     DateTimeOffset CreatedAt,
-    DateTimeOffset? StartedAt);
+    DateTimeOffset? StartedAt,
+    int TableCount,
+    int ShardCount,
+    int SucceededShardCount,
+    int FailedShardCount,
+    int RunningShardCount);
 
 public sealed record DashboardScheduleDto(
     Guid ScheduleId,

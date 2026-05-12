@@ -28,6 +28,16 @@ public static class ClickHouseSql
         return RewriteCreateTableName(createSql, Qualified(database, table));
     }
 
+    public static string RewriteCreateTableNameIfNotExists(string createSql, string database, string table)
+    {
+        var rewritten = RewriteCreateTableName(createSql, database, table);
+        return rewritten.StartsWith("CREATE TABLE IF NOT EXISTS ", StringComparison.OrdinalIgnoreCase)
+            ? rewritten
+            : rewritten.StartsWith("CREATE TABLE ", StringComparison.OrdinalIgnoreCase)
+                ? "CREATE TABLE IF NOT EXISTS " + rewritten["CREATE TABLE ".Length..]
+                : rewritten;
+    }
+
     public static string NormalizeCreateTableName(string createSql) =>
         RewriteCreateTableName(createSql, "__chobo_schema__.__table__");
 

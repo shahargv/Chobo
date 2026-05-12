@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Chobo.Contracts;
 using ChoboServer.Data;
 using Microsoft.Data.Sqlite;
@@ -5,20 +6,20 @@ using Microsoft.EntityFrameworkCore;
 
 namespace ChoboServer.Services;
 
-public sealed class AuditTimelineStore(ChoboDbContext db)
+public sealed class ApplicationLogStore(ChoboDbContext db)
 {
-    public async Task<IReadOnlyList<AuditEntryDto>> QueryAsync(DateTimeOffset? startTime, DateTimeOffset? endTime, int? last)
+    public async Task<IReadOnlyList<ApplicationLogEntryDto>> QueryAsync(DateTimeOffset? startTime, DateTimeOffset? endTime, int? last)
     {
         const string sql = """
-                           SELECT Id, Timestamp, ActorUserId, ActorName, Action, EntityType, EntityId, Details
-                           FROM AuditEntries
+                           SELECT Id, Timestamp, Level, RenderedMessage, Exception, Properties
+                           FROM ApplicationLogEntries
                            WHERE ($startTime IS NULL OR Timestamp >= $startTime)
                              AND ($endTime IS NULL OR Timestamp <= $endTime)
                            ORDER BY Timestamp DESC
                            LIMIT $limit;
                            """;
 
-        var results = new List<AuditEntryDto>();
+        var results = new List<ApplicationLogEntryDto>();
         var connection = (SqliteConnection)db.Database.GetDbConnection();
         await using var _ = await OpenIfNeededAsync(connection);
         await using var command = connection.CreateCommand();
@@ -30,15 +31,13 @@ public sealed class AuditTimelineStore(ChoboDbContext db)
         await using var reader = await command.ExecuteReaderAsync();
         while (await reader.ReadAsync())
         {
-            results.Add(new AuditEntryDto(
+            results.Add(new ApplicationLogEntryDto(
                 reader.GetInt64(0),
                 DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(1)),
-                reader.IsDBNull(2) ? null : reader.GetGuid(2),
+                reader.GetString(2),
+                ExtractSourceContext(reader.IsDBNull(5) ? null : reader.GetString(5)),
                 reader.GetString(3),
-                reader.GetString(4),
-                reader.GetString(5),
-                reader.IsDBNull(6) ? null : reader.GetString(6),
-                AuditDetails.ToJsonElement(reader.GetString(7))));
+                reader.IsDBNull(4) ? null : reader.GetString(4)));
         }
 
         return results;
@@ -49,13 +48,38 @@ public sealed class AuditTimelineStore(ChoboDbContext db)
         var connection = (SqliteConnection)db.Database.GetDbConnection();
         await using var _ = await OpenIfNeededAsync(connection, cancellationToken);
         await using var command = connection.CreateCommand();
-        command.CommandText = "DELETE FROM AuditEntries WHERE Timestamp < $before;";
+        command.CommandText = "DELETE FROM ApplicationLogEntries WHERE Timestamp < $before;";
         command.Parameters.AddWithValue("$before", ToSqlValue(before));
         return await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private static object ToSqlValue(DateTimeOffset? value) =>
         value is null ? DBNull.Value : value.Value.ToUniversalTime().ToUnixTimeMilliseconds();
+
+    private static string ExtractSourceContext(string? propertiesJson)
+    {
+        if (string.IsNullOrWhiteSpace(propertiesJson))
+        {
+            return "";
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(propertiesJson);
+            if (!document.RootElement.TryGetProperty("SourceContext", out var sourceContext))
+            {
+                return "";
+            }
+
+            return sourceContext.ValueKind == JsonValueKind.String
+                ? sourceContext.GetString() ?? ""
+                : sourceContext.ToString();
+        }
+        catch (JsonException)
+        {
+            return "";
+        }
+    }
 
     private static async Task<IAsyncDisposable> OpenIfNeededAsync(SqliteConnection connection, CancellationToken cancellationToken = default)
     {
