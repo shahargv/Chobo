@@ -21,6 +21,7 @@ internal static class BackupRestoreMapping
             x.StartedAt,
             x.CompletedAt,
             x.Error,
+            x.FailureReason,
             x.Tables.OrderBy(t => t.Database).ThenBy(t => t.Table).Select(ToDto).ToList());
 
     public static BackupTableDto ToDto(BackupTableEntity x) =>
@@ -77,6 +78,7 @@ internal static class BackupRestoreMapping
             x.StartedAt,
             x.CompletedAt,
             x.Error,
+            x.FailureReason,
             x.Tables.OrderBy(t => t.TargetDatabase).ThenBy(t => t.TargetTable).Select(ToDto).ToList());
 
     public static RestoreTableDto ToDto(RestoreTableEntity x) =>

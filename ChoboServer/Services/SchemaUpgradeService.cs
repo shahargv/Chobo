@@ -48,6 +48,12 @@ public static class SchemaUpgradeService
                     schema.AppliedMigrationId = "0006_sharded_backup_restore";
                     schema.AppliedAt = DateTimeOffset.UtcNow;
                     break;
+                case 6:
+                    await UpgradeFromV6ToV7Async(db);
+                    schema.SchemaVersion = 7;
+                    schema.AppliedMigrationId = "0007_backup_restore_failure_reason";
+                    schema.AppliedAt = DateTimeOffset.UtcNow;
+                    break;
                 default:
                     throw new InvalidOperationException($"No upgrade path is registered from schema version {schema.SchemaVersion}.");
             }
@@ -224,5 +230,22 @@ public static class SchemaUpgradeService
             CREATE INDEX IF NOT EXISTS IX_RestoreTableShards_BackupTableShardId ON RestoreTableShards (BackupTableShardId);
             CREATE INDEX IF NOT EXISTS IX_RestoreTableShards_Status ON RestoreTableShards (Status);
             """);
+    }
+
+    private static async Task UpgradeFromV6ToV7Async(ChoboDbContext db)
+    {
+        if (!await ColumnExistsAsync(db, "Backups", "FailureReason"))
+        {
+            await db.Database.ExecuteSqlRawAsync("""
+                ALTER TABLE Backups ADD COLUMN FailureReason TEXT NULL;
+                """);
+        }
+
+        if (!await ColumnExistsAsync(db, "Restores", "FailureReason"))
+        {
+            await db.Database.ExecuteSqlRawAsync("""
+                ALTER TABLE Restores ADD COLUMN FailureReason TEXT NULL;
+                """);
+        }
     }
 }

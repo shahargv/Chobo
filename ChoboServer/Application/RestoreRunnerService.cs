@@ -59,20 +59,24 @@ public sealed class RestoreRunnerService(
             var tableCount = await db.RestoreTables.CountAsync(x => x.RestoreId == restore.Id, cancellationToken);
             restore.Status = AggregateRestoreStatus(statuses);
             restore.CompletedAt = DateTimeOffset.UtcNow;
-            restore.Error = restore.Status is RestoreRunStatus.Failed or RestoreRunStatus.PartiallySucceeded ? "One or more tables or shards failed." : null;
+            restore.FailureReason = restore.Status is RestoreRunStatus.Failed or RestoreRunStatus.PartiallySucceeded
+                ? await GetRestoreFailureReasonAsync(restore.Id, cancellationToken)
+                : null;
+            restore.Error = restore.FailureReason;
             await db.SaveChangesAsync(cancellationToken);
-            _logger.Information("Restore {RestoreId} finished with status {Status}.", restore.Id, restore.Status);
+            _logger.Information("Restore {RestoreId} finished with status {Status}. Failure reason: {FailureReason}.", restore.Id, restore.Status, restore.FailureReason);
             var auditAction = restore.Status == RestoreRunStatus.Succeeded ? "succeeded" : restore.Status == RestoreRunStatus.PartiallySucceeded ? "partially-succeeded" : "failed";
-            await audit.RecordAsync(auditAction, AuditEntityType.Restore, restore.Id.ToString(), new { tableCount, layout = restore.Layout, restore.SourceShard, restore.TargetShard });
+            await audit.RecordAsync(auditAction, AuditEntityType.Restore, restore.Id.ToString(), new { tableCount, layout = restore.Layout, restore.SourceShard, restore.TargetShard, restore.FailureReason });
         }
         catch (Exception ex)
         {
             _logger.Error(ex, "Restore {RestoreId} failed.", restoreId);
             restore.Status = RestoreRunStatus.Failed;
             restore.Error = ex.Message;
+            restore.FailureReason = ex.Message;
             restore.CompletedAt = DateTimeOffset.UtcNow;
             await db.SaveChangesAsync(CancellationToken.None);
-            await audit.RecordAsync("failed", AuditEntityType.Restore, restore.Id.ToString(), new { error = ex.Message });
+            await audit.RecordAsync("failed", AuditEntityType.Restore, restore.Id.ToString(), new { error = ex.Message, restore.FailureReason });
         }
     }
 
@@ -83,6 +87,7 @@ public sealed class RestoreRunnerService(
         var scopedClickHouse = scope.ServiceProvider.GetRequiredService<IClickHouseAdapter>();
         var scopedAudit = scope.ServiceProvider.GetRequiredService<AuditService>();
         var scopedOptions = scope.ServiceProvider.GetRequiredService<IOptions<ChoboBackupRestoreOptions>>();
+        var scopedTestHooks = scope.ServiceProvider.GetRequiredService<TestHookCoordinator>();
 
         var restore = await scopedDb.Restores
             .Include(x => x.TargetCluster).ThenInclude(x => x!.AccessNodes)
@@ -104,16 +109,17 @@ public sealed class RestoreRunnerService(
                 .OrderBy(x => x.TargetShardNumber ?? int.MaxValue)
                 .ThenBy(x => x.SourceShardNumber)
                 .ToList();
+            var hasSubmittedOperations = orderedShards.Any(x => !string.IsNullOrWhiteSpace(x.ClickHouseOperationId));
             var firstEndpoint = orderedShards.Count == 0
                 ? new ClickHouseNodeEndpoint(restore.TargetCluster!.AccessNodes[0].Host, restore.TargetCluster.AccessNodes[0].Port, restore.TargetCluster.AccessNodes[0].UseTls)
                 : new ClickHouseNodeEndpoint(orderedShards[0].TargetHost, orderedShards[0].TargetPort, orderedShards[0].TargetUseTls);
             await scopedClickHouse.ExecuteAsync(firstEndpoint, restore.TargetCluster!, $"CREATE DATABASE IF NOT EXISTS {ClickHouseSql.Identifier(table.TargetDatabase)}", cancellationToken);
             var existing = await scopedClickHouse.GetTableAsync(firstEndpoint, restore.TargetCluster!, table.TargetDatabase, table.TargetTable, cancellationToken);
-            if (existing is not null && !restore.Append)
+            if (!hasSubmittedOperations && existing is not null && !restore.Append)
             {
                 throw new InvalidOperationException($"Target table {table.TargetDatabase}.{table.TargetTable} already exists.");
             }
-            if (existing is not null && existing.SchemaHash != backupTable.SchemaDefinition!.SchemaHash)
+            if (!hasSubmittedOperations && existing is not null && existing.SchemaHash != backupTable.SchemaDefinition!.SchemaHash)
             {
                 if (!restore.AllowSchemaMismatch)
                 {
@@ -122,7 +128,7 @@ public sealed class RestoreRunnerService(
 
                 table.Warning = "Target schema differs from backup schema; continuing because allow schema mismatch was requested.";
             }
-            if (existing is null && restore.Append)
+            if (!hasSubmittedOperations && existing is null && restore.Append)
             {
                 throw new InvalidOperationException($"Append restore requires target table {table.TargetDatabase}.{table.TargetTable} to already exist.");
             }
@@ -143,7 +149,7 @@ public sealed class RestoreRunnerService(
             }
 
             var usesTemporaryShardTables = orderedShards.Any(x => !string.Equals(x.RestoreTableName, table.TargetTable, StringComparison.Ordinal));
-            if (existing is null && usesTemporaryShardTables)
+            if (!hasSubmittedOperations && existing is null && usesTemporaryShardTables)
             {
                 await scopedClickHouse.ExecuteAsync(firstEndpoint, restore.TargetCluster!, ClickHouseSql.RewriteCreateTableNameIfNotExists(backupTable.SchemaDefinition!.CreateTableSql, table.TargetDatabase, table.TargetTable), cancellationToken);
             }
@@ -174,9 +180,7 @@ public sealed class RestoreRunnerService(
                         }
                         else
                         {
-                            await scopedAudit.RecordAsync("shard-restarted", AuditEntityType.RestoreTableShard, shard.Id.ToString(), new { reason = "operation-not-found", shard.ClickHouseOperationId });
-                            shard.ClickHouseOperationId = null;
-                            shard.ClickHouseStatus = null;
+                            throw MissingOperationException(shard.ClickHouseOperationId);
                         }
                     }
 
@@ -189,6 +193,7 @@ public sealed class RestoreRunnerService(
                         table.ClickHouseStatus = operation.Status;
                         await scopedDb.SaveChangesAsync(cancellationToken);
                         await scopedAudit.RecordAsync("clickhouse-operation-submitted", AuditEntityType.RestoreTableShard, shard.Id.ToString(), new { operation.OperationId, operation.Status, sourceShard = shard.SourceShardNumber, targetShard = shard.TargetShardNumber });
+                        await scopedTestHooks.MaybeDelayRestoreBeforePollAsync(cancellationToken);
                         await PollRestoreShardAsync(scopedClickHouse, endpoint, restore.TargetCluster!, shard, new ClickHouseOperationStatus(true, operation.Status, null), scopedOptions.Value.PollInterval, cancellationToken);
                     }
 
@@ -220,12 +225,14 @@ public sealed class RestoreRunnerService(
             table.ClickHouseStatus = table.Shards.Any(x => x.Status == RestoreTableStatus.Failed)
                 ? "PARTIAL_OR_FAILED"
                 : table.Shards.LastOrDefault(x => x.Status == RestoreTableStatus.Succeeded)?.ClickHouseStatus ?? table.ClickHouseStatus;
-            table.Error = table.Status is RestoreTableStatus.Failed or RestoreTableStatus.PartiallySucceeded ? "One or more shards failed." : null;
+            table.Error = table.Status is RestoreTableStatus.Failed or RestoreTableStatus.PartiallySucceeded
+                ? BuildRestoreShardFailureReason(table.Shards.Where(x => x.Status == RestoreTableStatus.Failed).ToList())
+                : null;
             table.CompletedAt = DateTimeOffset.UtcNow;
             await scopedDb.SaveChangesAsync(cancellationToken);
             _logger.Information("Restore table {RestoreTableId} {TargetDatabase}.{TargetTable} completed with ClickHouse status {Status}.", table.Id, table.TargetDatabase, table.TargetTable, table.ClickHouseStatus);
             var tableAction = table.Status == RestoreTableStatus.Succeeded ? "table-succeeded" : table.Status == RestoreTableStatus.PartiallySucceeded ? "table-partially-succeeded" : "table-failed";
-            await scopedAudit.RecordAsync(tableAction, AuditEntityType.RestoreTable, table.Id.ToString(), new { table.TargetDatabase, table.TargetTable, shardCount = table.Shards.Count });
+            await scopedAudit.RecordAsync(tableAction, AuditEntityType.RestoreTable, table.Id.ToString(), new { table.TargetDatabase, table.TargetTable, shardCount = table.Shards.Count, failureReason = table.Error });
         }
         catch (Exception ex)
         {
@@ -244,7 +251,7 @@ public sealed class RestoreRunnerService(
         {
             if (!current.Exists)
             {
-                throw new InvalidOperationException("ClickHouse operation disappeared.");
+                throw MissingOperationException(table.ClickHouseOperationId);
             }
 
             table.ClickHouseStatus = current.Status;
@@ -268,7 +275,7 @@ public sealed class RestoreRunnerService(
         {
             if (!current.Exists)
             {
-                throw new InvalidOperationException("ClickHouse operation disappeared.");
+                throw MissingOperationException(shard.ClickHouseOperationId);
             }
 
             shard.ClickHouseStatus = current.Status;
@@ -297,6 +304,39 @@ public sealed class RestoreRunnerService(
     private int EffectiveMaxDop(ClickHouseClusterEntity cluster) =>
         Math.Max(1, cluster.BackupRestoreMaxDop is > 0 ? cluster.BackupRestoreMaxDop.Value : options.Value.MaxDop <= 0 ? 3 : options.Value.MaxDop);
 
+    private async Task<string> GetRestoreFailureReasonAsync(Guid restoreId, CancellationToken cancellationToken)
+    {
+        var tableFailures = await db.RestoreTables
+            .Where(x => x.RestoreId == restoreId && x.Status != RestoreTableStatus.Succeeded && x.Status != RestoreTableStatus.Skipped)
+            .OrderBy(x => x.TargetDatabase)
+            .ThenBy(x => x.TargetTable)
+            .Select(x => new { x.TargetDatabase, x.TargetTable, x.Error })
+            .ToListAsync(cancellationToken);
+        var shardFailures = await db.RestoreTableShards
+            .Where(x => x.RestoreTable!.RestoreId == restoreId && x.Status == RestoreTableStatus.Failed)
+            .OrderBy(x => x.RestoreTable!.TargetDatabase)
+            .ThenBy(x => x.RestoreTable!.TargetTable)
+            .ThenBy(x => x.SourceShardNumber)
+            .Select(x => new { x.RestoreTable!.TargetDatabase, x.RestoreTable.TargetTable, x.SourceShardNumber, x.TargetShardNumber, x.TargetHost, x.TargetPort, x.Error })
+            .ToListAsync(cancellationToken);
+
+        if (shardFailures.Count > 0)
+        {
+            return string.Join("; ", shardFailures.Select(x =>
+            {
+                var targetShard = x.TargetShardNumber is null ? "unknown" : x.TargetShardNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                return $"Restore failed for {x.TargetDatabase}.{x.TargetTable} source shard {x.SourceShardNumber} to target shard {targetShard} on {x.TargetHost}:{x.TargetPort}: {NormalizeFailure(x.Error)}";
+            }));
+        }
+
+        if (tableFailures.Count > 0)
+        {
+            return string.Join("; ", tableFailures.Select(x => $"Restore failed for {x.TargetDatabase}.{x.TargetTable}: {NormalizeFailure(x.Error)}"));
+        }
+
+        return "One or more restore tables or shards failed.";
+    }
+
     private static string BuildMismatchAppendInsertSql(ClickHouseTableInfo existing, SchemaDefinitionEntity backupSchema, string database, string targetTable, string tempTable)
     {
         var sourceColumns = ReadColumnNames(backupSchema.ColumnsJson).ToHashSet(StringComparer.Ordinal);
@@ -319,6 +359,24 @@ public sealed class RestoreRunnerService(
             .Select(x => x!)
             .ToList();
     }
+
+    private static string BuildRestoreShardFailureReason(IReadOnlyList<RestoreTableShardEntity> failedShards) =>
+        failedShards.Count == 0
+            ? "One or more shards failed."
+            : string.Join("; ", failedShards
+                .OrderBy(x => x.SourceShardNumber)
+                .ThenBy(x => x.TargetShardNumber)
+                .Select(x =>
+                {
+                    var targetShard = x.TargetShardNumber is null ? "unknown" : x.TargetShardNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    return $"Source shard {x.SourceShardNumber} to target shard {targetShard} on {x.TargetHost}:{x.TargetPort}: {NormalizeFailure(x.Error)}";
+                }));
+
+    private static string NormalizeFailure(string? failure) =>
+        string.IsNullOrWhiteSpace(failure) ? "No detailed failure was reported." : failure.Trim();
+
+    private static InvalidOperationException MissingOperationException(string? operationId) =>
+        new($"ClickHouse operation {operationId ?? "(unknown)"} is missing from system.backups; its outcome is unknown.");
 
     private static RestoreRunStatus AggregateRestoreStatus(IReadOnlyList<RestoreTableStatus> statuses)
     {

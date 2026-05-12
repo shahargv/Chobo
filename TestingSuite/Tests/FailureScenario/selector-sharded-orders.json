@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "action": "Include",
+      "database": { "kind": "Exact", "value": "backup_failure_sharded" },
+      "table": { "kind": "Exact", "value": "orders_local" }
+    }
+  ]
+}

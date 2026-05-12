@@ -66,6 +66,7 @@ static void AddChoboEnvironmentAliases(IConfigurationBuilder configuration)
     AddAlias(values, "CHOBO_ENCRYPTION_KEY_BASE64", "Chobo:EncryptionKeyBase64");
     AddAlias(values, "CHOBO_INIT_ADMIN_USER", "Chobo:Init:AdminUser");
     AddAlias(values, "CHOBO_INIT_ACCESS_TOKEN", "Chobo:Init:AccessToken");
+    AddAlias(values, "CHOBO_TEST_HOOKS_ENABLED", "Chobo:TestHooks:Enabled");
     if (values.Count > 0)
     {
         configuration.AddInMemoryCollection(values);

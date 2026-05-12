@@ -24,5 +24,6 @@ public sealed class BackupEntity
     public DateTimeOffset? StartedAt { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }
     public string? Error { get; set; }
+    public string? FailureReason { get; set; }
     public List<BackupTableEntity> Tables { get; set; } = [];
 }
