@@ -2,7 +2,7 @@
 
 Chobo manages backup lifecycle through policy retention, pinning, manual deletion, and failed-backup garbage collection.
 
-Lifecycle actions are audited. Deletion removes backup objects from S3-compatible storage and updates the backup run status in SQLite.
+Lifecycle actions are audited. Deletion removes backup objects from the configured storage target and updates the backup run so operators can see what happened.
 
 ## Policy Retention
 

@@ -24,8 +24,9 @@ ChoboCli clusters add --name prod-cluster --mode Cluster --node ch1:9000,ch2:900
 
 Notes:
 
-- Chobo talks to ClickHouse over the HTTP interface. If you pass native port `9000`, Chobo maps it to HTTP port `8123` internally.
-- Use `--tls` when the ClickHouse HTTP endpoint requires HTTPS.
+- Chobo talks to ClickHouse through the official `ClickHouse.Driver` ADO.NET package, which uses the HTTP(S) interface.
+- Existing native-default port values remain accepted: Chobo maps `9000` to HTTP port `8123`, and maps TLS port `9440` to HTTPS port `8443`.
+- Use `--tls` when the ClickHouse HTTPS endpoint requires TLS.
 - `--backup-restore-maxdop` limits parallel table work for this cluster and overrides the server default.
 - For `Cluster` mode, Chobo reads `system.clusters`, selects one representative replica per shard, and performs shard-level backup work manually.
 
@@ -157,9 +158,9 @@ ChoboCli backups list --status PartiallySucceeded
 
 ## What Chobo Backs Up
 
-For each selected table, Chobo stores schema metadata in SQLite. Tables using MergeTree-family engines also get data backups through ClickHouse `BACKUP TABLE ... TO S3(...) ASYNC`.
+For each selected table, Chobo preserves the table definition so the backup can be inspected and used for restore planning later. Tables that contain ClickHouse-managed data also have their data captured as part of the backup run.
 
-For non-MergeTree tables, Chobo records schema metadata and marks the backup table as schema-only.
+For tables that do not have backupable table data, Chobo records the table definition and marks the backup table as schema-only.
 
 For clustered sources, Chobo:
 

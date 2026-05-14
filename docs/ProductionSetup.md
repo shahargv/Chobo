@@ -16,7 +16,7 @@ ChoboServer owns scheduling, retention, audit records, application logs, backup 
 ## Requirements
 
 - .NET 10 runtime for framework-dependent binaries, or the self-contained release artifacts built by `scripts/Build-Artifacts.ps1`.
-- Network access from ChoboServer to ClickHouse HTTP endpoints.
+- Network access from ChoboServer to ClickHouse HTTP(S) endpoints. Chobo uses the official `ClickHouse.Driver` ADO.NET package; configured native-default ports are mapped internally from `9000` to `8123`, and from TLS `9440` to `8443`.
 - Network access from ClickHouse nodes to the configured S3 endpoint, because ClickHouse itself performs the `BACKUP ... TO S3(...)` and `RESTORE ... FROM S3(...)` calls.
 - Network access from ChoboServer to the S3 endpoint for backup deletion during retention, failed-backup cleanup, and manual delete.
 - Persistent storage for the Chobo data directory.
@@ -131,6 +131,8 @@ ChoboCli clusters add --name prod-cluster --mode Cluster --node ch1:9000,ch2:900
 ```
 
 For `Cluster` mode, `--clickhouse-cluster-name` should match the value in ClickHouse `system.clusters.cluster`. If it is omitted, Chobo can auto-discover the cluster name only when `system.clusters` contains exactly one cluster definition.
+
+Chobo accepts the usual ClickHouse native-default ports in CLI commands for compatibility. Internally, the server talks to ClickHouse over HTTP(S): `9000` maps to `8123`, and TLS `9440` maps to `8443`. If your deployment exposes custom HTTP(S) ports, pass those ports directly.
 
 Add an S3-compatible target:
 

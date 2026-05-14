@@ -3,6 +3,7 @@ using System.Text.Encodings.Web;
 using System.Text;
 using System.Text.Json;
 using ChoboServer.Data;
+using ClickHouse.Driver.ADO;
 
 namespace ChoboServer.Services;
 
@@ -253,60 +254,61 @@ public sealed class ClickHouseAdapter(CredentialProtector protector, Serilog.ILo
 
     private async Task<List<List<string>>> QueryAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string sql, CancellationToken cancellationToken)
     {
-        var httpPort = endpoint.Port == 9000 ? 8123 : endpoint.Port;
-        var scheme = endpoint.UseTls ? "https" : "http";
-        using var client = new HttpClient { Timeout = RequestTimeout };
+        var settings = CreateSettings(endpoint, cluster);
+        await using var connection = new ClickHouseConnection(settings);
+        await connection.OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand(sql);
+
+        try
+        {
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            var result = new List<List<string>>();
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var row = new List<string>(reader.FieldCount);
+                for (var i = 0; i < reader.FieldCount; i++)
+                {
+                    row.Add(await reader.IsDBNullAsync(i, cancellationToken)
+                        ? ""
+                        : Convert.ToString(reader.GetValue(i), System.Globalization.CultureInfo.InvariantCulture) ?? "");
+                }
+
+                result.Add(row);
+            }
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, "ClickHouse query failed on {Host}:{Port}: {Message}. SQL: {SqlPreview}", endpoint.Host, settings.Port, ex.Message, Preview(sql));
+            throw new InvalidOperationException(ex.Message, ex);
+        }
+    }
+
+    private ClickHouseClientSettings CreateSettings(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster)
+    {
         var user = protector.Unprotect(cluster.EncryptedUserName);
         var password = protector.Unprotect(cluster.EncryptedPassword);
-        if (!string.IsNullOrWhiteSpace(user))
+        var settings = new ClickHouseClientSettings
         {
-            var token = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{user}:{password ?? ""}"));
-            client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", token);
-        }
-
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{scheme}://{endpoint.Host}:{httpPort}/")
-        {
-            Content = new StringContent(WithFormat(sql), Encoding.UTF8, "text/plain")
+            Host = endpoint.Host,
+            Port = ToDriverPort(endpoint),
+            Protocol = endpoint.UseTls ? "https" : "http",
+            Timeout = RequestTimeout,
+            Username = string.IsNullOrWhiteSpace(user) ? "default" : user,
+            Password = password ?? ""
         };
-        using var response = await client.SendAsync(request, cancellationToken);
-        var text = await response.Content.ReadAsStringAsync(cancellationToken);
-        if (!response.IsSuccessStatusCode)
-        {
-            _logger.Error("ClickHouse HTTP query failed on {Host}:{Port}: {StatusCode} {Response}. SQL: {SqlPreview}", endpoint.Host, httpPort, response.StatusCode, text, Preview(sql));
-            throw new InvalidOperationException(text);
-        }
 
-        var result = new List<List<string>>();
-        foreach (var line in text.Split('\n', StringSplitOptions.RemoveEmptyEntries))
-        {
-            result.Add(line.TrimEnd('\r').Split('\t').Select(UnescapeTsv).ToList());
-        }
-
-        return result;
+        return settings;
     }
 
-    private static string UnescapeTsv(string value) =>
-        value
-            .Replace("\\N", "", StringComparison.Ordinal)
-            .Replace("\\t", "\t", StringComparison.Ordinal)
-            .Replace("\\n", "\n", StringComparison.Ordinal)
-            .Replace("\\'", "'", StringComparison.Ordinal)
-            .Replace("\\\\", "\\", StringComparison.Ordinal);
-
-    private static string WithFormat(string sql)
-    {
-        var trimmed = sql.TrimEnd();
-        if (trimmed.EndsWith("FORMAT TSV", StringComparison.OrdinalIgnoreCase))
+    private static ushort ToDriverPort(ClickHouseNodeEndpoint endpoint) =>
+        (ushort)((endpoint.Port, endpoint.UseTls) switch
         {
-            return sql;
-        }
-
-        return trimmed.StartsWith("SELECT", StringComparison.OrdinalIgnoreCase) ||
-               trimmed.StartsWith("BACKUP", StringComparison.OrdinalIgnoreCase) ||
-               trimmed.StartsWith("RESTORE", StringComparison.OrdinalIgnoreCase)
-            ? trimmed + "\nFORMAT TSV"
-            : trimmed;
-    }
+            (9000, false) => 8123,
+            (9440, true) => 8443,
+            _ => endpoint.Port
+        });
 
     private static string Preview(string sql)
     {

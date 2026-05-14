@@ -1,0 +1,43 @@
+name: System Tests
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: system-tests-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  full-system-tests:
+    name: Full system test suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Run full system test suite
+        shell: pwsh
+        run: ./TestingSuite/TestManager.ps1 -TestId "gha-full-${{ github.run_id }}" -GlobalTimeoutSeconds 1800 -TestTimeoutSeconds 300
+
+      - name: Upload system test results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: full-system-test-results
+          path: .artifacts/TestResults
+          if-no-files-found: ignore
+          retention-days: 30
