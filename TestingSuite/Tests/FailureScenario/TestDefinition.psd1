@@ -199,6 +199,8 @@
             Name = 'wait-backup-after-server-restart'
             Type = 'Cli'
             Args = @('backups', 'wait', '--id', '{restartBackup.id}', '--timeout-seconds', '90', '--poll-seconds', '1')
+            RetryTimeoutSeconds = 90
+            RetryIntervalSeconds = 2
             ExpectJson = @(
                 @{ Path = 'status'; Equals = 'Succeeded' }
             )
@@ -301,6 +303,8 @@
             Name = 'wait-restore-after-server-restart'
             Type = 'Cli'
             Args = @('restores', 'wait', '--id', '{restartRestore.id}', '--timeout-seconds', '90', '--poll-seconds', '1')
+            RetryTimeoutSeconds = 90
+            RetryIntervalSeconds = 2
             ExpectJson = @(
                 @{ Path = 'status'; Equals = 'Succeeded' }
             )
