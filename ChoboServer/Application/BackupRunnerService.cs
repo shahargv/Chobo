@@ -34,7 +34,15 @@ public sealed class BackupRunnerService(
         {
             return;
         }
-        if (backup.Status == BackupRunStatus.Succeeded || backup.Status == BackupRunStatus.Failed || backup.Status == BackupRunStatus.Canceled)
+        if (backup.Status is BackupRunStatus.Succeeded or
+            BackupRunStatus.Failed or
+            BackupRunStatus.Canceled or
+            BackupRunStatus.ManualDeleteRequested or
+            BackupRunStatus.ManualDeleted or
+            BackupRunStatus.FailedBackupDeleteRequested or
+            BackupRunStatus.FailedBackupDeletedByGarbageCollector or
+            BackupRunStatus.BackupExpiredDeleteStarted or
+            BackupRunStatus.BackupExpiredDeleted)
         {
             return;
         }

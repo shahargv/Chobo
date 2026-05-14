@@ -4,9 +4,34 @@ public enum PolicyMatchKind { All, Exact, Wildcard }
 
 public enum PolicySelectorAction { Include, Exclude }
 
-public sealed record BackupPolicyDto(Guid Id, string Name, Guid SourceClusterId, Guid TargetId, int SelectorJsonVersion, PolicySelector Selector, bool IsDeleted, DateTimeOffset CreatedAt, DateTimeOffset? UpdatedAt);
+public enum FailedBackupRetentionMode
+{
+    KeepAndExcludeFromMinBackupsToKeep,
+    DeleteByGarbageCollectorAfterFailure
+}
 
-public sealed record UpsertPolicyRequest(string Name, Guid SourceClusterId, Guid TargetId, PolicySelector Selector);
+public sealed record BackupRetentionDto(int RetentionMinutes, int MinBackupsToKeep);
+
+public sealed record BackupPolicyDto(
+    Guid Id,
+    string Name,
+    Guid SourceClusterId,
+    Guid TargetId,
+    int SelectorJsonVersion,
+    PolicySelector Selector,
+    BackupRetentionDto? Retention,
+    FailedBackupRetentionMode FailedBackupRetentionMode,
+    bool IsDeleted,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset? UpdatedAt);
+
+public sealed record UpsertPolicyRequest(
+    string Name,
+    Guid SourceClusterId,
+    Guid TargetId,
+    PolicySelector Selector,
+    BackupRetentionDto? Retention = null,
+    FailedBackupRetentionMode FailedBackupRetentionMode = FailedBackupRetentionMode.KeepAndExcludeFromMinBackupsToKeep);
 
 public sealed record PolicySelector(int Version, IReadOnlyList<PolicySelectorRule> Rules)
 {
