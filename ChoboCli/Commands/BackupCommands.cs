@@ -34,6 +34,9 @@ public sealed class BackupsCommands : CliSubject
         Verb("list", "List backups.", ListAsync);
         Verb("show", "Show one backup.", ShowAsync);
         Verb("wait", "Wait for a backup to finish.", WaitAsync);
+        Verb("delete", "Request deletion for one backup.", DeleteAsync);
+        Verb("pin", "Pin one backup.", PinAsync);
+        Verb("unpin", "Unpin one backup.", UnpinAsync);
     }
 
     public override string Name => "backups";
@@ -44,6 +47,19 @@ public sealed class BackupsCommands : CliSubject
 
     private static Task<object?> ShowAsync(CommandContext context) =>
         CommandHelpers.WithClient(context, client => client.GetAsync($"backups/{context.Command.Options.Required("--id")}"));
+
+    private static Task<object?> DeleteAsync(CommandContext context)
+    {
+        var id = context.Command.Options.Required("--id");
+        var force = context.Command.Options.Has("--force") ? "?force=true" : "";
+        return CommandHelpers.WithClient(context, client => client.DeleteAsync($"backups/{id}{force}"));
+    }
+
+    private static Task<object?> PinAsync(CommandContext context) =>
+        CommandHelpers.WithClient(context, client => client.PostAsync($"backups/{context.Command.Options.Required("--id")}/pin", new { }));
+
+    private static Task<object?> UnpinAsync(CommandContext context) =>
+        CommandHelpers.WithClient(context, client => client.PostAsync($"backups/{context.Command.Options.Required("--id")}/unpin", new { }));
 
     private static async Task<object?> WaitAsync(CommandContext context)
     {
@@ -92,5 +108,11 @@ public sealed class BackupsCommands : CliSubject
     }
 
     private static bool IsTerminal(BackupRunStatus status) =>
-        status is BackupRunStatus.Succeeded or BackupRunStatus.PartiallySucceeded or BackupRunStatus.Failed or BackupRunStatus.Canceled;
+        status is BackupRunStatus.Succeeded or
+            BackupRunStatus.PartiallySucceeded or
+            BackupRunStatus.Failed or
+            BackupRunStatus.Canceled or
+            BackupRunStatus.ManualDeleted or
+            BackupRunStatus.FailedBackupDeletedByGarbageCollector or
+            BackupRunStatus.BackupExpiredDeleted;
 }

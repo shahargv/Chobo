@@ -22,6 +22,8 @@ public static class ServiceCollectionExtensions
         services.AddOptions<ChoboInitOptions>().Bind(configuration.GetSection("Chobo:Init"));
         services.AddOptions<ChoboDataRetentionOptions>().Bind(configuration.GetSection("Chobo:DataRetention"));
         services.AddOptions<ChoboBackupRestoreOptions>().Bind(configuration.GetSection("Chobo:BackupRestore"));
+        services.AddOptions<RetentionManagementOptions>().Bind(configuration.GetSection("Chobo:RetentionManagement"));
+        services.AddOptions<BackupsGarbageCollectorOptions>().Bind(configuration.GetSection("Chobo:BackupsGarbageCollector"));
         services.AddOptions<ChoboTestHooksOptions>().Bind(configuration.GetSection("Chobo:TestHooks"));
 
         services.AddControllers().AddJsonOptions(options =>
@@ -62,6 +64,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ExportImportService>();
         services.AddScoped<ClickHouseAdapter>();
         services.AddScoped<IClickHouseAdapter>(serviceProvider => serviceProvider.GetRequiredService<ClickHouseAdapter>());
+        services.AddScoped<S3BackupStorageDeleter>();
+        services.AddScoped<IBackupStorageDeletionService, BackupStorageDeletionService>();
         services.AddScoped<ApplicationLogStore>();
         services.AddScoped<AuditStore>();
         services.AddSingleton<TestHookCoordinator>();
@@ -82,12 +86,15 @@ public static class ServiceCollectionExtensions
         services.AddScoped<RestoreApplicationService>();
         services.AddScoped<BackupRunnerService>();
         services.AddScoped<RestoreRunnerService>();
+        services.AddScoped<BackupCleanupService>();
         services.AddSingleton(TimeProvider.System);
         services.AddSingleton<BackupRestoreQueues>();
         services.AddHostedService<BackupRestoreResumeBackgroundService>();
         services.AddHostedService<BackupExecutorBackgroundService>();
         services.AddHostedService<RestoreExecutorBackgroundService>();
         services.AddHostedService<BackupSchedulerDispatcherBackgroundService>();
+        services.AddHostedService<RetentionManagementBackgroundService>();
+        services.AddHostedService<BackupsGarbageCollectorBackgroundService>();
         services.AddHostedService<DataRetentionBackgroundService>();
         return services;
     }

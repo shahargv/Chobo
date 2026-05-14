@@ -33,6 +33,9 @@ public sealed class DashboardApplicationService(ChoboDbContext db)
                     x.CreatedAt,
                     x.StartedAt,
                     x.FailureReason,
+                    x.IsPinned,
+                    x.DeletionRequestedAt,
+                    x.DeletionReason,
                     x.Tables.Count,
                     shards.Count,
                     shards.Count(s => s.Status == BackupTableStatus.Succeeded),
@@ -53,7 +56,7 @@ public sealed class DashboardApplicationService(ChoboDbContext db)
             var lastRun = await db.Backups
                 .Where(x => x.ScheduleId == schedule.Id)
                 .OrderByDescending(x => x.CreatedAt)
-                .Select(x => new { x.CreatedAt, x.Status, x.FailureReason })
+                .Select(x => new { x.CreatedAt, x.Status, x.FailureReason, x.IsPinned, x.DeletionRequestedAt })
                 .FirstOrDefaultAsync(cancellationToken);
 
             var lastSuccessfulRunCompletedAt = await db.Backups
@@ -75,6 +78,8 @@ public sealed class DashboardApplicationService(ChoboDbContext db)
                 lastRun?.CreatedAt,
                 lastRun?.Status,
                 lastRun?.FailureReason,
+                lastRun?.IsPinned ?? false,
+                lastRun?.DeletionRequestedAt,
                 lastSuccessfulRunCompletedAt));
         }
 

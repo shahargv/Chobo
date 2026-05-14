@@ -25,6 +25,6 @@ public sealed record ClusterExport(Guid Id, string Name, ClusterMode Mode, IRead
 
 public sealed record BackupTargetExport(Guid Id, string Name, BackupTargetType Type, S3TargetSettingsDto S3, string? EncryptedAccessKey, string? EncryptedSecretKey, bool IsDeleted, DateTimeOffset CreatedAt, DateTimeOffset? UpdatedAt, DateTimeOffset? DeletedAt);
 
-public sealed record BackupPolicyExport(Guid Id, string Name, Guid SourceClusterId, Guid TargetId, int SelectorJsonVersion, PolicySelector Selector, bool IsDeleted, DateTimeOffset CreatedAt, DateTimeOffset? UpdatedAt, DateTimeOffset? DeletedAt);
+public sealed record BackupPolicyExport(Guid Id, string Name, Guid SourceClusterId, Guid TargetId, int SelectorJsonVersion, PolicySelector Selector, BackupRetentionDto? Retention, FailedBackupRetentionMode FailedBackupRetentionMode, bool IsDeleted, DateTimeOffset CreatedAt, DateTimeOffset? UpdatedAt, DateTimeOffset? DeletedAt);
 
 public sealed record BackupScheduleExport(Guid Id, string Name, Guid PolicyId, BackupType BackupType, string CronExpression, string TimeZoneId, bool IsEnabled, TimeSpan? MissedRunGracePeriod, string? Description, bool IsDeleted, DateTimeOffset CreatedAt, DateTimeOffset? UpdatedAt, DateTimeOffset? DeletedAt);

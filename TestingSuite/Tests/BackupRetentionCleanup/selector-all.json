@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "action": "Include",
+      "database": { "kind": "All", "value": "*" },
+      "table": { "kind": "All", "value": "*" }
+    }
+  ]
+}

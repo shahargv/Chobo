@@ -95,10 +95,82 @@ public sealed class BackupApplicationService(
     public async Task<BackupDto?> GetAsync(Guid id, CancellationToken cancellationToken = default) =>
         await LoadAsync(id, cancellationToken) is { } backup ? BackupRestoreMapping.ToDto(backup) : null;
 
+    public async Task<BackupDto?> PinAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var backup = await LoadAsync(id, cancellationToken);
+        if (backup is null)
+        {
+            return null;
+        }
+
+        backup.IsPinned = true;
+        backup.PinnedAt = DateTimeOffset.UtcNow;
+        backup.PinnedByUserId = actor.UserId;
+        backup.PinnedByName = actor.ActorName;
+        await db.SaveChangesAsync(cancellationToken);
+        await audit.RecordAsync("pin", AuditEntityType.Backup, id.ToString(), new { backup.PinnedByUserId, backup.PinnedByName });
+        return BackupRestoreMapping.ToDto(backup);
+    }
+
+    public async Task<BackupDto?> UnpinAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var backup = await LoadAsync(id, cancellationToken);
+        if (backup is null)
+        {
+            return null;
+        }
+
+        var previous = new { backup.IsPinned, backup.PinnedAt, backup.PinnedByUserId, backup.PinnedByName };
+        backup.IsPinned = false;
+        backup.PinnedAt = null;
+        backup.PinnedByUserId = null;
+        backup.PinnedByName = null;
+        await db.SaveChangesAsync(cancellationToken);
+        await audit.RecordAsync("unpin", AuditEntityType.Backup, id.ToString(), previous);
+        return BackupRestoreMapping.ToDto(backup);
+    }
+
+    public async Task<BackupDto?> RequestDeleteAsync(Guid id, bool force = false, CancellationToken cancellationToken = default)
+    {
+        var backup = await LoadAsync(id, cancellationToken);
+        if (backup is null)
+        {
+            return null;
+        }
+        if (backup.Status is BackupRunStatus.Queued or BackupRunStatus.Running)
+        {
+            throw new ArgumentException("Queued or running backups cannot be deleted.");
+        }
+        if (backup.IsPinned && !force)
+        {
+            throw new ArgumentException("Pinned backups require force delete.");
+        }
+        if (IsDeletedOrDeleteRequested(backup.Status))
+        {
+            return BackupRestoreMapping.ToDto(backup);
+        }
+
+        backup.Status = BackupRunStatus.ManualDeleteRequested;
+        backup.DeletionReason = force && backup.IsPinned ? "manual-force" : "manual";
+        backup.DeletionRequestedAt ??= DateTimeOffset.UtcNow;
+        backup.DeletionError = null;
+        await db.SaveChangesAsync(cancellationToken);
+        await audit.RecordAsync("delete-requested", AuditEntityType.Backup, id.ToString(), new { reason = backup.DeletionReason, force, backup.IsPinned });
+        return BackupRestoreMapping.ToDto(backup);
+    }
+
     private Task<BackupEntity?> LoadAsync(Guid id, CancellationToken cancellationToken) =>
         db.Backups
             .Include(x => x.Tables).ThenInclude(x => x.Shards)
             .FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+
+    private static bool IsDeletedOrDeleteRequested(BackupRunStatus status) =>
+        status is BackupRunStatus.ManualDeleteRequested or
+            BackupRunStatus.ManualDeleted or
+            BackupRunStatus.FailedBackupDeleteRequested or
+            BackupRunStatus.FailedBackupDeletedByGarbageCollector or
+            BackupRunStatus.BackupExpiredDeleteStarted or
+            BackupRunStatus.BackupExpiredDeleted;
 
     private static JsonSerializerOptions CreateJsonOptions()
     {

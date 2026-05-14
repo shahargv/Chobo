@@ -408,6 +408,134 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Manual_delete_is_requested_without_deleting_storage_inline()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Succeeded, "backup-op", true)
+        ]);
+        backup.Status = BackupRunStatus.Succeeded;
+        backup.CompletedAt = DateTimeOffset.UtcNow.AddMinutes(-10);
+        await fixture.Db.SaveChangesAsync();
+
+        var actor = fixture.Services.GetRequiredService<ActorContext>();
+        actor.ActorName = "operator";
+        actor.UserId = Guid.NewGuid();
+        var dto = await fixture.Services.GetRequiredService<BackupApplicationService>().RequestDeleteAsync(backup.Id);
+
+        Assert.NotNull(dto);
+        Assert.Equal(BackupRunStatus.ManualDeleteRequested, dto!.Status);
+        Assert.Equal(0, fixture.StorageDeletion.DeletedBackupIds.Count);
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "delete-requested" && x.EntityId == backup.Id.ToString()));
+    }
+
+    [Fact]
+    public async Task Background_cleanup_deletes_manual_request_and_keeps_records()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Succeeded, "backup-op", true)
+        ]);
+        backup.Status = BackupRunStatus.ManualDeleteRequested;
+        backup.DeletionRequestedAt = DateTimeOffset.UtcNow.AddMinutes(-1);
+        await fixture.Db.SaveChangesAsync();
+
+        await fixture.Services.GetRequiredService<RetentionManagementBackgroundService>().RunOnceAsync();
+
+        fixture.Db.ChangeTracker.Clear();
+        var completed = await fixture.Db.Backups.SingleAsync(x => x.Id == backup.Id);
+        Assert.Equal(BackupRunStatus.ManualDeleted, completed.Status);
+        Assert.Contains(backup.Id, fixture.StorageDeletion.DeletedBackupIds);
+        Assert.Equal(1, await fixture.Db.Backups.CountAsync(x => x.Id == backup.Id));
+        Assert.True(await fixture.Db.BackupTables.AnyAsync(x => x.BackupId == backup.Id));
+        Assert.True(await fixture.Db.BackupTableShards.AnyAsync(x => x.BackupTable!.BackupId == backup.Id));
+    }
+
+    [Fact]
+    public async Task Retention_skips_pinned_backups_and_preserves_minimum_successful_backups()
+    {
+        var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now));
+        var policy = await fixture.SeedPolicyAsync(retentionMinutes: 60, minBackupsToKeep: 1);
+        var oldest = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, now.AddHours(-5));
+        var pinned = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, now.AddHours(-4), isPinned: true);
+        var keptNewest = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, now.AddHours(-3));
+        var failed = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Failed, now.AddHours(-6));
+
+        await fixture.Services.GetRequiredService<RetentionManagementBackgroundService>().RunOnceAsync();
+
+        fixture.Db.ChangeTracker.Clear();
+        Assert.Equal(BackupRunStatus.BackupExpiredDeleted, (await fixture.Db.Backups.SingleAsync(x => x.Id == oldest.Id)).Status);
+        Assert.Equal(BackupRunStatus.Succeeded, (await fixture.Db.Backups.SingleAsync(x => x.Id == pinned.Id)).Status);
+        Assert.Equal(BackupRunStatus.Succeeded, (await fixture.Db.Backups.SingleAsync(x => x.Id == keptNewest.Id)).Status);
+        Assert.Equal(BackupRunStatus.Failed, (await fixture.Db.Backups.SingleAsync(x => x.Id == failed.Id)).Status);
+    }
+
+    [Fact]
+    public async Task Cleanup_retries_after_failed_attempt_and_completes_after_restart()
+    {
+        var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now));
+        var policy = await fixture.SeedPolicyAsync(retentionMinutes: 60, minBackupsToKeep: 0);
+        var backup = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, now.AddHours(-5));
+        fixture.StorageDeletion.FailNextDelete = true;
+
+        await fixture.Services.GetRequiredService<RetentionManagementBackgroundService>().RunOnceAsync();
+
+        fixture.Db.ChangeTracker.Clear();
+        var afterFailure = await fixture.Db.Backups.SingleAsync(x => x.Id == backup.Id);
+        Assert.Equal(BackupRunStatus.BackupExpiredDeleteStarted, afterFailure.Status);
+        Assert.NotNull(afterFailure.DeletionError);
+        Assert.Equal(1, afterFailure.DeletionAttemptCount);
+
+        await fixture.Services.GetRequiredService<RetentionManagementBackgroundService>().RunOnceAsync();
+
+        fixture.Db.ChangeTracker.Clear();
+        var completed = await fixture.Db.Backups.SingleAsync(x => x.Id == backup.Id);
+        Assert.Equal(BackupRunStatus.BackupExpiredDeleted, completed.Status);
+        Assert.Null(completed.DeletionError);
+        Assert.Equal(2, completed.DeletionAttemptCount);
+    }
+
+    [Fact]
+    public async Task Garbage_collector_cleans_failed_backups_only_when_policy_opts_in()
+    {
+        var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now));
+        var cleanupPolicy = await fixture.SeedPolicyAsync(failedMode: FailedBackupRetentionMode.DeleteByGarbageCollectorAfterFailure);
+        var keepPolicy = await fixture.SeedPolicyAsync(name: "keep-failures");
+        var failed = await fixture.SeedPolicyBackupAsync(cleanupPolicy.Id, BackupRunStatus.Failed, now.AddMinutes(-30));
+        var partial = await fixture.SeedPolicyBackupAsync(cleanupPolicy.Id, BackupRunStatus.PartiallySucceeded, now.AddMinutes(-20));
+        var kept = await fixture.SeedPolicyBackupAsync(keepPolicy.Id, BackupRunStatus.Failed, now.AddMinutes(-10));
+
+        await fixture.Services.GetRequiredService<BackupsGarbageCollectorBackgroundService>().RunOnceAsync();
+
+        fixture.Db.ChangeTracker.Clear();
+        Assert.Equal(BackupRunStatus.FailedBackupDeletedByGarbageCollector, (await fixture.Db.Backups.SingleAsync(x => x.Id == failed.Id)).Status);
+        Assert.Equal(BackupRunStatus.FailedBackupDeletedByGarbageCollector, (await fixture.Db.Backups.SingleAsync(x => x.Id == partial.Id)).Status);
+        Assert.Equal(BackupRunStatus.Failed, (await fixture.Db.Backups.SingleAsync(x => x.Id == kept.Id)).Status);
+    }
+
+    [Fact]
+    public async Task Restore_rejects_deleted_or_delete_pending_backups()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        foreach (var status in new[]
+                 {
+                     BackupRunStatus.ManualDeleteRequested,
+                     BackupRunStatus.ManualDeleted,
+                     BackupRunStatus.FailedBackupDeleteRequested,
+                     BackupRunStatus.FailedBackupDeletedByGarbageCollector,
+                     BackupRunStatus.BackupExpiredDeleteStarted,
+                     BackupRunStatus.BackupExpiredDeleted
+                 })
+        {
+            var backup = await fixture.SeedPolicyBackupAsync(null, status, DateTimeOffset.UtcNow.AddMinutes(-1));
+            await Assert.ThrowsAsync<ArgumentException>(() => fixture.Services.GetRequiredService<RestoreApplicationService>().InitiateAsync(new InitiateRestoreRequest(backup.Id, fixture.TargetClusterId, null, null, null, null, false, false)));
+        }
+    }
+
+    [Fact]
     public async Task Schema_definitions_are_reused_by_hash()
     {
         await using var fixture = await TestFixture.CreateAsync();
@@ -738,22 +866,42 @@ public sealed class BackupRestoreExecutionTests
         public void ReleaseBlockedStatus() => _releaseStatus.TrySetResult();
     }
 
+    private sealed class FakeBackupStorageDeletionService : IBackupStorageDeletionService
+    {
+        public List<Guid> DeletedBackupIds { get; } = [];
+        public bool FailNextDelete { get; set; }
+
+        public Task DeleteBackupDataAsync(BackupEntity backup, CancellationToken cancellationToken = default)
+        {
+            if (FailNextDelete)
+            {
+                FailNextDelete = false;
+                throw new InvalidOperationException("simulated cleanup crash");
+            }
+
+            DeletedBackupIds.Add(backup.Id);
+            return Task.CompletedTask;
+        }
+    }
+
     private sealed class TestFixture : IAsyncDisposable
     {
         private readonly SqliteConnection _connection;
         public IServiceProvider Services { get; }
         public ChoboDbContext Db { get; }
         public FakeClickHouseAdapter ClickHouse { get; }
+        public FakeBackupStorageDeletionService StorageDeletion { get; }
         public Guid SourceClusterId { get; }
         public Guid TargetClusterId { get; }
         public Guid TargetId { get; }
 
-        private TestFixture(SqliteConnection connection, IServiceProvider services, ChoboDbContext db, FakeClickHouseAdapter clickHouse, Guid sourceClusterId, Guid targetClusterId, Guid targetId)
+        private TestFixture(SqliteConnection connection, IServiceProvider services, ChoboDbContext db, FakeClickHouseAdapter clickHouse, FakeBackupStorageDeletionService storageDeletion, Guid sourceClusterId, Guid targetClusterId, Guid targetId)
         {
             _connection = connection;
             Services = services;
             Db = db;
             ClickHouse = clickHouse;
+            StorageDeletion = storageDeletion;
             SourceClusterId = sourceClusterId;
             TargetClusterId = targetClusterId;
             TargetId = targetId;
@@ -764,24 +912,33 @@ public sealed class BackupRestoreExecutionTests
             var connection = new SqliteConnection("DataSource=:memory:");
             await connection.OpenAsync();
             var fake = new FakeClickHouseAdapter();
+            var storageDeletion = new FakeBackupStorageDeletionService();
             var services = new ServiceCollection()
                 .AddSingleton(connection)
                 .AddDbContext<ChoboDbContext>((provider, builder) => builder.UseSqlite(provider.GetRequiredService<SqliteConnection>()))
                 .AddSingleton(fake)
                 .AddScoped<IClickHouseAdapter>(provider => provider.GetRequiredService<FakeClickHouseAdapter>())
+                .AddSingleton(storageDeletion)
+                .AddScoped<IBackupStorageDeletionService>(provider => provider.GetRequiredService<FakeBackupStorageDeletionService>())
                 .AddScoped<PolicySelectorEvaluationService>()
                 .AddScoped<ActorContext>()
                 .AddScoped<AuditService>()
                 .AddSingleton(Options.Create(new ChoboTestHooksOptions()))
                 .AddSingleton<TestHookCoordinator>()
                 .AddScoped<DashboardApplicationService>()
+                .AddScoped<BackupApplicationService>()
                 .AddScoped<RestoreApplicationService>()
                 .AddScoped<BackupRunnerService>()
                 .AddScoped<RestoreRunnerService>()
+                .AddScoped<BackupCleanupService>()
                 .AddSingleton<BackupRestoreQueues>()
                 .AddSingleton(Options.Create(options ?? new ChoboBackupRestoreOptions { MaxDop = 3, PollInterval = TimeSpan.FromMilliseconds(1), SchedulerInterval = TimeSpan.FromSeconds(1) }))
+                .AddSingleton(Options.Create(new RetentionManagementOptions { Interval = TimeSpan.FromSeconds(1), MaxDop = 2 }))
+                .AddSingleton(Options.Create(new BackupsGarbageCollectorOptions { Interval = TimeSpan.FromSeconds(1), MaxDop = 2 }))
                 .AddSingleton(timeProvider ?? TimeProvider.System)
                 .AddSingleton<BackupSchedulerDispatcherBackgroundService>()
+                .AddSingleton<RetentionManagementBackgroundService>()
+                .AddSingleton<BackupsGarbageCollectorBackgroundService>()
                 .AddSingleton<Serilog.ILogger>(Serilog.Core.Logger.None)
                 .BuildServiceProvider();
 
@@ -817,7 +974,7 @@ public sealed class BackupRestoreExecutionTests
             });
             await db.SaveChangesAsync();
 
-            return new TestFixture(connection, services, db, fake, sourceClusterId, targetClusterId, targetId);
+            return new TestFixture(connection, services, db, fake, storageDeletion, sourceClusterId, targetClusterId, targetId);
         }
 
         public async Task<Guid> CreateManualBackupAsync(PolicySelector? selector = null, string actorName = "system", Guid? actorUserId = null)
@@ -948,13 +1105,7 @@ public sealed class BackupRestoreExecutionTests
 
         public async Task<BackupScheduleEntity> SeedPolicyAndScheduleAsync()
         {
-            var policy = new BackupPolicyEntity
-            {
-                Name = "hourly",
-                SourceClusterId = SourceClusterId,
-                TargetId = TargetId,
-                SelectorJson = """{"version":1,"rules":[{"action":"Include","database":{"kind":"All","value":"*"},"table":{"kind":"All","value":"*"}}]}"""
-            };
+            var policy = NewPolicy("hourly");
             var schedule = new BackupScheduleEntity
             {
                 Name = "hourly",
@@ -969,6 +1120,45 @@ public sealed class BackupRestoreExecutionTests
             await Db.SaveChangesAsync();
             return schedule;
         }
+
+        public async Task<BackupPolicyEntity> SeedPolicyAsync(
+            string name = "policy",
+            int? retentionMinutes = null,
+            int minBackupsToKeep = 0,
+            FailedBackupRetentionMode failedMode = FailedBackupRetentionMode.KeepAndExcludeFromMinBackupsToKeep)
+        {
+            var policy = NewPolicy(name);
+            policy.RetentionMinutes = retentionMinutes;
+            policy.MinBackupsToKeep = minBackupsToKeep;
+            policy.FailedBackupRetentionMode = failedMode;
+            Db.BackupPolicies.Add(policy);
+            await Db.SaveChangesAsync();
+            return policy;
+        }
+
+        public async Task<BackupEntity> SeedPolicyBackupAsync(Guid? policyId, BackupRunStatus status, DateTimeOffset completedAt, bool isPinned = false)
+        {
+            var backup = await SeedBackupWithTablesAsync([
+                new SeedBackupTable("sales", $"orders_{Guid.NewGuid():N}", BackupTableStatus.Succeeded, "backup-op", true)
+            ]);
+            backup.PolicyId = policyId;
+            backup.Status = status;
+            backup.CompletedAt = completedAt;
+            backup.CreatedAt = completedAt.AddMinutes(-1);
+            backup.IsPinned = isPinned;
+            backup.PinnedAt = isPinned ? completedAt.AddMinutes(1) : null;
+            await Db.SaveChangesAsync();
+            return backup;
+        }
+
+        private BackupPolicyEntity NewPolicy(string name) =>
+            new()
+            {
+                Name = name,
+                SourceClusterId = SourceClusterId,
+                TargetId = TargetId,
+                SelectorJson = """{"version":1,"rules":[{"action":"Include","database":{"kind":"All","value":"*"},"table":{"kind":"All","value":"*"}}]}"""
+            };
 
         public async Task RunBackupAsync(Guid id)
         {
@@ -988,7 +1178,6 @@ public sealed class BackupRestoreExecutionTests
             {
                 disposable.Dispose();
             }
-            await _connection.DisposeAsync();
         }
     }
 
@@ -1011,6 +1200,16 @@ public sealed class BackupRestoreExecutionTests
                 backup.CompletedAt,
                 backup.Error,
                 backup.FailureReason,
+                backup.IsPinned,
+                backup.PinnedAt,
+                backup.PinnedByUserId,
+                backup.PinnedByName,
+                backup.DeletionReason,
+                backup.DeletionRequestedAt,
+                backup.DeletionStartedAt,
+                backup.DeletedAt,
+                backup.DeletionError,
+                backup.DeletionAttemptCount,
                 backup.Tables.Select(table => new BackupTableDto(
                     table.Id,
                     table.BackupId,
