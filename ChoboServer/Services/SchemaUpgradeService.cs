@@ -65,7 +65,7 @@ public static class SchemaUpgradeService
             }
         }
 
-        schema.ProductVersion = ChoboApi.ServerVersion;
+        schema.ProductVersion = ChoboApi.ProductVersion;
         await db.SaveChangesAsync();
     }
 

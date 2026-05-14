@@ -13,6 +13,6 @@ public sealed class ServerController(ChoboDbContext db) : ControllerBase
     public async Task<ServerVersionDto> Version()
     {
         var schema = await db.SchemaStates.SingleAsync();
-        return new ServerVersionDto(ChoboApi.ProductName, ChoboApi.ServerVersion, ChoboApi.ApiVersion, ChoboApi.SchemaVersion, schema.SchemaVersion);
+        return new ServerVersionDto(ChoboApi.ProductName, ChoboApi.ProductVersion, ChoboApi.ApiVersion, ChoboApi.SchemaVersion, schema.SchemaVersion);
     }
 }

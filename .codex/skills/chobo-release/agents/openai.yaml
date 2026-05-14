@@ -1,0 +1,4 @@
+interface:
+  display_name: "Chobo Release"
+  short_description: "Release Chobo through CI/CD"
+  default_prompt: "Use $chobo-release to prepare and publish a new Chobo version."

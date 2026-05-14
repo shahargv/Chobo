@@ -44,6 +44,8 @@ ChoboCli clusters remove --id <cluster-id>
 
 Credentials are write-only and are never printed by `clusters list`.
 
+ChoboServer uses the official `ClickHouse.Driver` ADO.NET package over HTTP(S). For compatibility, configured native-default ports are accepted: `9000` maps to HTTP `8123`, and TLS `9440` maps to HTTPS `8443`. Pass a custom HTTP(S) port directly when your ClickHouse deployment uses one.
+
 For `Cluster` mode, `--clickhouse-cluster-name` should match the ClickHouse `system.clusters.cluster` value that describes the shards and replicas. Chobo uses that topology during backup/restore to choose one representative replica per shard. If the option is omitted, Chobo can auto-discover the name only when `system.clusters` contains exactly one cluster definition.
 
 ## Targets
