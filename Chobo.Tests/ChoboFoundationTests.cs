@@ -5,6 +5,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Chobo.Contracts;
+using ChoboServer;
 using ChoboServer.BackgroundServices;
 using ChoboServer.Data;
 using ChoboServer.Options;
@@ -24,6 +25,113 @@ public sealed class ChoboFoundationTests
 {
     private const string Token = "static-test-token";
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
+
+    [Fact]
+    public void Chobo_configuration_supports_environment_variables_for_appsettings_values()
+    {
+        using var env = new EnvironmentVariableScope(new Dictionary<string, string?>
+        {
+            ["CHOBO_DATA_DIRECTORY"] = "env-data",
+            ["Chobo__EncryptionKeyBase64"] = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+            ["CHOBO_INIT_ADMIN_USER"] = "env-admin",
+            ["Chobo__Init__AccessToken"] = "env-token",
+            ["CHOBO_DATA_RETENTION_INTERVAL"] = "00:10:00",
+            ["Chobo__DataRetention__LogsBefore"] = "2026-05-14T10:00:00+00:00",
+            ["CHOBO_DATA_RETENTION_AUDITS_BEFORE"] = "2026-05-14T11:00:00+00:00",
+            ["Chobo__BackupRestore__MaxDop"] = "7",
+            ["CHOBO_BACKUP_RESTORE_QUEUE_CAPACITY"] = "33",
+            ["CHOBO_BACKUP_RESTORE_SCHEDULER_INTERVAL"] = "00:02:00",
+            ["Chobo__BackupRestore__SchedulerMissedRunGracePeriod"] = "00:07:00",
+            ["CHOBO_BACKUP_RESTORE_POLL_INTERVAL"] = "00:00:03",
+            ["CHOBO_TEST_HOOKS_ENABLED"] = "true",
+            ["AllowedHosts"] = "env-host",
+            ["Serilog__MinimumLevel__Default"] = "Debug"
+        });
+
+        var builder = new ConfigurationBuilder();
+        ChoboConfiguration.AddChoboConfigurationSources(builder, [], addStandardEnvironmentAndCommandLine: true);
+        var configuration = builder.Build();
+
+        var storage = configuration.GetSection("Chobo").Get<ChoboStorageOptions>()!;
+        var security = configuration.GetSection("Chobo").Get<ChoboSecurityOptions>()!;
+        var init = configuration.GetSection("Chobo:Init").Get<ChoboInitOptions>()!;
+        var retention = configuration.GetSection("Chobo:DataRetention").Get<ChoboDataRetentionOptions>()!;
+        var backupRestore = configuration.GetSection("Chobo:BackupRestore").Get<ChoboBackupRestoreOptions>()!;
+        var testHooks = configuration.GetSection("Chobo:TestHooks").Get<ChoboTestHooksOptions>()!;
+
+        Assert.Equal("env-data", storage.DataDirectory);
+        Assert.Equal("MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=", security.EncryptionKeyBase64);
+        Assert.Equal("env-admin", init.AdminUser);
+        Assert.Equal("env-token", init.AccessToken);
+        Assert.Equal(TimeSpan.FromMinutes(10), retention.Interval);
+        Assert.Equal(DateTimeOffset.Parse("2026-05-14T10:00:00+00:00"), retention.LogsBefore);
+        Assert.Equal(DateTimeOffset.Parse("2026-05-14T11:00:00+00:00"), retention.AuditsBefore);
+        Assert.Equal(7, backupRestore.MaxDop);
+        Assert.Equal(33, backupRestore.QueueCapacity);
+        Assert.Equal(TimeSpan.FromMinutes(2), backupRestore.SchedulerInterval);
+        Assert.Equal(TimeSpan.FromMinutes(7), backupRestore.SchedulerMissedRunGracePeriod);
+        Assert.Equal(TimeSpan.FromSeconds(3), backupRestore.PollInterval);
+        Assert.True(testHooks.Enabled);
+        Assert.Equal("env-host", configuration["AllowedHosts"]);
+        Assert.Equal("Debug", configuration["Serilog:MinimumLevel:Default"]);
+    }
+
+    [Fact]
+    public void Chobo_configuration_loads_extra_appsettings_path_from_environment()
+    {
+        var dataDir = NewTestDataDirectory();
+        var appSettingsPath = Path.Combine(dataDir, "custom-appsettings.json");
+        Directory.CreateDirectory(dataDir);
+        File.WriteAllText(appSettingsPath, """
+        {
+          "AllowedHosts": "json-host",
+          "Chobo": {
+            "DataDirectory": "json-data",
+            "BackupRestore": {
+              "MaxDop": 11
+            }
+          }
+        }
+        """);
+
+        using var env = new EnvironmentVariableScope(new Dictionary<string, string?>
+        {
+            [ChoboConfiguration.AppSettingsPathEnvironmentVariable] = appSettingsPath,
+            ["CHOBO_BACKUP_RESTORE_MAX_DOP"] = "12"
+        });
+
+        var builder = new ConfigurationBuilder();
+        ChoboConfiguration.AddChoboConfigurationSources(builder, [], addStandardEnvironmentAndCommandLine: true);
+        var configuration = builder.Build();
+        var storage = configuration.GetSection("Chobo").Get<ChoboStorageOptions>()!;
+        var backupRestore = configuration.GetSection("Chobo:BackupRestore").Get<ChoboBackupRestoreOptions>()!;
+
+        Assert.Equal("json-host", configuration["AllowedHosts"]);
+        Assert.Equal("json-data", storage.DataDirectory);
+        Assert.Equal(12, backupRestore.MaxDop);
+    }
+
+    [Fact]
+    public async Task Local_init_uses_environment_variables_for_first_time_initialization()
+    {
+        var dataDir = NewTestDataDirectory();
+        using var env = new EnvironmentVariableScope(new Dictionary<string, string?>
+        {
+            ["CHOBO_DATA_DIRECTORY"] = dataDir,
+            ["CHOBO_INIT_ADMIN_USER"] = "env-admin",
+            ["CHOBO_INIT_ACCESS_TOKEN"] = Token
+        });
+
+        await LocalCommands.InitializeAsync([]);
+
+        var options = new DbContextOptionsBuilder<ChoboDbContext>()
+            .UseSqlite($"Data Source={Path.Combine(dataDir, "chobo.db")}")
+            .Options;
+        await using var db = new ChoboDbContext(options);
+        Assert.True(await db.Users.AnyAsync(x => x.UserName == "env-admin"));
+        Assert.True(await db.AccessTokens.AnyAsync());
+        Assert.True(await db.AuditEntries.AnyAsync(x => x.Action == "initialize" && x.ActorName == "system"));
+    }
 
     [Fact]
     public async Task Startup_creates_sqlite_schema_and_initial_user_when_database_file_does_not_exist()
@@ -466,5 +574,27 @@ public sealed class ChoboFoundationTests
         }
 
         throw new InvalidOperationException($"Column {tableName}.{columnName} was not found.");
+    }
+
+    private sealed class EnvironmentVariableScope : IDisposable
+    {
+        private readonly Dictionary<string, string?> _previous = [];
+
+        public EnvironmentVariableScope(IReadOnlyDictionary<string, string?> values)
+        {
+            foreach (var (name, value) in values)
+            {
+                _previous[name] = Environment.GetEnvironmentVariable(name);
+                Environment.SetEnvironmentVariable(name, value);
+            }
+        }
+
+        public void Dispose()
+        {
+            foreach (var (name, value) in _previous)
+            {
+                Environment.SetEnvironmentVariable(name, value);
+            }
+        }
     }
 }
