@@ -425,7 +425,7 @@ public sealed class BackupRestoreExecutionTests
 
         Assert.NotNull(dto);
         Assert.Equal(BackupRunStatus.ManualDeleteRequested, dto!.Status);
-        Assert.Equal(0, fixture.StorageDeletion.DeletedBackupIds.Count);
+        Assert.Empty(fixture.StorageDeletion.DeletedBackupIds);
         Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "delete-requested" && x.EntityId == backup.Id.ToString()));
     }
 
