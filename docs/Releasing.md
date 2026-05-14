@@ -32,11 +32,11 @@ Docker images are published to `docker.io/shahargv/chobo`.
 
 ## Release By Tag
 
-1. Merge the release-ready commit to `main`.
+1. Merge the release-ready commit to the default branch. This repository currently uses `master`.
 2. Create and push a semantic version tag:
 
    ```powershell
-   git checkout main
+   git checkout master
    git pull
    git tag v1.2.3
    git push origin v1.2.3

@@ -72,7 +72,7 @@ Optionally verify version stamping by inspecting `/api/v1/server/version` in a l
 Prefer tag release for official releases:
 
 ```powershell
-git checkout main
+git checkout master
 git pull
 git tag v<version>
 git push origin v<version>
