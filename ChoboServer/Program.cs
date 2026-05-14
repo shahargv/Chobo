@@ -13,7 +13,7 @@ if (args.Length > 0 && string.Equals(args[0], "init", StringComparison.OrdinalIg
 }
 
 var builder = WebApplication.CreateBuilder(args);
-AddChoboEnvironmentAliases(builder.Configuration);
+ChoboConfiguration.AddChoboConfigurationSources(builder.Configuration, args);
 var choboDataDirectory = GetChoboDataDirectory(builder.Configuration);
 
 await EnsureDatabaseSchemaBeforeLoggingAsync(builder.Configuration);
@@ -59,35 +59,12 @@ static async Task EnsureDatabaseSchemaBeforeLoggingAsync(IConfiguration configur
     await DatabasePerformanceMaintenance.EnsureAsync(db);
 }
 
-static void AddChoboEnvironmentAliases(IConfigurationBuilder configuration)
-{
-    var values = new Dictionary<string, string?>();
-    AddAlias(values, "CHOBO_DATA_DIRECTORY", "Chobo:DataDirectory");
-    AddAlias(values, "CHOBO_ENCRYPTION_KEY_BASE64", "Chobo:EncryptionKeyBase64");
-    AddAlias(values, "CHOBO_INIT_ADMIN_USER", "Chobo:Init:AdminUser");
-    AddAlias(values, "CHOBO_INIT_ACCESS_TOKEN", "Chobo:Init:AccessToken");
-    AddAlias(values, "CHOBO_TEST_HOOKS_ENABLED", "Chobo:TestHooks:Enabled");
-    if (values.Count > 0)
-    {
-        configuration.AddInMemoryCollection(values);
-    }
-}
-
 static string GetChoboDataDirectory(IConfiguration configuration)
 {
     var storage = configuration.GetSection("Chobo").Get<ChoboStorageOptions>() ?? new ChoboStorageOptions();
     var dataDirectory = ChoboPaths.GetDataDirectory(storage.DataDirectory);
     Directory.CreateDirectory(dataDirectory);
     return dataDirectory;
-}
-
-static void AddAlias(IDictionary<string, string?> values, string environmentName, string configurationKey)
-{
-    var value = Environment.GetEnvironmentVariable(environmentName);
-    if (!string.IsNullOrWhiteSpace(value))
-    {
-        values[configurationKey] = value;
-    }
 }
 
 public partial class Program;
