@@ -20,4 +20,5 @@ public sealed class RestoreTableEntity
     public DateTimeOffset? StartedAt { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }
     public string? Error { get; set; }
+    public List<RestoreTableShardEntity> Shards { get; set; } = [];
 }

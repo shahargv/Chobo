@@ -144,7 +144,7 @@ dotnet run --project .\ChoboCli\ChoboCli.csproj -- clusters add --name debug-sin
 Add the 3-shard, 2-replica cluster:
 
 ```powershell
-dotnet run --project .\ChoboCli\ChoboCli.csproj -- clusters add --name debug-cluster --mode Cluster --node localhost:18111,localhost:18112,localhost:18121,localhost:18122,localhost:18131,localhost:18132 --username default --backup-restore-maxdop 3
+dotnet run --project .\ChoboCli\ChoboCli.csproj -- clusters add --name debug-cluster --mode Cluster --node localhost:18111,localhost:18112,localhost:18121,localhost:18122,localhost:18131,localhost:18132 --username default --backup-restore-maxdop 3 --clickhouse-cluster-name chobo_debug_cluster
 ```
 
 Add MinIO as the backup target:
@@ -154,6 +154,78 @@ dotnet run --project .\ChoboCli\ChoboCli.csproj -- targets add-s3 --name debug-m
 ```
 
 Use `http://minio:9000` for the Chobo backup target because ClickHouse performs the backup and restore S3 calls from inside the Docker network. Use `http://localhost:9000` only for host-side tools that talk directly to MinIO.
+
+## Debug Sharded Backup And Restore
+
+Chobo backs up clustered MergeTree tables one shard at a time. It queries `system.clusters`, chooses one representative replica per shard, and runs ClickHouse backup/restore commands manually on the selected nodes. It intentionally does not use ClickHouse `ON CLUSTER` for backup/restore, because Chobo needs per-shard status, retry, and audit records.
+
+Check the topology Chobo will use:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://localhost:18111/ -Body "SELECT cluster, shard_num, replica_num, host_name, port, errors_count FROM system.clusters WHERE cluster = 'chobo_debug_cluster' ORDER BY shard_num, replica_num"
+```
+
+Create a simple local table on every shard and insert different data on two shards:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://localhost:18111/ -Body @"
+DROP DATABASE IF EXISTS debug_backup ON CLUSTER chobo_debug_cluster SYNC;
+CREATE DATABASE debug_backup ON CLUSTER chobo_debug_cluster ENGINE = Atomic;
+CREATE TABLE debug_backup.events_local ON CLUSTER chobo_debug_cluster
+(
+    id UInt64,
+    shard UInt8,
+    message String
+)
+ENGINE = MergeTree
+ORDER BY id;
+INSERT INTO debug_backup.events_local VALUES (1, 1, 'shard-one');
+"@
+
+Invoke-RestMethod -Method Post -Uri http://localhost:18121/ -Body "INSERT INTO debug_backup.events_local VALUES (2, 2, 'shard-two')"
+```
+
+Start and inspect a sharded backup:
+
+```powershell
+$cluster = dotnet run --project .\ChoboCli\ChoboCli.csproj -- clusters list | ConvertFrom-Json | Where-Object name -eq 'debug-cluster'
+$target = dotnet run --project .\ChoboCli\ChoboCli.csproj -- targets list | ConvertFrom-Json | Where-Object name -eq 'debug-minio'
+
+$selector = @{
+  version = 1
+  rules = @(@{
+    action = 'Include'
+    database = @{ kind = 'Exact'; value = 'debug_backup' }
+    table = @{ kind = 'Exact'; value = 'events_local' }
+  })
+} | ConvertTo-Json -Depth 10
+$selector | Set-Content .\debug-selector.json
+
+$backup = dotnet run --project .\ChoboCli\ChoboCli.csproj -- backup manual --cluster-id $cluster.id --target-id $target.id --selector-file .\debug-selector.json | ConvertFrom-Json
+dotnet run --project .\ChoboCli\ChoboCli.csproj -- backups wait --id $backup.id --timeout-seconds 300 --poll-seconds 2
+dotnet run --project .\ChoboCli\ChoboCli.csproj -- backups show --id $backup.id
+```
+
+The backup JSON should show one logical table with a `shards` array. Each shard row includes `sourceShardNumber`, selected host/port, S3 path, ClickHouse operation id/status, and any error.
+
+Restore layout examples:
+
+```powershell
+# Preserve layout when source and target shard counts match.
+dotnet run --project .\ChoboCli\ChoboCli.csproj -- restore initiate --backup-id $backup.id --target-cluster-id $cluster.id --database debug_backup --table events_local --target-database debug_restore --target-table events_local --layout preserve
+
+# Restore only one source shard to the standalone node.
+$single = dotnet run --project .\ChoboCli\ChoboCli.csproj -- clusters list | ConvertFrom-Json | Where-Object name -eq 'debug-single'
+dotnet run --project .\ChoboCli\ChoboCli.csproj -- restore initiate --backup-id $backup.id --target-cluster-id $single.id --database debug_backup --table events_local --target-database debug_single_restore --target-table shard_one_events --layout single-node --source-shard 1
+```
+
+When a restore partially succeeds, `restores show` reports `PartiallySucceeded` on the run and table, and each shard has its own status and error. Audit records to check:
+
+```powershell
+dotnet run --project .\ChoboCli\ChoboCli.csproj -- audit show --last 200
+```
+
+Look for `shard-failed`, `table-partially-succeeded`, and restore-level `partially-succeeded` entries. The dashboard and metrics also expose active shard counts and per-policy partial/failed backup totals.
 
 ## Useful Checks
 

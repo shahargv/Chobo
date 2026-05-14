@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "action": "Include",
+      "database": { "kind": "Exact", "value": "backup_failure_single" },
+      "table": { "kind": "Exact", "value": "orders" }
+    }
+  ]
+}

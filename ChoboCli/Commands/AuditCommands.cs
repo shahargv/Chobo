@@ -18,5 +18,5 @@ public sealed class AuditCommands : CliSubject
         CommandHelpers.WithClient(context, client => client.GetAsync("audit" + CommandHelpers.QueryString(context.Command.Options)));
 
     private static Task<object?> ClearAsync(CommandContext context) =>
-        CommandHelpers.WithClient(context, client => client.PostAsync("audit/clear", new ClearBeforeRequest(DateTimeOffset.Parse(context.Command.Options.Required("--before")))));
+        CommandHelpers.WithClient(context, client => client.PostAsync("audit/clear", new ClearAuditEntriesRequest(DateTimeOffset.Parse(context.Command.Options.Required("--before")))));
 }

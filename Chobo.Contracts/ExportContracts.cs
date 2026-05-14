@@ -15,7 +15,7 @@ public sealed record ExportPayload(
     IReadOnlyList<BackupPolicyExport> BackupPolicies,
     IReadOnlyList<BackupScheduleExport> BackupSchedules,
     IReadOnlyList<AuditEntryDto> Audits,
-    IReadOnlyList<LogEntryDto> Logs);
+    IReadOnlyList<ApplicationLogEntryDto> Logs);
 
 public sealed record UserExport(Guid Id, string UserName, bool IsActive, DateTimeOffset CreatedAt, DateTimeOffset? DeactivatedAt);
 

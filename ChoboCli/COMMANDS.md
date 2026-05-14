@@ -36,13 +36,15 @@ ChoboCli users remove-token --id <user-id> --token-id <token-id>
 
 ```powershell
 ChoboCli clusters list
-ChoboCli clusters add --name prod --mode Cluster --node ch1:9000,ch2:9000 --username default --password secret --backup-restore-maxdop 3
+ChoboCli clusters add --name prod --mode Cluster --node ch1:9000,ch2:9000 --username default --password secret --backup-restore-maxdop 3 --clickhouse-cluster-name prod_cluster
 ChoboCli clusters add --name local --mode SingleInstance --host localhost --port 9000
 ChoboCli clusters update --id <cluster-id> --name prod --mode Cluster --node ch1:9000,ch2:9000
 ChoboCli clusters remove --id <cluster-id>
 ```
 
 Credentials are write-only and are never printed by `clusters list`.
+
+For `Cluster` mode, `--clickhouse-cluster-name` should match the ClickHouse `system.clusters.cluster` value that describes the shards and replicas. Chobo uses that topology during backup/restore to choose one representative replica per shard. If the option is omitted, Chobo can auto-discover the name only when `system.clusters` contains exactly one cluster definition.
 
 ## Targets
 
@@ -149,9 +151,9 @@ ChoboCli dashboard show --next-hours 12
 ChoboCli metrics show
 ```
 
-The dashboard shows active backup runs, every schedule with last-run status and last successful completion time, and projected schedule runs for the next window. The default future window is 6 hours.
+The dashboard shows active backup runs, every schedule with last-run status and last successful completion time, and projected schedule runs for the next window. Active sharded backups include table and shard counts, including succeeded, failed, and running shard totals. The default future window is 6 hours.
 
-The same server surface also exposes flat general metrics at `/api/v1/metrics`, available through `ChoboCli metrics show`. The first metric group reports seconds since the last successful backup completed for each policy, for example `Policies.TimeSecondsSinceLastPolicyBackup.nightly`.
+The same server surface also exposes flat general metrics at `/api/v1/metrics`, available through `ChoboCli metrics show`. Metrics include seconds since the last successful backup completed for each policy, for example `Policies.TimeSecondsSinceLastPolicyBackup.nightly`, plus partial and failed backup counters per policy.
 
 ## Backups And Restores
 
@@ -164,12 +166,28 @@ ChoboCli backups wait --id <backup-id> --timeout-seconds 300 --poll-seconds 2
 
 ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-id> --target-table restored_orders
 ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-id> --append
+ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-id> --layout preserve
+ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-id> --layout redistribute
+ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-id> --layout single-node --source-shard 1
+ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-id> --layout preserve --target-shard 2
 ChoboCli restores list
 ChoboCli restores show --id <restore-id>
 ChoboCli restores wait --id <restore-id> --timeout-seconds 300 --poll-seconds 2
 ```
 
 Backup and restore commands return run records immediately. `wait` is a client-side polling helper.
+
+For MergeTree-family tables in `Cluster` mode, one logical backup table contains one shard task for each source shard. Chobo does not run ClickHouse `BACKUP ... ON CLUSTER`; it queries topology, picks one representative replica per shard, runs the shard operations manually, and records the selected source node in the backup metadata. `backups show` and `backups wait` include per-table `shards` arrays with source shard number, selected node, S3 path, status, operation id, and error details.
+
+Restore layout controls:
+
+- `preserve`: default. Source shard N restores to target shard N when source and target shard counts match. If counts differ, the request fails with a clear message unless another layout is chosen.
+- `redistribute`: maps selected source shards across the target topology in target shard order. This is the explicit choice for restoring from one shard count to another.
+- `single-node`: restores selected source shards through the first target node, useful for sharded-to-standalone restore or single-shard extraction.
+- `--source-shard <n>` limits restore to one backed-up source shard.
+- `--target-shard <n>` forces selected source shards to one target shard.
+
+Run and table statuses can be `PartiallySucceeded` when at least one required shard succeeds and at least one required shard fails. In that case, inspect `restores show --id <restore-id>` for shard-level status and error details, then inspect `audit show` for `shard-failed`, `table-partially-succeeded`, and restore-level `partially-succeeded` entries.
 
 ## Logs
 

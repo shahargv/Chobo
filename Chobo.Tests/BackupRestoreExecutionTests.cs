@@ -56,7 +56,7 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
-    public async Task Replicated_merge_tree_backup_is_rejected_with_clear_failure()
+    public async Task Replicated_merge_tree_backup_is_supported()
     {
         await using var fixture = await TestFixture.CreateAsync();
         fixture.ClickHouse.Inventory.Add(Table("sales", "replicated_orders", "ReplicatedMergeTree"));
@@ -66,8 +66,13 @@ public sealed class BackupRestoreExecutionTests
 
         fixture.Db.ChangeTracker.Clear();
         var backup = await fixture.Db.Backups.SingleAsync(x => x.Id == backupId);
-        Assert.Equal(BackupRunStatus.Failed, backup.Status);
-        Assert.Contains("Replicated MergeTree", backup.Error);
+        Assert.Equal(BackupRunStatus.Succeeded, backup.Status);
+        var table = await fixture.Db.BackupTables.Include(x => x.Shards).SingleAsync(x => x.BackupId == backupId);
+        Assert.True(table.DataBackedUp);
+        Assert.Equal(BackupTableStatus.Succeeded, table.Status);
+        var shard = Assert.Single(table.Shards);
+        Assert.Equal(BackupTableStatus.Succeeded, shard.Status);
+        Assert.Contains("replicated_orders", fixture.ClickHouse.BackupStartTables);
     }
 
     [Fact]
@@ -118,7 +123,7 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
-    public async Task Backup_resume_restarts_uncertain_missing_clickhouse_operation()
+    public async Task Backup_resume_fails_uncertain_missing_clickhouse_operation()
     {
         await using var fixture = await TestFixture.CreateAsync();
         var backup = await fixture.SeedBackupWithTablesAsync([
@@ -129,10 +134,13 @@ public sealed class BackupRestoreExecutionTests
 
         fixture.Db.ChangeTracker.Clear();
         var table = await fixture.Db.BackupTables.SingleAsync();
-        Assert.Equal(BackupTableStatus.Succeeded, table.Status);
-        Assert.NotEqual("missing-op", table.ClickHouseOperationId);
-        Assert.Contains("orders", fixture.ClickHouse.BackupStartTables);
-        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "table-restarted" && x.EntityType == "backup-table"));
+        var backupAfterRun = await fixture.Db.Backups.SingleAsync(x => x.Id == backup.Id);
+        Assert.Equal(BackupRunStatus.Failed, backupAfterRun.Status);
+        Assert.Equal(BackupTableStatus.Failed, table.Status);
+        Assert.Equal("missing-op", table.ClickHouseOperationId);
+        Assert.DoesNotContain("orders", fixture.ClickHouse.BackupStartTables);
+        Assert.Contains("missing from system.backups", backupAfterRun.FailureReason);
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "shard-failed" && x.EntityType == "backup-table-shard"));
     }
 
     [Fact]
@@ -156,6 +164,27 @@ public sealed class BackupRestoreExecutionTests
         Assert.All(tables, table => Assert.Equal(RestoreTableStatus.Succeeded, table.Status));
         Assert.DoesNotContain("orders", fixture.ClickHouse.RestoreStartTables);
         Assert.Contains("items", fixture.ClickHouse.RestoreStartTables);
+    }
+
+    [Fact]
+    public async Task Restore_list_includes_shard_details()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Succeeded, "backup-op", true)
+        ]);
+        var restore = await fixture.SeedRestoreAsync(backup, [
+            new SeedRestoreTable("sales", "orders", RestoreTableStatus.Succeeded, "restore-op")
+        ]);
+
+        using var scope = fixture.Services.CreateScope();
+        var restores = await scope.ServiceProvider.GetRequiredService<RestoreApplicationService>().ListAsync();
+
+        var dto = Assert.Single(restores, x => x.Id == restore.Id);
+        var table = Assert.Single(dto.Tables);
+        var shard = Assert.Single(table.Shards);
+        Assert.Equal(1, shard.SourceShardNumber);
+        Assert.Equal(RestoreTableStatus.Succeeded, shard.Status);
     }
 
     [Fact]
@@ -371,10 +400,11 @@ public sealed class BackupRestoreExecutionTests
         Assert.NotEmpty(dashboard.FutureSchedules);
         Assert.All(dashboard.FutureSchedules, x => Assert.Equal(schedule.Id, x.ScheduleId));
 
-        var freshness = Assert.Single(metrics);
-        Assert.Equal("Policies.TimeSecondsSinceLastPolicyBackup.hourly", freshness.Key);
-        Assert.NotNull(freshness.Value);
-        Assert.True(freshness.Value >= 0);
+        Assert.Equal(3, metrics.Count);
+        Assert.NotNull(metrics["Policies.TimeSecondsSinceLastPolicyBackup.hourly"]);
+        Assert.True(metrics["Policies.TimeSecondsSinceLastPolicyBackup.hourly"] >= 0);
+        Assert.Equal(0, metrics["Policies.PartialBackups.hourly"]);
+        Assert.Equal(0, metrics["Policies.FailedBackups.hourly"]);
     }
 
     [Fact]
@@ -414,6 +444,133 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Backup_source_failure_finishes_with_audited_failure_reason()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        fixture.ClickHouse.GetTablesException = new InvalidOperationException("Source ClickHouse instance is not reachable at source:9000.");
+
+        var backupId = await fixture.CreateManualBackupAsync();
+        await fixture.RunBackupAsync(backupId);
+
+        fixture.Db.ChangeTracker.Clear();
+        var backup = await fixture.Db.Backups.SingleAsync(x => x.Id == backupId);
+        Assert.Equal(BackupRunStatus.Failed, backup.Status);
+        Assert.Contains("Source ClickHouse instance is not reachable", backup.FailureReason);
+        Assert.NotNull(backup.CompletedAt);
+        var audit = await fixture.Db.AuditEntries.SingleAsync(x => x.Action == "failed" && x.EntityType == "backup" && x.EntityId == backupId.ToString());
+        Assert.Contains("Source ClickHouse instance is not reachable", audit.Details);
+    }
+
+    [Fact]
+    public async Task Backup_storage_failure_is_correlated_on_sharded_run_table_and_dashboard()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+        fixture.ClickHouse.Topology.Clear();
+        fixture.ClickHouse.Topology.AddRange([
+            new ClickHouseShardReplicaInfo(1, "shard-1", 1, "source-s1", 9000, false, 0),
+            new ClickHouseShardReplicaInfo(2, "shard-2", 1, "source-s2", 9000, false, 0)
+        ]);
+        fixture.ClickHouse.NextBackupStatus = "BACKUP_FAILED";
+        fixture.ClickHouse.NextBackupError = "S3 target http://minio:9000 is unavailable while writing backups/sales/orders.";
+
+        var schedule = await fixture.SeedPolicyAndScheduleAsync();
+        var backupId = await fixture.CreateManualBackupAsync();
+        var backup = await fixture.Db.Backups.SingleAsync(x => x.Id == backupId);
+        backup.PolicyId = schedule.PolicyId;
+        backup.ScheduleId = schedule.Id;
+        await fixture.Db.SaveChangesAsync();
+
+        await fixture.RunBackupAsync(backupId);
+
+        fixture.Db.ChangeTracker.Clear();
+        backup = await fixture.Db.Backups.Include(x => x.Tables).ThenInclude(x => x.Shards).SingleAsync(x => x.Id == backupId);
+        Assert.Equal(BackupRunStatus.Failed, backup.Status);
+        Assert.Contains("sales.orders shard 1", backup.FailureReason);
+        Assert.Contains("sales.orders shard 2", backup.FailureReason);
+        Assert.Contains("minio:9000", backup.FailureReason);
+        Assert.Contains("Shard 1", Assert.Single(backup.Tables).Error);
+        Assert.Contains("Shard 2", Assert.Single(backup.Tables).Error);
+        Assert.All(backup.Tables.SelectMany(x => x.Shards), shard => Assert.Contains("minio:9000", shard.Error));
+
+        var dashboard = await fixture.Services.GetRequiredService<DashboardApplicationService>().GetDashboardAsync();
+        var summary = Assert.Single(dashboard.Schedules, x => x.ScheduleId == schedule.Id);
+        Assert.Equal(BackupRunStatus.Failed, summary.LastRunStatus);
+        Assert.Contains("minio:9000", summary.LastRunFailureReason);
+
+        var audit = await fixture.Db.AuditEntries.SingleAsync(x => x.Action == "failed" && x.EntityType == "backup" && x.EntityId == backupId.ToString());
+        Assert.Contains("minio:9000", audit.Details);
+    }
+
+    [Fact]
+    public async Task Backup_missing_clickhouse_tracking_failure_is_not_left_running()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+        fixture.ClickHouse.DropStartedBackupOperation = true;
+
+        var backupId = await fixture.CreateManualBackupAsync();
+        await fixture.RunBackupAsync(backupId);
+
+        fixture.Db.ChangeTracker.Clear();
+        var backup = await fixture.Db.Backups.Include(x => x.Tables).ThenInclude(x => x.Shards).SingleAsync(x => x.Id == backupId);
+        Assert.Equal(BackupRunStatus.Failed, backup.Status);
+        Assert.Contains("missing from system.backups", backup.FailureReason);
+        Assert.Equal(BackupTableStatus.Failed, Assert.Single(backup.Tables).Status);
+    }
+
+    [Fact]
+    public async Task Restore_target_failure_finishes_with_failure_reason()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Succeeded, "backup-op", true)
+        ]);
+        var restore = await fixture.SeedRestoreAsync(backup, [
+            new SeedRestoreTable("sales", "orders", RestoreTableStatus.Queued, null)
+        ]);
+        fixture.ClickHouse.ExecuteException = new InvalidOperationException("Destination ClickHouse instance is not reachable at restore:9000.");
+
+        await fixture.RunRestoreAsync(restore.Id);
+
+        fixture.Db.ChangeTracker.Clear();
+        var completed = await fixture.Db.Restores.Include(x => x.Tables).SingleAsync(x => x.Id == restore.Id);
+        Assert.Equal(RestoreRunStatus.Failed, completed.Status);
+        Assert.Contains("Destination ClickHouse instance is not reachable", completed.FailureReason);
+        Assert.Contains("sales.orders", completed.FailureReason);
+        var audit = await fixture.Db.AuditEntries.SingleAsync(x => x.Action == "failed" && x.EntityType == "restore" && x.EntityId == restore.Id.ToString());
+        Assert.Contains("Destination ClickHouse instance is not reachable", audit.Details);
+    }
+
+    [Fact]
+    public async Task Restore_storage_or_credential_failure_is_correlated_on_sharded_restore()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Succeeded, "backup-op", true)
+        ], shardCount: 2);
+        var restore = await fixture.SeedRestoreAsync(backup, [
+            new SeedRestoreTable("sales", "orders", RestoreTableStatus.Queued, null)
+        ]);
+        fixture.ClickHouse.NextRestoreStatus = "RESTORE_FAILED";
+        fixture.ClickHouse.NextRestoreError = "S3 credentials were rejected by backup target minio.";
+
+        await fixture.RunRestoreAsync(restore.Id);
+
+        fixture.Db.ChangeTracker.Clear();
+        var completed = await fixture.Db.Restores.Include(x => x.Tables).ThenInclude(x => x.Shards).SingleAsync(x => x.Id == restore.Id);
+        Assert.Equal(RestoreRunStatus.Failed, completed.Status);
+        Assert.Contains("source shard 1", completed.FailureReason);
+        Assert.Contains("source shard 2", completed.FailureReason);
+        Assert.Contains("S3 credentials were rejected", completed.FailureReason);
+        Assert.Contains("Source shard 1", Assert.Single(completed.Tables).Error);
+        Assert.Contains("Source shard 2", Assert.Single(completed.Tables).Error);
+        Assert.All(completed.Tables.SelectMany(x => x.Shards), shard => Assert.Contains("S3 credentials were rejected", shard.Error));
+        var audit = await fixture.Db.AuditEntries.SingleAsync(x => x.Action == "failed" && x.EntityType == "restore" && x.EntityId == restore.Id.ToString());
+        Assert.Contains("S3 credentials were rejected", audit.Details);
+    }
+
+    [Fact]
     public async Task Manual_backup_metadata_is_persisted_and_mapped()
     {
         await using var fixture = await TestFixture.CreateAsync();
@@ -441,25 +598,71 @@ public sealed class BackupRestoreExecutionTests
         private readonly object _lock = new();
         private int _activeBackupStarts;
         public List<ClickHouseTableInfo> Inventory { get; } = [];
+        public List<ClickHouseShardReplicaInfo> Topology { get; } = [new(1, "single", 1, "source", 9000, false, 0)];
         public Dictionary<string, string> KnownOperations { get; } = new(StringComparer.Ordinal);
         public List<string> BackupStartTables { get; } = [];
         public List<string> RestoreStartTables { get; } = [];
         public int MaxConcurrentBackupStarts { get; private set; }
         public TimeSpan StartDelay { get; set; }
         public bool BlockOperationStatus { get; set; }
+        public Exception? GetTablesException { get; set; }
+        public Exception? ExecuteException { get; set; }
+        public string NextBackupStatus { get; set; } = "BACKUP_CREATED";
+        public string? NextBackupError { get; set; }
+        public string NextRestoreStatus { get; set; } = "RESTORED";
+        public string? NextRestoreError { get; set; }
+        public bool DropStartedBackupOperation { get; set; }
+        public bool DropStartedRestoreOperation { get; set; }
+        public Dictionary<string, string> OperationErrors { get; } = new(StringComparer.Ordinal);
         private TaskCompletionSource _statusBlocked = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private TaskCompletionSource _releaseStatus = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public Task<IReadOnlyList<ClickHouseTableInfo>> GetTablesAsync(ClickHouseClusterEntity cluster, CancellationToken cancellationToken) =>
-            Task.FromResult<IReadOnlyList<ClickHouseTableInfo>>(Inventory.ToList());
+        public Task<IReadOnlyList<ClickHouseTableInfo>> GetTablesAsync(ClickHouseClusterEntity cluster, CancellationToken cancellationToken)
+        {
+            if (GetTablesException is not null)
+            {
+                throw GetTablesException;
+            }
+
+            return Task.FromResult<IReadOnlyList<ClickHouseTableInfo>>(Inventory.ToList());
+        }
 
         public Task<ClickHouseTableInfo?> GetTableAsync(ClickHouseClusterEntity cluster, string database, string table, CancellationToken cancellationToken) =>
             Task.FromResult<ClickHouseTableInfo?>(null);
 
-        public Task ExecuteAsync(ClickHouseClusterEntity cluster, string sql, CancellationToken cancellationToken) =>
-            Task.CompletedTask;
+        public Task<ClickHouseTableInfo?> GetTableAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string database, string table, CancellationToken cancellationToken) =>
+            GetTableAsync(cluster, database, table, cancellationToken);
+
+        public Task ExecuteAsync(ClickHouseClusterEntity cluster, string sql, CancellationToken cancellationToken)
+        {
+            if (ExecuteException is not null)
+            {
+                throw ExecuteException;
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public Task ExecuteAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string sql, CancellationToken cancellationToken)
+        {
+            if (ExecuteException is not null)
+            {
+                throw ExecuteException;
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<ClickHouseShardReplicaInfo>> GetTopologyAsync(ClickHouseClusterEntity cluster, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<ClickHouseShardReplicaInfo>>(Topology.ToList());
 
         public async Task<ClickHouseOperationResult> StartBackupAsync(ClickHouseClusterEntity cluster, BackupTargetEntity target, BackupTableEntity table, CancellationToken cancellationToken)
+        {
+            var shard = new BackupTableShardEntity { SourceShardNumber = 1, S3Path = table.S3Path };
+            return await StartBackupShardAsync(new ClickHouseNodeEndpoint("source", 9000, false), cluster, target, table, shard, cancellationToken);
+        }
+
+        public async Task<ClickHouseOperationResult> StartBackupShardAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, BackupTargetEntity target, BackupTableEntity table, BackupTableShardEntity shard, CancellationToken cancellationToken)
         {
             lock (_lock)
             {
@@ -478,20 +681,46 @@ public sealed class BackupRestoreExecutionTests
                 _activeBackupStarts--;
             }
 
-            var operationId = $"backup-{table.Table}-{Guid.NewGuid():N}";
-            KnownOperations[operationId] = "BACKUP_CREATED";
+            var operationId = $"backup-{table.Table}-s{shard.SourceShardNumber}-{Guid.NewGuid():N}";
+            if (!DropStartedBackupOperation)
+            {
+                KnownOperations[operationId] = NextBackupStatus;
+                if (!string.IsNullOrWhiteSpace(NextBackupError))
+                {
+                    OperationErrors[operationId] = NextBackupError;
+                }
+            }
             return new ClickHouseOperationResult(operationId, "CREATING_BACKUP");
         }
 
         public Task<ClickHouseOperationResult> StartRestoreAsync(ClickHouseClusterEntity cluster, BackupTargetEntity target, RestoreTableEntity table, BackupTableEntity backupTable, CancellationToken cancellationToken)
         {
+            var shard = new RestoreTableShardEntity { SourceShardNumber = 1, RestoreDatabase = table.TargetDatabase, RestoreTableName = table.TargetTable };
+            var backupShard = new BackupTableShardEntity { SourceShardNumber = 1, S3Path = backupTable.S3Path };
+            return StartRestoreShardAsync(new ClickHouseNodeEndpoint("restore", 9000, false), cluster, target, shard, backupTable, backupShard, cancellationToken);
+        }
+
+        public Task<ClickHouseOperationResult> StartRestoreShardAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, BackupTargetEntity target, RestoreTableShardEntity table, BackupTableEntity backupTable, BackupTableShardEntity backupShard, CancellationToken cancellationToken)
+        {
             RestoreStartTables.Add(backupTable.Table);
-            var operationId = $"restore-{backupTable.Table}-{Guid.NewGuid():N}";
-            KnownOperations[operationId] = "RESTORED";
+            var operationId = $"restore-{backupTable.Table}-s{backupShard.SourceShardNumber}-{Guid.NewGuid():N}";
+            if (!DropStartedRestoreOperation)
+            {
+                KnownOperations[operationId] = NextRestoreStatus;
+                if (!string.IsNullOrWhiteSpace(NextRestoreError))
+                {
+                    OperationErrors[operationId] = NextRestoreError;
+                }
+            }
             return Task.FromResult(new ClickHouseOperationResult(operationId, "RESTORING"));
         }
 
         public async Task<ClickHouseOperationStatus> GetOperationStatusAsync(ClickHouseClusterEntity cluster, string operationId, CancellationToken cancellationToken)
+        {
+            return await GetOperationStatusAsync(new ClickHouseNodeEndpoint("source", 9000, false), cluster, operationId, cancellationToken);
+        }
+
+        public async Task<ClickHouseOperationStatus> GetOperationStatusAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string operationId, CancellationToken cancellationToken)
         {
             if (BlockOperationStatus)
             {
@@ -500,7 +729,7 @@ public sealed class BackupRestoreExecutionTests
             }
 
             return KnownOperations.TryGetValue(operationId, out var status)
-                ? new ClickHouseOperationStatus(true, status, null)
+                ? new ClickHouseOperationStatus(true, status, OperationErrors.GetValueOrDefault(operationId))
                 : new ClickHouseOperationStatus(false, null, null);
         }
 
@@ -543,7 +772,10 @@ public sealed class BackupRestoreExecutionTests
                 .AddScoped<PolicySelectorEvaluationService>()
                 .AddScoped<ActorContext>()
                 .AddScoped<AuditService>()
+                .AddSingleton(Options.Create(new ChoboTestHooksOptions()))
+                .AddSingleton<TestHookCoordinator>()
                 .AddScoped<DashboardApplicationService>()
+                .AddScoped<RestoreApplicationService>()
                 .AddScoped<BackupRunnerService>()
                 .AddScoped<RestoreRunnerService>()
                 .AddSingleton<BackupRestoreQueues>()
@@ -611,7 +843,7 @@ public sealed class BackupRestoreExecutionTests
             return backup.Id;
         }
 
-        public async Task<BackupEntity> SeedBackupWithTablesAsync(IReadOnlyList<SeedBackupTable> seedTables)
+        public async Task<BackupEntity> SeedBackupWithTablesAsync(IReadOnlyList<SeedBackupTable> seedTables, int shardCount = 1)
         {
             var schema = new SchemaDefinitionEntity
             {
@@ -630,7 +862,7 @@ public sealed class BackupRestoreExecutionTests
             };
             foreach (var seed in seedTables)
             {
-                backup.Tables.Add(new BackupTableEntity
+                var backupTable = new BackupTableEntity
                 {
                     Database = seed.Database,
                     Table = seed.Table,
@@ -640,7 +872,26 @@ public sealed class BackupRestoreExecutionTests
                     S3Path = $"backups/{seed.Database}/{seed.Table}/manual/full/seed/{Guid.NewGuid():N}",
                     Status = seed.Status,
                     ClickHouseOperationId = seed.OperationId
-                });
+                };
+                if (seed.DataBackedUp)
+                {
+                    for (var shardNumber = 1; shardNumber <= shardCount; shardNumber++)
+                    {
+                        backupTable.Shards.Add(new BackupTableShardEntity
+                        {
+                            SourceShardNumber = shardNumber,
+                            SourceShardName = shardCount == 1 ? "single" : $"shard-{shardNumber}",
+                            ReplicaNumber = 1,
+                            Host = shardCount == 1 ? "source" : $"source-s{shardNumber}",
+                            Port = 9000,
+                            S3Path = shardCount == 1 ? backupTable.S3Path : $"{backupTable.S3Path}/shards/shard-{shardNumber:0000}",
+                            Status = seed.Status,
+                            ClickHouseOperationId = seed.OperationId
+                        });
+                    }
+                }
+
+                backup.Tables.Add(backupTable);
             }
 
             Db.Backups.Add(backup);
@@ -656,11 +907,11 @@ public sealed class BackupRestoreExecutionTests
                 TargetClusterId = TargetClusterId,
                 Status = RestoreRunStatus.Running
             };
-            var backupTables = await Db.BackupTables.Where(x => x.BackupId == backup.Id).ToListAsync();
+            var backupTables = await Db.BackupTables.Include(x => x.Shards).Where(x => x.BackupId == backup.Id).ToListAsync();
             foreach (var seed in seedTables)
             {
                 var backupTable = backupTables.Single(x => x.Database == seed.SourceDatabase && x.Table == seed.SourceTable);
-                restore.Tables.Add(new RestoreTableEntity
+                var restoreTable = new RestoreTableEntity
                 {
                     BackupTableId = backupTable.Id,
                     SourceDatabase = seed.SourceDatabase,
@@ -669,7 +920,25 @@ public sealed class BackupRestoreExecutionTests
                     TargetTable = seed.SourceTable,
                     Status = seed.Status,
                     ClickHouseOperationId = seed.OperationId
-                });
+                };
+                foreach (var backupShard in backupTable.Shards)
+                {
+                    restoreTable.Shards.Add(new RestoreTableShardEntity
+                    {
+                        BackupTableShardId = backupShard.Id,
+                        SourceShardNumber = backupShard.SourceShardNumber,
+                        TargetShardNumber = 1,
+                        TargetHost = "restore",
+                        TargetPort = 9000,
+                        LayoutRole = "Preserve",
+                        RestoreDatabase = seed.SourceDatabase,
+                        RestoreTableName = seed.SourceTable,
+                        Status = seed.Status,
+                        ClickHouseOperationId = seed.OperationId
+                    });
+                }
+
+                restore.Tables.Add(restoreTable);
             }
 
             Db.Restores.Add(restore);
@@ -741,6 +1010,7 @@ public sealed class BackupRestoreExecutionTests
                 backup.StartedAt,
                 backup.CompletedAt,
                 backup.Error,
+                backup.FailureReason,
                 backup.Tables.Select(table => new BackupTableDto(
                     table.Id,
                     table.BackupId,
@@ -755,7 +1025,23 @@ public sealed class BackupRestoreExecutionTests
                     table.ClickHouseStatus,
                     table.StartedAt,
                     table.CompletedAt,
-                    table.Error)).ToList());
+                    table.Error,
+                    table.Shards.Select(shard => new BackupTableShardDto(
+                        shard.Id,
+                        shard.BackupTableId,
+                        shard.SourceShardNumber,
+                        shard.SourceShardName,
+                        shard.ReplicaNumber,
+                        shard.Host,
+                        shard.Port,
+                        shard.UseTls,
+                        shard.S3Path,
+                        shard.Status,
+                        shard.ClickHouseOperationId,
+                        shard.ClickHouseStatus,
+                        shard.StartedAt,
+                        shard.CompletedAt,
+                        shard.Error)).ToList())).ToList());
     }
 
     private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider

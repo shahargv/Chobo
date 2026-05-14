@@ -14,19 +14,32 @@ public sealed class DashboardApplicationService(ChoboDbContext db)
         var runningBackups = await db.Backups
             .Include(x => x.Policy)
             .Include(x => x.Schedule)
+            .Include(x => x.Tables).ThenInclude(x => x.Shards)
             .Where(x => x.Status == BackupRunStatus.Running)
             .OrderBy(x => x.StartedAt ?? x.CreatedAt)
-            .Select(x => new DashboardRunningBackupDto(
-                x.Id,
-                x.Status,
-                x.TriggerType,
-                x.PolicyId,
-                x.Policy == null ? null : x.Policy.Name,
-                x.ScheduleId,
-                x.Schedule == null ? null : x.Schedule.Name,
-                x.CreatedAt,
-                x.StartedAt))
             .ToListAsync(cancellationToken);
+        var runningBackupDtos = runningBackups
+            .Select(x =>
+            {
+                var shards = x.Tables.SelectMany(t => t.Shards).ToList();
+                return new DashboardRunningBackupDto(
+                    x.Id,
+                    x.Status,
+                    x.TriggerType,
+                    x.PolicyId,
+                    x.Policy == null ? null : x.Policy.Name,
+                    x.ScheduleId,
+                    x.Schedule == null ? null : x.Schedule.Name,
+                    x.CreatedAt,
+                    x.StartedAt,
+                    x.FailureReason,
+                    x.Tables.Count,
+                    shards.Count,
+                    shards.Count(s => s.Status == BackupTableStatus.Succeeded),
+                    shards.Count(s => s.Status == BackupTableStatus.Failed),
+                    shards.Count(s => s.Status == BackupTableStatus.Running));
+            })
+            .ToList();
 
         var schedules = await db.BackupSchedules
             .Include(x => x.Policy)
@@ -40,7 +53,7 @@ public sealed class DashboardApplicationService(ChoboDbContext db)
             var lastRun = await db.Backups
                 .Where(x => x.ScheduleId == schedule.Id)
                 .OrderByDescending(x => x.CreatedAt)
-                .Select(x => new { x.CreatedAt, x.Status })
+                .Select(x => new { x.CreatedAt, x.Status, x.FailureReason })
                 .FirstOrDefaultAsync(cancellationToken);
 
             var lastSuccessfulRunCompletedAt = await db.Backups
@@ -61,12 +74,13 @@ public sealed class DashboardApplicationService(ChoboDbContext db)
                 schedule.MissedRunGracePeriod,
                 lastRun?.CreatedAt,
                 lastRun?.Status,
+                lastRun?.FailureReason,
                 lastSuccessfulRunCompletedAt));
         }
 
         var futureSchedules = ProjectFutureSchedules(schedules, generatedAt, generatedAt.AddHours(boundedHours));
 
-        return new DashboardDto(generatedAt, boundedHours, runningBackups, scheduleSummaries, futureSchedules);
+        return new DashboardDto(generatedAt, boundedHours, runningBackupDtos, scheduleSummaries, futureSchedules);
     }
 
     public async Task<IReadOnlyDictionary<string, double?>> GetMetricsAsync(CancellationToken cancellationToken = default)
@@ -91,6 +105,8 @@ public sealed class DashboardApplicationService(ChoboDbContext db)
                 : Math.Max(0, (generatedAt - lastSuccessfulBackupEndedAt.Value).TotalSeconds);
 
             metrics[$"Policies.TimeSecondsSinceLastPolicyBackup.{policy.Name}"] = secondsSinceLastSuccessfulBackupEnded;
+            metrics[$"Policies.PartialBackups.{policy.Name}"] = await db.Backups.CountAsync(x => x.PolicyId == policy.Id && x.Status == BackupRunStatus.PartiallySucceeded, cancellationToken);
+            metrics[$"Policies.FailedBackups.{policy.Name}"] = await db.Backups.CountAsync(x => x.PolicyId == policy.Id && x.Status == BackupRunStatus.Failed, cancellationToken);
         }
 
         return metrics;

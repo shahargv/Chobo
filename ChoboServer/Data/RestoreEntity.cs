@@ -12,6 +12,9 @@ public sealed class RestoreEntity
     public RestoreRunStatus Status { get; set; } = RestoreRunStatus.Queued;
     public bool Append { get; set; }
     public bool AllowSchemaMismatch { get; set; }
+    public RestoreLayout Layout { get; set; } = RestoreLayout.Preserve;
+    public int? SourceShard { get; set; }
+    public int? TargetShard { get; set; }
     public string RequestJson { get; set; } = "{}";
     public Guid? RequestedByUserId { get; set; }
     public string RequestedByName { get; set; } = "system";
@@ -20,5 +23,6 @@ public sealed class RestoreEntity
     public DateTimeOffset? StartedAt { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }
     public string? Error { get; set; }
+    public string? FailureReason { get; set; }
     public List<RestoreTableEntity> Tables { get; set; } = [];
 }
