@@ -30,7 +30,10 @@ public sealed class PolicyApplicationService(
             SourceClusterId = request.SourceClusterId,
             TargetId = request.TargetId,
             SelectorJsonVersion = request.Selector.Version,
-            SelectorJson = JsonSerializer.Serialize(request.Selector, JsonOptions)
+            SelectorJson = JsonSerializer.Serialize(request.Selector, JsonOptions),
+            RetentionMinutes = request.Retention?.RetentionMinutes,
+            MinBackupsToKeep = request.Retention?.MinBackupsToKeep ?? 0,
+            FailedBackupRetentionMode = request.FailedBackupRetentionMode
         };
 
         await policies.AddAsync(policy);
@@ -56,6 +59,9 @@ public sealed class PolicyApplicationService(
         policy.TargetId = request.TargetId;
         policy.SelectorJsonVersion = request.Selector.Version;
         policy.SelectorJson = JsonSerializer.Serialize(request.Selector, JsonOptions);
+        policy.RetentionMinutes = request.Retention?.RetentionMinutes;
+        policy.MinBackupsToKeep = request.Retention?.MinBackupsToKeep ?? 0;
+        policy.FailedBackupRetentionMode = request.FailedBackupRetentionMode;
         policy.UpdatedAt = DateTimeOffset.UtcNow;
         await unitOfWork.SaveChangesAsync();
 
@@ -126,6 +132,17 @@ public sealed class PolicyApplicationService(
         {
             throw new ArgumentException("Only selector version 1 is supported.");
         }
+        if (request.Retention is not null)
+        {
+            if (request.Retention.RetentionMinutes <= 0)
+            {
+                throw new ArgumentException("Retention minutes must be greater than zero.");
+            }
+            if (request.Retention.MinBackupsToKeep < 0)
+            {
+                throw new ArgumentException("MinBackupsToKeep must be zero or greater.");
+            }
+        }
         foreach (var rule in request.Selector.Rules)
         {
             ValidatePattern(rule.Database, "Database");
@@ -137,7 +154,18 @@ public sealed class PolicyApplicationService(
         JsonSerializer.Deserialize<PolicySelector>(json, JsonOptions) ?? PolicySelector.Empty;
 
     private static BackupPolicyDto ToDto(BackupPolicyEntity x) =>
-        new(x.Id, x.Name, x.SourceClusterId, x.TargetId, x.SelectorJsonVersion, Deserialize(x.SelectorJson), x.IsDeleted, x.CreatedAt, x.UpdatedAt);
+        new(
+            x.Id,
+            x.Name,
+            x.SourceClusterId,
+            x.TargetId,
+            x.SelectorJsonVersion,
+            Deserialize(x.SelectorJson),
+            x.RetentionMinutes is null ? null : new BackupRetentionDto(x.RetentionMinutes.Value, x.MinBackupsToKeep),
+            x.FailedBackupRetentionMode,
+            x.IsDeleted,
+            x.CreatedAt,
+            x.UpdatedAt);
 
     private static void ValidatePattern(SelectorPattern pattern, string name)
     {

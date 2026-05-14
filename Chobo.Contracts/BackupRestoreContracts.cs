@@ -1,6 +1,20 @@
 namespace Chobo.Contracts;
 
-public enum BackupRunStatus { Queued, Running, Succeeded, PartiallySucceeded, Failed, Canceled }
+public enum BackupRunStatus
+{
+    Queued,
+    Running,
+    Succeeded,
+    PartiallySucceeded,
+    Failed,
+    Canceled,
+    ManualDeleteRequested,
+    ManualDeleted,
+    FailedBackupDeleteRequested,
+    FailedBackupDeletedByGarbageCollector,
+    BackupExpiredDeleteStarted,
+    BackupExpiredDeleted
+}
 
 public enum BackupTableStatus { Queued, Running, Succeeded, PartiallySucceeded, Failed, Skipped }
 
@@ -28,6 +42,16 @@ public sealed record BackupDto(
     DateTimeOffset? CompletedAt,
     string? Error,
     string? FailureReason,
+    bool IsPinned,
+    DateTimeOffset? PinnedAt,
+    Guid? PinnedByUserId,
+    string? PinnedByName,
+    string? DeletionReason,
+    DateTimeOffset? DeletionRequestedAt,
+    DateTimeOffset? DeletionStartedAt,
+    DateTimeOffset? DeletedAt,
+    string? DeletionError,
+    int DeletionAttemptCount,
     IReadOnlyList<BackupTableDto> Tables);
 
 public sealed record BackupTableDto(

@@ -25,5 +25,15 @@ public sealed class BackupEntity
     public DateTimeOffset? CompletedAt { get; set; }
     public string? Error { get; set; }
     public string? FailureReason { get; set; }
+    public bool IsPinned { get; set; }
+    public DateTimeOffset? PinnedAt { get; set; }
+    public Guid? PinnedByUserId { get; set; }
+    public string? PinnedByName { get; set; }
+    public string? DeletionReason { get; set; }
+    public DateTimeOffset? DeletionRequestedAt { get; set; }
+    public DateTimeOffset? DeletionStartedAt { get; set; }
+    public DateTimeOffset? DeletedAt { get; set; }
+    public string? DeletionError { get; set; }
+    public int DeletionAttemptCount { get; set; }
     public List<BackupTableEntity> Tables { get; set; } = [];
 }

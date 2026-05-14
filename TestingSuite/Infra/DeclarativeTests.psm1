@@ -56,12 +56,21 @@ function Add-ChoboJsonTokens {
 
     if ($Value -is [System.Array]) {
         $Tokens["$Prefix.count"] = $Value.Count
+        for ($i = 0; $i -lt $Value.Count; $i++) {
+            Add-ChoboJsonTokens -Tokens $Tokens -Prefix "$Prefix.$i" -Value $Value[$i]
+        }
         return
     }
 
     foreach ($property in $Value.PSObject.Properties) {
         $key = "$Prefix.$($property.Name)"
         $Tokens[$key] = $property.Value
+        if ($property.Value -is [string]) {
+            $guid = [System.Guid]::Empty
+            if ([System.Guid]::TryParse($property.Value, [ref]$guid)) {
+                $Tokens["$key.n"] = $guid.ToString('N')
+            }
+        }
         if ($property.Value -isnot [string] -and $property.Value -isnot [ValueType]) {
             Add-ChoboJsonTokens -Tokens $Tokens -Prefix $key -Value $property.Value
         }
@@ -322,6 +331,72 @@ function Invoke-ChoboDeclarativeCliStep {
     }
 }
 
+function Invoke-ChoboDeclarativeShellStep {
+    param(
+        [Parameter(Mandatory)] $Context,
+        [Parameter(Mandatory)] $Step,
+        [Parameter(Mandatory)] [string]$Name,
+        [Parameter(Mandatory)] [hashtable]$Tokens
+    )
+
+    $arguments = @($Step.Args | ForEach-Object { Expand-ChoboTemplate -Text ([string]$_) -Tokens $Tokens })
+    if ($arguments.Count -eq 0) {
+        throw "Shell step '$Name' must provide Args."
+    }
+
+    $commandPath = Join-Path $Context.OutputDirectory "$Name.shell.txt"
+    Set-Content -Path $commandPath -Value ($arguments -join ' ')
+    $outputPath = Join-Path $Context.OutputDirectory "$Name.out.txt"
+
+    $deadline = if ($Step.ContainsKey('RetryTimeoutSeconds')) { (Get-Date).AddSeconds([int]$Step.RetryTimeoutSeconds) } else { Get-Date }
+    $interval = if ($Step.ContainsKey('RetryIntervalSeconds')) { [int]$Step.RetryIntervalSeconds } else { 2 }
+    $lastError = $null
+
+    do {
+        $output = & $arguments[0] @($arguments | Select-Object -Skip 1) 2>&1 | Out-String
+        $exitCode = $LASTEXITCODE
+        Set-Content -Path $outputPath -Value $output
+
+        try {
+            $expectedExitCode = if ($Step.ContainsKey('ExpectExitCode')) { [int]$Step.ExpectExitCode } else { 0 }
+            if ($exitCode -ne $expectedExitCode) {
+                throw "Shell exit code expectation failed. Expected $expectedExitCode, actual $exitCode. Output: $output"
+            }
+
+            if ($Step.ContainsKey('ExpectTextContains')) {
+                foreach ($expectedText in @($Step.ExpectTextContains)) {
+                    $expanded = Expand-ChoboTemplate -Text ([string]$expectedText) -Tokens $Tokens
+                    if (-not $output.Contains($expanded)) {
+                        throw "Shell text expectation failed. Expected output containing '$expanded'."
+                    }
+                }
+            }
+
+            if ($Step.ContainsKey('ExpectTextNotContains')) {
+                foreach ($unexpectedText in @($Step.ExpectTextNotContains)) {
+                    $expanded = Expand-ChoboTemplate -Text ([string]$unexpectedText) -Tokens $Tokens
+                    if ($output.Contains($expanded)) {
+                        throw "Shell text expectation failed. Output must not contain '$expanded'."
+                    }
+                }
+            }
+
+            $lastError = $null
+            break
+        } catch {
+            $lastError = $_.Exception.Message
+            if ((Get-Date) -ge $deadline) {
+                break
+            }
+            Start-Sleep -Seconds $interval
+        }
+    } while ((Get-Date) -lt $deadline)
+
+    if ($lastError) {
+        throw $lastError
+    }
+}
+
 function Invoke-ChoboDeclarativeSteps {
     param(
         [Parameter(Mandatory)] $Context,
@@ -368,6 +443,9 @@ function Invoke-ChoboDeclarativeSteps {
             'Cli' {
                 Invoke-ChoboDeclarativeCliStep -Context $Context -TestRoot $TestRoot -Step $step -Name $name -Tokens $tokens
                 $tokens = Get-ChoboDeclarativeTokens -Context $Context
+            }
+            'Shell' {
+                Invoke-ChoboDeclarativeShellStep -Context $Context -Step $step -Name $name -Tokens $tokens
             }
             default {
                 throw "Unsupported declarative step type '$type'."

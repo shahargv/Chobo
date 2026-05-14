@@ -40,7 +40,7 @@ public sealed class DashboardCommands : CliSubject
                 var trigger = backup.TriggerType == BackupTriggerType.Scheduled
                     ? backup.ScheduleName ?? backup.ScheduleId?.ToString() ?? "scheduled"
                     : "manual";
-                builder.AppendLine($"  {backup.BackupId}  {backup.Status,-18}  policy={DisplayName(backup.PolicyName, backup.PolicyId)}  trigger={trigger}  started={FormatOptionalTime(backup.StartedAt)}  tables={backup.TableCount}  shards={backup.SucceededShardCount}/{backup.ShardCount} ok failed={backup.FailedShardCount} running={backup.RunningShardCount}{FormatFailure(backup.FailureReason)}");
+                builder.AppendLine($"  {backup.BackupId}  {backup.Status,-32}  pinned={backup.IsPinned}  policy={DisplayName(backup.PolicyName, backup.PolicyId)}  trigger={trigger}  started={FormatOptionalTime(backup.StartedAt)}  deleteRequested={FormatOptionalTime(backup.DeletionRequestedAt)}  tables={backup.TableCount}  shards={backup.SucceededShardCount}/{backup.ShardCount} ok failed={backup.FailedShardCount} running={backup.RunningShardCount}{FormatFailure(backup.FailureReason)}");
             }
         }
 
@@ -54,7 +54,7 @@ public sealed class DashboardCommands : CliSubject
         {
             foreach (var schedule in dashboard.Schedules)
             {
-                builder.AppendLine($"  {schedule.ScheduleName}  enabled={schedule.IsEnabled}  policy={DisplayName(schedule.PolicyName, schedule.PolicyId)}  last={FormatOptionalTime(schedule.LastRunAt)}  status={schedule.LastRunStatus?.ToString() ?? "never"}{FormatFailure(schedule.LastRunFailureReason)}  lastSuccess={FormatOptionalTime(schedule.LastSuccessfulRunCompletedAt)}");
+                builder.AppendLine($"  {schedule.ScheduleName}  enabled={schedule.IsEnabled}  policy={DisplayName(schedule.PolicyName, schedule.PolicyId)}  last={FormatOptionalTime(schedule.LastRunAt)}  status={schedule.LastRunStatus?.ToString() ?? "never"}  pinned={schedule.LastRunIsPinned}  deleteRequested={FormatOptionalTime(schedule.LastRunDeletionRequestedAt)}{FormatFailure(schedule.LastRunFailureReason)}  lastSuccess={FormatOptionalTime(schedule.LastSuccessfulRunCompletedAt)}");
             }
         }
 

@@ -45,6 +45,7 @@ public sealed class ChoboDbContext(DbContextOptions<ChoboDbContext> options) : D
         modelBuilder.Entity<BackupPolicyEntity>().HasIndex(x => new { x.IsDeleted, x.Name });
         modelBuilder.Entity<BackupPolicyEntity>().HasIndex(x => x.SourceClusterId);
         modelBuilder.Entity<BackupPolicyEntity>().HasIndex(x => x.TargetId);
+        modelBuilder.Entity<BackupPolicyEntity>().Property(x => x.FailedBackupRetentionMode).HasConversion<int>();
         modelBuilder.Entity<BackupScheduleEntity>().HasIndex(x => new { x.IsDeleted, x.Name });
         modelBuilder.Entity<BackupScheduleEntity>().HasIndex(x => new { x.PolicyId, x.IsDeleted });
         modelBuilder.Entity<SchemaDefinitionEntity>().HasIndex(x => x.SchemaHash).IsUnique();
@@ -54,6 +55,8 @@ public sealed class ChoboDbContext(DbContextOptions<ChoboDbContext> options) : D
         modelBuilder.Entity<BackupEntity>().HasIndex(x => x.SourceClusterId);
         modelBuilder.Entity<BackupEntity>().HasIndex(x => x.TargetId);
         modelBuilder.Entity<BackupEntity>().HasIndex(x => x.CreatedAt);
+        modelBuilder.Entity<BackupEntity>().HasIndex(x => x.IsPinned);
+        modelBuilder.Entity<BackupEntity>().HasIndex(x => x.DeletionRequestedAt);
         modelBuilder.Entity<BackupTableEntity>().HasIndex(x => x.BackupId);
         modelBuilder.Entity<BackupTableEntity>().HasIndex(x => new { x.Database, x.Table });
         modelBuilder.Entity<BackupTableEntity>().HasIndex(x => x.Status);
