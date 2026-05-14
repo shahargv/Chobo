@@ -44,7 +44,7 @@ public sealed class ExportImportService(ChoboDbContext db)
             audits.Select(x => new AuditEntryDto(x.Id, x.Timestamp, x.ActorUserId, x.ActorName, x.Action, x.EntityType, x.EntityId, AuditDetails.ToJsonElement(x.Details))).ToList(),
             logs.Select(x => new ApplicationLogEntryDto(x.Id, x.Timestamp, x.Level, ExtractSourceContext(x.Properties), x.RenderedMessage, x.Exception)).ToList());
 
-        return new ExportEnvelope(ChoboApi.ExportVersion, ChoboApi.SchemaVersion, DateTimeOffset.UtcNow, ChoboApi.ServerVersion, payload);
+        return new ExportEnvelope(ChoboApi.ExportVersion, ChoboApi.SchemaVersion, DateTimeOffset.UtcNow, ChoboApi.ProductVersion, payload);
     }
 
     public async Task ImportAsync(ExportEnvelope envelope, bool configOnly)

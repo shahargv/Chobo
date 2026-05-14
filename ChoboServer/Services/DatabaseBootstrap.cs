@@ -21,7 +21,7 @@ public static class DatabaseBootstrap
                 SchemaVersion = Chobo.Contracts.ChoboApi.SchemaVersion,
                 AppliedMigrationId = "20260509160000_InitialCreate",
                 AppliedAt = DateTimeOffset.UtcNow,
-                ProductVersion = Chobo.Contracts.ChoboApi.ServerVersion
+                ProductVersion = Chobo.Contracts.ChoboApi.ProductVersion
             });
             await db.SaveChangesAsync();
             return;
