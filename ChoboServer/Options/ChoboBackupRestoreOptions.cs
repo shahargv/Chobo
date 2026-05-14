@@ -8,3 +8,15 @@ public sealed class ChoboBackupRestoreOptions
     public TimeSpan SchedulerMissedRunGracePeriod { get; set; } = TimeSpan.FromMinutes(5);
     public TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(2);
 }
+
+public sealed class RetentionManagementOptions
+{
+    public TimeSpan Interval { get; set; } = TimeSpan.FromHours(1);
+    public int MaxDop { get; set; } = 2;
+}
+
+public sealed class BackupsGarbageCollectorOptions
+{
+    public TimeSpan Interval { get; set; } = TimeSpan.FromHours(1);
+    public int MaxDop { get; set; } = 2;
+}

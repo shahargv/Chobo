@@ -18,6 +18,9 @@ public sealed record DashboardRunningBackupDto(
     DateTimeOffset CreatedAt,
     DateTimeOffset? StartedAt,
     string? FailureReason,
+    bool IsPinned,
+    DateTimeOffset? DeletionRequestedAt,
+    string? DeletionReason,
     int TableCount,
     int ShardCount,
     int SucceededShardCount,
@@ -37,6 +40,8 @@ public sealed record DashboardScheduleDto(
     DateTimeOffset? LastRunAt,
     BackupRunStatus? LastRunStatus,
     string? LastRunFailureReason,
+    bool LastRunIsPinned,
+    DateTimeOffset? LastRunDeletionRequestedAt,
     DateTimeOffset? LastSuccessfulRunCompletedAt);
 
 public sealed record DashboardFutureScheduleDto(

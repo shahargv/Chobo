@@ -46,6 +46,22 @@ public sealed class PolicyCommands : CliSubject
             required["--name"],
             Guid.Parse(required["--source-cluster-id"]),
             Guid.Parse(required["--target-id"]),
-            CommandHelpers.PolicySelectorFromOption(options));
+            CommandHelpers.PolicySelectorFromOption(options),
+            Retention(options),
+            options.Optional("--failed-backup-retention-mode") is { } mode
+                ? Enum.Parse<FailedBackupRetentionMode>(mode, ignoreCase: true)
+                : FailedBackupRetentionMode.KeepAndExcludeFromMinBackupsToKeep);
+    }
+
+    private static BackupRetentionDto? Retention(OptionBag options)
+    {
+        if (options.Optional("--retention-minutes") is not { } retentionMinutes)
+        {
+            return null;
+        }
+
+        return new BackupRetentionDto(
+            int.Parse(retentionMinutes),
+            options.Optional("--min-backups-to-keep") is { } minBackupsToKeep ? int.Parse(minBackupsToKeep) : 0);
     }
 }

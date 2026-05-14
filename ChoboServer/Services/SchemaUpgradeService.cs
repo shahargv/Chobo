@@ -54,6 +54,12 @@ public static class SchemaUpgradeService
                     schema.AppliedMigrationId = "0007_backup_restore_failure_reason";
                     schema.AppliedAt = DateTimeOffset.UtcNow;
                     break;
+                case 7:
+                    await UpgradeFromV7ToV8Async(db);
+                    schema.SchemaVersion = 8;
+                    schema.AppliedMigrationId = "0008_backup_retention_cleanup";
+                    schema.AppliedAt = DateTimeOffset.UtcNow;
+                    break;
                 default:
                     throw new InvalidOperationException($"No upgrade path is registered from schema version {schema.SchemaVersion}.");
             }
@@ -247,5 +253,38 @@ public static class SchemaUpgradeService
                 ALTER TABLE Restores ADD COLUMN FailureReason TEXT NULL;
                 """);
         }
+    }
+
+    private static async Task UpgradeFromV7ToV8Async(ChoboDbContext db)
+    {
+        if (!await ColumnExistsAsync(db, "BackupPolicies", "RetentionMinutes"))
+        {
+            await db.Database.ExecuteSqlRawAsync("""
+                ALTER TABLE BackupPolicies ADD COLUMN RetentionMinutes INTEGER NULL;
+                ALTER TABLE BackupPolicies ADD COLUMN MinBackupsToKeep INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE BackupPolicies ADD COLUMN FailedBackupRetentionMode INTEGER NOT NULL DEFAULT 0;
+                """);
+        }
+
+        if (!await ColumnExistsAsync(db, "Backups", "IsPinned"))
+        {
+            await db.Database.ExecuteSqlRawAsync("""
+                ALTER TABLE Backups ADD COLUMN IsPinned INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE Backups ADD COLUMN PinnedAt INTEGER NULL;
+                ALTER TABLE Backups ADD COLUMN PinnedByUserId TEXT NULL;
+                ALTER TABLE Backups ADD COLUMN PinnedByName TEXT NULL;
+                ALTER TABLE Backups ADD COLUMN DeletionReason TEXT NULL;
+                ALTER TABLE Backups ADD COLUMN DeletionRequestedAt INTEGER NULL;
+                ALTER TABLE Backups ADD COLUMN DeletionStartedAt INTEGER NULL;
+                ALTER TABLE Backups ADD COLUMN DeletedAt INTEGER NULL;
+                ALTER TABLE Backups ADD COLUMN DeletionError TEXT NULL;
+                ALTER TABLE Backups ADD COLUMN DeletionAttemptCount INTEGER NOT NULL DEFAULT 0;
+                """);
+        }
+
+        await db.Database.ExecuteSqlRawAsync("""
+            CREATE INDEX IF NOT EXISTS IX_Backups_IsPinned ON Backups (IsPinned);
+            CREATE INDEX IF NOT EXISTS IX_Backups_DeletionRequestedAt ON Backups (DeletionRequestedAt);
+            """);
     }
 }

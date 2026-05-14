@@ -22,6 +22,16 @@ internal static class BackupRestoreMapping
             x.CompletedAt,
             x.Error,
             x.FailureReason,
+            x.IsPinned,
+            x.PinnedAt,
+            x.PinnedByUserId,
+            x.PinnedByName,
+            x.DeletionReason,
+            x.DeletionRequestedAt,
+            x.DeletionStartedAt,
+            x.DeletedAt,
+            x.DeletionError,
+            x.DeletionAttemptCount,
             x.Tables.OrderBy(t => t.Database).ThenBy(t => t.Table).Select(ToDto).ToList());
 
     public static BackupTableDto ToDto(BackupTableEntity x) =>

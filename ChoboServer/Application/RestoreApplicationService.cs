@@ -29,6 +29,15 @@ public sealed class RestoreApplicationService(
         {
             throw new ArgumentException("Backup was not found.");
         }
+        if (backup.Status is BackupRunStatus.ManualDeleteRequested or
+            BackupRunStatus.ManualDeleted or
+            BackupRunStatus.FailedBackupDeleteRequested or
+            BackupRunStatus.FailedBackupDeletedByGarbageCollector or
+            BackupRunStatus.BackupExpiredDeleteStarted or
+            BackupRunStatus.BackupExpiredDeleted)
+        {
+            throw new ArgumentException("Deleted or delete-pending backups cannot be restored.");
+        }
         if (backup.Status is not (BackupRunStatus.Succeeded or BackupRunStatus.PartiallySucceeded))
         {
             throw new ArgumentException("Only succeeded or partially succeeded backups can be restored.");

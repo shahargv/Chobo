@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "action": "Include",
+      "database": { "kind": "Exact", "value": "backup_cleanup_sharded_source" },
+      "table": { "kind": "Exact", "value": "orders_local" }
+    }
+  ]
+}
