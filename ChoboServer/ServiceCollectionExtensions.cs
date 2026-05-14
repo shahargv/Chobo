@@ -22,6 +22,7 @@ public static class ServiceCollectionExtensions
         services.AddOptions<ChoboInitOptions>().Bind(configuration.GetSection("Chobo:Init"));
         services.AddOptions<ChoboDataRetentionOptions>().Bind(configuration.GetSection("Chobo:DataRetention"));
         services.AddOptions<ChoboBackupRestoreOptions>().Bind(configuration.GetSection("Chobo:BackupRestore"));
+        services.AddOptions<ChoboTestHooksOptions>().Bind(configuration.GetSection("Chobo:TestHooks"));
 
         services.AddControllers().AddJsonOptions(options =>
         {
@@ -61,8 +62,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ExportImportService>();
         services.AddScoped<ClickHouseAdapter>();
         services.AddScoped<IClickHouseAdapter>(serviceProvider => serviceProvider.GetRequiredService<ClickHouseAdapter>());
-        services.AddScoped<ApplicationLogTimelineStore>();
-        services.AddScoped<AuditTimelineStore>();
+        services.AddScoped<ApplicationLogStore>();
+        services.AddScoped<AuditStore>();
+        services.AddSingleton<TestHookCoordinator>();
         services.AddScoped<IUnitOfWork, EfUnitOfWork>();
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddScoped<IClusterRepository, ClusterRepository>();

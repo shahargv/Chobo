@@ -40,13 +40,13 @@ public sealed class DataRetentionBackgroundService(
 
         if (retention.LogsBefore is not null)
         {
-            var logs = scope.ServiceProvider.GetRequiredService<ApplicationLogTimelineStore>();
+            var logs = scope.ServiceProvider.GetRequiredService<ApplicationLogStore>();
             logsDeleted = await logs.DeleteBeforeAsync(retention.LogsBefore.Value, cancellationToken);
         }
 
         if (retention.AuditsBefore is not null)
         {
-            var audits = scope.ServiceProvider.GetRequiredService<AuditTimelineStore>();
+            var audits = scope.ServiceProvider.GetRequiredService<AuditStore>();
             auditsDeleted = await audits.DeleteBeforeAsync(retention.AuditsBefore.Value, cancellationToken);
         }
 

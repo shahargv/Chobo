@@ -24,9 +24,21 @@ public sealed class RestoreCommand : CliSubject
             context.Command.Options.Optional("--target-database"),
             context.Command.Options.Optional("--target-table"),
             context.Command.Options.Has("--append"),
-            context.Command.Options.Has("--allow-schema-mismatch"));
+            context.Command.Options.Has("--allow-schema-mismatch"),
+            context.Command.Options.Optional("--layout") is { } layout ? ParseLayout(layout) : null,
+            context.Command.Options.Optional("--source-shard") is { } sourceShard ? int.Parse(sourceShard) : null,
+            context.Command.Options.Optional("--target-shard") is { } targetShard ? int.Parse(targetShard) : null);
         return CommandHelpers.WithClient(context, client => client.PostAsync("restores/initiate", request));
     }
+
+    private static RestoreLayout ParseLayout(string value) =>
+        value.Trim().ToLowerInvariant() switch
+        {
+            "preserve" => RestoreLayout.Preserve,
+            "single-node" or "singlenode" => RestoreLayout.SingleNode,
+            "redistribute" => RestoreLayout.Redistribute,
+            _ => Enum.Parse<RestoreLayout>(value, ignoreCase: true)
+        };
 }
 
 public sealed class RestoresCommands : CliSubject
@@ -84,5 +96,5 @@ public sealed class RestoresCommands : CliSubject
     }
 
     private static bool IsTerminal(RestoreRunStatus status) =>
-        status is RestoreRunStatus.Succeeded or RestoreRunStatus.Failed or RestoreRunStatus.Canceled;
+        status is RestoreRunStatus.Succeeded or RestoreRunStatus.PartiallySucceeded or RestoreRunStatus.Failed or RestoreRunStatus.Canceled;
 }

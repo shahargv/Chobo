@@ -30,7 +30,7 @@ public sealed class ExportImportService(ChoboDbContext db)
             policies.Select(x => new BackupPolicyExport(x.Id, x.Name, x.SourceClusterId, x.TargetId, x.SelectorJsonVersion, JsonSerializer.Deserialize<PolicySelector>(x.SelectorJson, JsonOptions)!, x.IsDeleted, x.CreatedAt, x.UpdatedAt, x.DeletedAt)).ToList(),
             schedules.Select(x => new BackupScheduleExport(x.Id, x.Name, x.PolicyId, x.BackupType, x.CronExpression, x.TimeZoneId, x.IsEnabled, x.MissedRunGracePeriod, x.Description, x.IsDeleted, x.CreatedAt, x.UpdatedAt, x.DeletedAt)).ToList(),
             audits.Select(x => new AuditEntryDto(x.Id, x.Timestamp, x.ActorUserId, x.ActorName, x.Action, x.EntityType, x.EntityId, AuditDetails.ToJsonElement(x.Details))).ToList(),
-            logs.Select(x => new LogEntryDto(x.Id, x.Timestamp, x.Level, ExtractSourceContext(x.Properties), x.RenderedMessage, x.Exception)).ToList());
+            logs.Select(x => new ApplicationLogEntryDto(x.Id, x.Timestamp, x.Level, ExtractSourceContext(x.Properties), x.RenderedMessage, x.Exception)).ToList());
 
         return new ExportEnvelope(ChoboApi.ExportVersion, ChoboApi.SchemaVersion, DateTimeOffset.UtcNow, ChoboApi.ServerVersion, payload);
     }

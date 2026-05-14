@@ -11,6 +11,7 @@ public sealed class ClickHouseClusterEntity
     public string? EncryptedUserName { get; set; }
     public string? EncryptedPassword { get; set; }
     public int? BackupRestoreMaxDop { get; set; }
+    public string? ClickHouseClusterName { get; set; }
     public bool IsDeleted { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? UpdatedAt { get; set; }

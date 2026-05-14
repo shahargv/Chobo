@@ -92,5 +92,5 @@ public sealed class BackupsCommands : CliSubject
     }
 
     private static bool IsTerminal(BackupRunStatus status) =>
-        status is BackupRunStatus.Succeeded or BackupRunStatus.Failed or BackupRunStatus.Canceled;
+        status is BackupRunStatus.Succeeded or BackupRunStatus.PartiallySucceeded or BackupRunStatus.Failed or BackupRunStatus.Canceled;
 }

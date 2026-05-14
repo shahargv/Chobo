@@ -67,7 +67,7 @@ public sealed class BackupApplicationService(
     {
         var query = db.Backups
             .Include(x => x.SourceCluster)
-            .Include(x => x.Tables)
+            .Include(x => x.Tables).ThenInclude(x => x.Shards)
             .AsQueryable();
 
         if (policyId is not null)
@@ -97,7 +97,7 @@ public sealed class BackupApplicationService(
 
     private Task<BackupEntity?> LoadAsync(Guid id, CancellationToken cancellationToken) =>
         db.Backups
-            .Include(x => x.Tables)
+            .Include(x => x.Tables).ThenInclude(x => x.Shards)
             .FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
 
     private static JsonSerializerOptions CreateJsonOptions()
