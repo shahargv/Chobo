@@ -3,6 +3,7 @@ using ChoboServer.Application;
 using ChoboServer.BackgroundServices;
 using ChoboServer.Data;
 using ChoboServer.Options;
+using ChoboServer.Repositories;
 using ChoboServer.Services;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -387,6 +388,44 @@ public sealed class BackupRestoreExecutionTests
         await fixture.Services.GetRequiredService<BackupSchedulerDispatcherBackgroundService>().DispatchOnceAsync();
 
         Assert.False(await fixture.Db.Backups.AnyAsync(x => x.ScheduleId == schedule.Id));
+    }
+
+    [Fact]
+    public async Task Scheduler_skips_and_audits_schedule_with_invalid_cron_expression()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var schedule = await fixture.SeedPolicyAndScheduleAsync();
+        schedule.CronExpression = "0 0 99 * * ?";
+        await fixture.Db.SaveChangesAsync();
+
+        await fixture.Services.GetRequiredService<BackupSchedulerDispatcherBackgroundService>().DispatchOnceAsync();
+
+        Assert.False(await fixture.Db.Backups.AnyAsync(x => x.ScheduleId == schedule.Id));
+        var audit = await fixture.Db.AuditEntries.SingleAsync(x => x.Action == "schedule-skip-invalid-cron" && x.EntityId == schedule.Id.ToString());
+        Assert.Contains("cronExpression", audit.Details);
+        Assert.Contains("invalid", audit.Details, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Schedule_service_rejects_invalid_cron_expression()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var schedule = await fixture.SeedPolicyAndScheduleAsync();
+        var service = fixture.Services.GetRequiredService<ScheduleApplicationService>();
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(() => service.UpdateAsync(
+            schedule.Id,
+            new UpsertScheduleRequest(
+                "bad cron",
+                schedule.PolicyId,
+                BackupType.Full,
+                "0 0 99 * * ?",
+                "UTC",
+                true,
+                null,
+                null)));
+
+        Assert.Contains("CronExpression is invalid", error.Message);
     }
 
     [Fact]
@@ -1351,6 +1390,9 @@ public sealed class BackupRestoreExecutionTests
                 .AddSingleton<ITestHookCoordinator, TestHookCoordinator>()
                 .AddScoped<DashboardApplicationService>()
                 .AddScoped<BackupApplicationService>()
+                .AddScoped<IScheduleRepository, ScheduleRepository>()
+                .AddScoped<IUnitOfWork, EfUnitOfWork>()
+                .AddScoped<ScheduleApplicationService>()
                 .AddScoped<IBackupStorageManifestService, BackupStorageManifestService>()
                 .AddScoped<RestoreApplicationService>()
                 .AddScoped<BackupRunnerService>()

@@ -49,6 +49,8 @@ public sealed class ChoboFoundationTests
             ["CHOBO_BACKUP_RESTORE_SCHEDULER_INTERVAL"] = "00:02:00",
             ["Chobo__BackupRestore__SchedulerMissedRunGracePeriod"] = "00:07:00",
             ["CHOBO_BACKUP_RESTORE_POLL_INTERVAL"] = "00:00:03",
+            ["CHOBO_WEB_IS_GUI_ENABLED"] = "false",
+            ["CHOBO_WEB_GUI_PORT"] = "18081",
             ["CHOBO_TEST_HOOKS_ENABLED"] = "true",
             ["AllowedHosts"] = "env-host",
             ["Serilog__MinimumLevel__Default"] = "Debug"
@@ -64,6 +66,7 @@ public sealed class ChoboFoundationTests
         var retention = configuration.GetSection("Chobo:DataRetention").Get<ChoboDataRetentionOptions>()!;
         var selfBackup = configuration.GetSection("Chobo:SqliteSelfBackup").Get<ChoboSqliteSelfBackupOptions>()!;
         var backupRestore = configuration.GetSection("Chobo:BackupRestore").Get<ChoboBackupRestoreOptions>()!;
+        var web = configuration.GetSection("Chobo:Web").Get<ChoboWebOptions>()!;
         var testHooks = configuration.GetSection("Chobo:TestHooks").Get<ChoboTestHooksOptions>()!;
 
         Assert.Equal("env-data", storage.DataDirectory);
@@ -82,6 +85,8 @@ public sealed class ChoboFoundationTests
         Assert.Equal(TimeSpan.FromMinutes(2), backupRestore.SchedulerInterval);
         Assert.Equal(TimeSpan.FromMinutes(7), backupRestore.SchedulerMissedRunGracePeriod);
         Assert.Equal(TimeSpan.FromSeconds(3), backupRestore.PollInterval);
+        Assert.False(web.IsGuiEnabled);
+        Assert.Equal(18081, web.GuiPort);
         Assert.True(testHooks.Enabled);
         Assert.Equal("env-host", configuration["AllowedHosts"]);
         Assert.Equal("Debug", configuration["Serilog:MinimumLevel:Default"]);
@@ -234,6 +239,34 @@ public sealed class ChoboFoundationTests
         Assert.Equal("bearer", bearer.GetProperty("scheme").GetString());
         Assert.Contains(document.GetProperty("security").EnumerateArray(), requirement =>
             requirement.TryGetProperty("Bearer", out _));
+    }
+
+    [Fact]
+    public async Task Gui_is_served_anonymously_on_same_port_by_default_while_api_still_requires_token()
+    {
+        await using var factory = CreateFactory();
+        var anonymous = factory.CreateClient();
+
+        var gui = await anonymous.GetAsync("/");
+        var nestedRoute = await anonymous.GetAsync("/policies");
+        var api = await anonymous.GetAsync("/api/v1/users");
+
+        Assert.True(gui.IsSuccessStatusCode);
+        Assert.True(nestedRoute.IsSuccessStatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, api.StatusCode);
+    }
+
+    [Fact]
+    public async Task Gui_can_be_disabled_by_options()
+    {
+        await using var factory = CreateFactory(extraConfiguration: new Dictionary<string, string?>
+        {
+            ["Chobo:Web:IsGuiEnabled"] = "false"
+        });
+        var anonymous = factory.CreateClient();
+
+        Assert.Equal(HttpStatusCode.NotFound, (await anonymous.GetAsync("/")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.GetAsync("/api/v1/users")).StatusCode);
     }
 
     [Fact]
@@ -532,6 +565,33 @@ public sealed class ChoboFoundationTests
     }
 
     [Fact]
+    public async Task Controller_validation_rejects_invalid_request_shapes()
+    {
+        await using var factory = CreateFactory();
+        var client = AuthenticatedClient(factory);
+
+        var userResponse = await client.PostAsJsonAsync("/api/v1/users", new CreateUserRequest(" "), JsonOptions);
+        Assert.Equal(HttpStatusCode.BadRequest, userResponse.StatusCode);
+        Assert.Contains("Name is required", await userResponse.Content.ReadAsStringAsync());
+
+        var clusterResponse = await client.PostAsJsonAsync(
+            "/api/v1/clusters",
+            new UpsertClusterRequest("prod", ClusterMode.SingleInstance, [new UpsertAccessNodeRequest("", 70000)], null, null),
+            JsonOptions);
+        Assert.Equal(HttpStatusCode.BadRequest, clusterResponse.StatusCode);
+        var clusterError = await clusterResponse.Content.ReadAsStringAsync();
+        Assert.Contains("Host", clusterError);
+        Assert.Contains("Port", clusterError);
+
+        var scheduleResponse = await client.PostAsJsonAsync(
+            "/api/v1/schedules",
+            new UpsertScheduleRequest("nightly", Guid.NewGuid(), BackupType.Full, "0 0 99 * * ?", "UTC", true, null, null),
+            JsonOptions);
+        Assert.Equal(HttpStatusCode.BadRequest, scheduleResponse.StatusCode);
+        Assert.Contains("CronExpression is invalid", await scheduleResponse.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
     public async Task Application_logging_does_not_delete_chobo_state()
     {
         await using var factory = CreateFactory();
@@ -706,7 +766,7 @@ public sealed class ChoboFoundationTests
         Assert.DoesNotContain("\\u002B", rawAuditJson);
     }
 
-    private static WebApplicationFactory<Program> CreateFactory(string? dataDir = null, string adminUser = "admin", string accessToken = Token)
+    private static WebApplicationFactory<Program> CreateFactory(string? dataDir = null, string adminUser = "admin", string accessToken = Token, IReadOnlyDictionary<string, string?>? extraConfiguration = null)
     {
         dataDir ??= NewTestDataDirectory();
         return new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
@@ -715,12 +775,21 @@ public sealed class ChoboFoundationTests
             builder.ConfigureAppConfiguration((_, config) =>
             {
                 config.Sources.Clear();
-                config.AddInMemoryCollection(new Dictionary<string, string?>
+                var values = new Dictionary<string, string?>
                 {
                     ["Chobo:DataDirectory"] = dataDir,
                     ["Chobo:Init:AdminUser"] = adminUser,
                     ["Chobo:Init:AccessToken"] = accessToken
-                });
+                };
+                if (extraConfiguration is not null)
+                {
+                    foreach (var entry in extraConfiguration)
+                    {
+                        values[entry.Key] = entry.Value;
+                    }
+                }
+
+                config.AddInMemoryCollection(values);
             });
         });
     }

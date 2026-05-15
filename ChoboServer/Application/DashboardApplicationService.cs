@@ -180,6 +180,17 @@ internal static class QuartzCronProjection
         return GetOccurrences(matcher, timeZone, fromUtc, untilUtc, maxOccurrences: 500).ToList();
     }
 
+    public static IReadOnlyList<DateTimeOffset> GetOccurrences(string expression, TimeZoneInfo timeZone, DateTimeOffset fromUtc, DateTimeOffset untilUtc, int maxOccurrences)
+    {
+        var matcher = CreateMatcher(expression);
+        return GetOccurrences(matcher, timeZone, fromUtc, untilUtc, maxOccurrences).ToList();
+    }
+
+    public static void ValidateExpression(string expression)
+    {
+        _ = CreateMatcher(expression);
+    }
+
     public static DateTimeOffset? GetLatestOccurrence(string expression, TimeZoneInfo timeZone, DateTimeOffset fromUtc, DateTimeOffset untilUtc)
     {
         var matcher = CreateMatcher(expression);
@@ -200,14 +211,21 @@ internal static class QuartzCronProjection
             throw new FormatException("Quartz cron expression must include at least six fields.");
         }
 
-        return new CronMatcher(
-            CronField.Parse(parts[0], 0, 59),
-            CronField.Parse(parts[1], 0, 59),
-            CronField.Parse(parts[2], 0, 23),
-            CronField.Parse(parts[3], 1, 31),
-            CronField.Parse(parts[4], 1, 12, MonthNames),
-            CronField.Parse(parts[5], 0, 7, DayNames),
-            parts.Length > 6 ? CronField.Parse(parts[6], 1970, 2199) : CronField.Any(1970, 2199));
+        try
+        {
+            return new CronMatcher(
+                CronField.Parse(parts[0], 0, 59),
+                CronField.Parse(parts[1], 0, 59),
+                CronField.Parse(parts[2], 0, 23),
+                CronField.Parse(parts[3], 1, 31),
+                CronField.Parse(parts[4], 1, 12, MonthNames),
+                CronField.Parse(parts[5], 0, 7, DayNames),
+                parts.Length > 6 ? CronField.Parse(parts[6], 1970, 2199) : CronField.Any(1970, 2199));
+        }
+        catch (Exception ex) when (ex is FormatException or OverflowException or ArgumentException)
+        {
+            throw new FormatException($"Invalid Quartz cron expression '{expression}'.", ex);
+        }
     }
 
     private static IEnumerable<DateTimeOffset> GetOccurrences(CronMatcher matcher, TimeZoneInfo timeZone, DateTimeOffset fromUtc, DateTimeOffset untilUtc, int? maxOccurrences)
@@ -273,10 +291,15 @@ internal static class QuartzCronProjection
                 AddPart(values, part, min, max, aliases);
             }
 
+            if (values.Count == 0)
+            {
+                throw new FormatException($"Cron field '{value}' does not contain values between {min} and {max}.");
+            }
+
             return new CronField(values);
         }
 
-        public bool Matches(int value) => _values.Contains(value) || (value == 1 && _values.Contains(0));
+        public bool Matches(int value) => _values.Contains(value) || (value == 1 && (_values.Contains(0) || _values.Contains(7)));
 
         private static void AddPart(HashSet<int> values, string part, int min, int max, IReadOnlyDictionary<string, int>? aliases)
         {
@@ -294,6 +317,11 @@ internal static class QuartzCronProjection
             }
 
             var range = ParseRange(rangePart, min, max, aliases);
+            if (range.Start < min || range.End > max || range.Start > range.End)
+            {
+                throw new FormatException($"Cron range '{rangePart}' must be between {min} and {max}.");
+            }
+
             if (slashIndex >= 0 && range.Start == range.End && rangePart is not "*" and not "?")
             {
                 range = (range.Start, max);
