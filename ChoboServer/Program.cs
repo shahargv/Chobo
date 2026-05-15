@@ -30,10 +30,11 @@ builder.Services.AddChoboServer(builder.Configuration);
 var app = builder.Build();
 await app.Services.InitializeChoboDatabaseAsync(firstStartup);
 
-if (app.Environment.IsDevelopment())
+app.UseSwagger();
+app.UseSwaggerUI(options =>
 {
-    app.MapOpenApi();
-}
+    options.SwaggerEndpoint("/swagger/v1/swagger.json", "Chobo API v1");
+});
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" })).AllowAnonymous();
 app.UseMiddleware<TokenAuthMiddleware>();
