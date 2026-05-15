@@ -155,6 +155,8 @@
                 @{ Path = 'name'; Equals = 'crud-source-new' }
                 @{ Path = 'backupRestoreMaxDop'; Equals = '2' }
                 @{ Path = 'clickHouseClusterName'; Equals = '{source.ClusterName}' }
+                @{ Path = 'accessNodes[0].host'; Equals = 'source-cluster' }
+                @{ Path = 'accessNodes[0].port'; Equals = 9000 }
             )
             ExpectTextNotContains = @('rotated-secret')
         }
@@ -191,11 +193,13 @@
         @{
             Name = 'update-s3-target'
             Type = 'Cli'
-            Args = @('targets', 'update-s3', '--id', '{target.id}', '--name', 'crud-minio-new', '--endpoint', '{backupStore.Endpoint}', '--bucket', '{backupStore.Bucket}', '--path-prefix', 'crud-prefix', '--access-key', '{backupStore.AccessKey}', '--secret-key', '{backupStore.SecretKey}', '--force-path-style')
+            Args = @('targets', 'update-s3', '--id', '{target.id}', '--name', 'crud-minio-new', '--endpoint', '{backupStore.Endpoint}', '--bucket', '{backupStore.Bucket}', '--region', 'eu-west-1', '--path-prefix', 'crud-prefix', '--access-key', '{backupStore.AccessKey}', '--secret-key', '{backupStore.SecretKey}')
             ExpectJson = @(
                 @{ Path = 'id'; Equals = '{target.id}' }
                 @{ Path = 'name'; Equals = 'crud-minio-new' }
+                @{ Path = 's3.region'; Equals = 'eu-west-1' }
                 @{ Path = 's3.pathPrefix'; Equals = 'crud-prefix' }
+                @{ Path = 's3.forcePathStyle'; Equals = $false }
             )
             ExpectTextNotContains = @('{backupStore.SecretKey}')
         }
@@ -271,6 +275,8 @@
                 @{ Path = 'id'; Equals = '{schedule.id}' }
                 @{ Path = 'name'; Equals = 'crud-schedule-new' }
                 @{ Path = 'backupType'; Equals = 'Incremental' }
+                @{ Path = 'cronExpression'; Equals = '0 0 */6 * * ?' }
+                @{ Path = 'missedRunGracePeriod'; Equals = '00:10:00' }
                 @{ Path = 'isEnabled'; Equals = $false }
                 @{ Path = 'description'; Equals = 'updated schedule' }
             )
