@@ -82,6 +82,47 @@ public sealed class ClusterApplicationService(
         return current;
     }
 
+    public async Task<ClusterDto?> UpdateCredentialsAsync(Guid id, UpdateClusterCredentialsRequest request)
+    {
+        var cluster = await clusters.FindActiveAsync(id);
+        if (cluster is null)
+        {
+            return null;
+        }
+
+        var previous = new
+        {
+            hasUserName = !string.IsNullOrWhiteSpace(cluster.EncryptedUserName),
+            hasPassword = !string.IsNullOrWhiteSpace(cluster.EncryptedPassword)
+        };
+        if (request.UserName is not null)
+        {
+            var userName = await protector.EncryptAsync(request.UserName);
+            cluster.EncryptedUserName = userName?.Ciphertext;
+            cluster.EncryptedUserNameKeyId = userName?.KeyId;
+        }
+        if (request.Password is not null)
+        {
+            var password = await protector.EncryptAsync(request.Password);
+            cluster.EncryptedPassword = password?.Ciphertext;
+            cluster.EncryptedPasswordKeyId = password?.KeyId;
+        }
+
+        cluster.UpdatedAt = DateTimeOffset.UtcNow;
+        await unitOfWork.SaveChangesAsync();
+        var current = ToDto(cluster);
+        await audit.RecordAsync("update-credentials", AuditEntityType.Cluster, id.ToString(), new
+        {
+            previous,
+            current = new
+            {
+                hasUserName = !string.IsNullOrWhiteSpace(cluster.EncryptedUserName),
+                hasPassword = !string.IsNullOrWhiteSpace(cluster.EncryptedPassword)
+            }
+        });
+        return current;
+    }
+
     public async Task<bool> RemoveAsync(Guid id)
     {
         var cluster = await clusters.FindAsync(id);

@@ -42,6 +42,8 @@ When `CHOBO_APPSETTINGS_PATH` is set, Chobo also adds standard environment varia
 
 `Chobo:Init:AdminUser` and `Chobo:Init:AccessToken` bootstrap the first user and access token when the database is initialized.
 
+If the data directory contains the `_initialized` marker but `chobo.db` is missing, Chobo treats this as a local SQLite loss scenario. It starts with a fresh SQLite database and fresh local encrypted credential state, writes a warning log, and bootstraps the configured initial admin/token again. Backup metadata is not imported automatically; add an S3 target and run `ChoboCli backups recover` to rebuild backup records from storage manifests.
+
 Environment aliases:
 
 ```text

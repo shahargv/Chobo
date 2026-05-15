@@ -111,6 +111,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ScheduleApplicationService>();
         services.AddScoped<DashboardApplicationService>();
         services.AddScoped<BackupApplicationService>();
+        services.AddScoped<IBackupStorageManifestService, BackupStorageManifestService>();
         services.AddScoped<RestoreApplicationService>();
         services.AddScoped<BackupRunnerService>();
         services.AddScoped<RestoreRunnerService>();
@@ -127,7 +128,7 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
-    public static async Task InitializeChoboDatabaseAsync(this IServiceProvider services, bool firstStartup)
+    public static async Task InitializeChoboDatabaseAsync(this IServiceProvider services, bool firstStartup, bool missingDatabaseAfterInitialized = false)
     {
         using var scope = services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
@@ -140,12 +141,11 @@ public static class ServiceCollectionExtensions
         var dataDirectory = ChoboPaths.GetDataDirectory(storage.DataDirectory);
         var markerPath = Path.Combine(dataDirectory, "_initialized");
         var hasUsers = await db.Users.AnyAsync();
-        if (File.Exists(markerPath) && !hasUsers)
+        if (firstStartup || missingDatabaseAfterInitialized || (!File.Exists(markerPath) && !hasUsers))
         {
-            throw new InvalidOperationException($"Chobo data directory is marked initialized but no users exist in SQLite database at {Path.Combine(dataDirectory, "chobo.db")}.");
+            await bootstrap.BootstrapFirstStartupAsync();
         }
-
-        if (firstStartup || (!File.Exists(markerPath) && !hasUsers))
+        else if (File.Exists(markerPath) && !hasUsers)
         {
             await bootstrap.BootstrapFirstStartupAsync();
         }

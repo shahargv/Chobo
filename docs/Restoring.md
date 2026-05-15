@@ -159,3 +159,26 @@ Useful audit actions include:
 
 Restore records also expose `failureReason`, and each table or shard can expose its own `error`.
 
+## Recovering Backup Metadata From Storage
+
+If the local SQLite database is deleted or corrupted, Chobo starts with a fresh SQLite database and fresh local AES key when the existing data directory marker is present but `chobo.db` is missing. Startup writes a warning log. Chobo does not automatically scan storage.
+
+Recovery flow:
+
+```powershell
+ChoboCli server auth --server-url http://localhost:8080 --access-token <fresh-init-token>
+ChoboCli targets add-s3 --name recovery-s3 --endpoint https://s3.example.com --bucket chobo-backups --path-prefix prod --access-key <key> --secret-key <secret>
+ChoboCli backups recover --target-id <new-target-id> --scan-root backups
+ChoboCli clusters update-credentials --id <recovered-cluster-id> --username <clickhouse-user> --password <clickhouse-password>
+```
+
+To recover from one known backup path instead of scanning:
+
+```powershell
+ChoboCli backups recover --target-id <new-target-id> --backup-path backups/full/policy-.../db/table/.../<backup-id>
+```
+
+Recovery preserves manifest IDs and recreates missing backup targets, source clusters, policies, schedules, schema definitions, backup runs, tables, and shards. The recovered backup target receives the S3 credentials from the target used for scanning. ClickHouse credentials are not stored in manifests, so update recovered cluster credentials before testing connections or running new work against that cluster.
+
+Failed backups are imported when their manifests still exist in storage. They are useful for diagnostics and lifecycle decisions, but normal restore initiation remains limited to succeeded or partially succeeded backups.
+

@@ -29,6 +29,13 @@ public sealed class ClustersController(ClusterApplicationService clusters) : Con
         catch (ArgumentException ex) { return BadRequest(new ErrorResponse(ex.Message)); }
     }
 
+    [HttpPost("{id:guid}/credentials")]
+    public async Task<ActionResult<ClusterDto>> UpdateCredentials(Guid id, UpdateClusterCredentialsRequest request)
+    {
+        var result = await clusters.UpdateCredentialsAsync(id, request);
+        return result is null ? NotFound() : result;
+    }
+
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Remove(Guid id)
     {

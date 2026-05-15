@@ -1,4 +1,5 @@
 using Chobo.Contracts;
+using ChoboServer;
 using ChoboServer.Application;
 using ChoboServer.Data;
 using ChoboServer.Options;
@@ -15,6 +16,7 @@ public sealed class TestHooksController(
     ChoboDbContext db,
     IBackupRestoreQueues queues,
     IOptions<ChoboTestHooksOptions> options,
+    IOptions<ChoboStorageOptions> storageOptions,
     ITestHookCoordinator testHooks) : ControllerBase
 {
     [HttpPost("seed-missing-backup-operation")]
@@ -127,5 +129,30 @@ public sealed class TestHooksController(
             Environment.Exit(137);
         });
         return Ok(new { crashing = true });
+    }
+
+    [HttpPost("delete-sqlite-and-crash")]
+    public IActionResult DeleteSqliteAndCrash()
+    {
+        if (!options.Value.Enabled) return NotFound();
+        var dataDirectory = ChoboPaths.GetDataDirectory(storageOptions.Value.DataDirectory);
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(100);
+            foreach (var path in Directory.EnumerateFiles(dataDirectory, "chobo.db*"))
+            {
+                try
+                {
+                    System.IO.File.Delete(path);
+                }
+                catch
+                {
+                    // Test-only best effort before crashing the process.
+                }
+            }
+
+            Environment.Exit(137);
+        });
+        return Ok(new { deletingSqlite = true, crashing = true });
     }
 }
