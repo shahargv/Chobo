@@ -182,7 +182,7 @@ textarea { min-height: 220px; resize: vertical; font-family: ui-monospace, SFMon
 .checkbox-row input { width: 16px; min-height: 16px; }
 .row-checkbox { width: 16px; min-height: 16px; }
 
-.selector-builder, .schedule-editor, .retention-editor, .restore-mapping-editor, .restore-shards { display: grid; gap: 12px; }
+.selector-builder, .schedule-editor, .retention-editor, .restore-mapping-editor, .restore-shards, .restore-table-options { display: grid; gap: 12px; }
 .field-wide { display: grid; gap: 6px; grid-column: span 2; }
 .segmented { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .rule-row {
@@ -221,6 +221,7 @@ pre, .token-box {
   border-radius: 8px;
   background: var(--surface-muted);
 }
+.restore-table-options { gap: 6px; min-width: 180px; }
 
 .summary-row { display: flex; gap: 10px; align-items: start; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-muted); }
 .summary-row.valid { border-color: rgba(20, 122, 82, .45); background: rgba(20, 122, 82, .06); }

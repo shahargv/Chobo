@@ -4194,6 +4194,15 @@
             "type": "string",
             "nullable": true
           },
+          "append": {
+            "type": "boolean"
+          },
+          "allowSchemaMismatch": {
+            "type": "boolean"
+          },
+          "schemaOnly": {
+            "type": "boolean"
+          },
           "status": {
             "$ref": "#/components/schemas/RestoreTableStatus"
           },
@@ -4246,6 +4255,18 @@
           },
           "targetTable": {
             "type": "string",
+            "nullable": true
+          },
+          "append": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "allowSchemaMismatch": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "schemaOnly": {
+            "type": "boolean",
             "nullable": true
           }
         },

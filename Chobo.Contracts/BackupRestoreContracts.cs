@@ -133,6 +133,9 @@ public sealed record RestoreTableDto(
     string SourceTable,
     string TargetDatabase,
     string TargetTable,
+    bool Append,
+    bool AllowSchemaMismatch,
+    bool SchemaOnly,
     RestoreTableStatus Status,
     string? ClickHouseOperationId,
     string? ClickHouseStatus,
@@ -183,4 +186,7 @@ public sealed record InitiateRestoreRequest(
 public sealed record RestoreTableMappingRequest(
     Guid BackupTableId,
     string? TargetDatabase,
-    string? TargetTable);
+    string? TargetTable,
+    bool? Append = null,
+    bool? AllowSchemaMismatch = null,
+    bool? SchemaOnly = null);

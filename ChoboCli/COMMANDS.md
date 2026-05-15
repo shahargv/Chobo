@@ -178,6 +178,7 @@ ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-i
 ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-id> --layout redistribute
 ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-id> --layout single-node --source-shard 1
 ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-id> --layout preserve --target-shard 2
+ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-id> --table-mappings-json '[{"backupTableId":"<table-id>","targetDatabase":"restore","targetTable":"orders_restore","schemaOnly":false,"append":true,"allowSchemaMismatch":true}]'
 ChoboCli restores list
 ChoboCli restores show --id <restore-id>
 ChoboCli restores wait --id <restore-id> --timeout-seconds 300 --poll-seconds 2
