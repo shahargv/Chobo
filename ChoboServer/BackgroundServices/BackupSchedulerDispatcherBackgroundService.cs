@@ -95,9 +95,15 @@ public sealed class BackupSchedulerDispatcherBackgroundService(
             {
                 latestOccurrence = QuartzCronProjection.GetLatestOccurrence(schedule.CronExpression, timeZone, windowStart, now);
             }
-            catch (FormatException)
+            catch (FormatException ex)
             {
-                await audit.RecordAsync("schedule-skip-invalid-cron", AuditEntityType.BackupSchedule, schedule.Id.ToString(), new { schedule.CronExpression });
+                await audit.RecordAsync("schedule-skip-invalid-cron", AuditEntityType.BackupSchedule, schedule.Id.ToString(), new { schedule.CronExpression, error = ex.Message });
+                _logger.Warning(
+                    ex,
+                    "Skipping schedule {ScheduleId} ({ScheduleName}) because cron expression {CronExpression} is invalid.",
+                    schedule.Id,
+                    schedule.Name,
+                    schedule.CronExpression);
                 continue;
             }
 

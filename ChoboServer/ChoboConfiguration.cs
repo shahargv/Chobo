@@ -43,6 +43,8 @@ public static class ChoboConfiguration
         AddAlias(values, "CHOBO_BACKUP_RESTORE_SCHEDULER_INTERVAL", "Chobo:BackupRestore:SchedulerInterval");
         AddAlias(values, "CHOBO_BACKUP_RESTORE_SCHEDULER_MISSED_RUN_GRACE_PERIOD", "Chobo:BackupRestore:SchedulerMissedRunGracePeriod");
         AddAlias(values, "CHOBO_BACKUP_RESTORE_POLL_INTERVAL", "Chobo:BackupRestore:PollInterval");
+        AddAlias(values, "CHOBO_WEB_IS_GUI_ENABLED", "Chobo:Web:IsGuiEnabled");
+        AddAlias(values, "CHOBO_WEB_GUI_PORT", "Chobo:Web:GuiPort");
         AddAlias(values, "CHOBO_TEST_HOOKS_ENABLED", "Chobo:TestHooks:Enabled");
         if (values.Count > 0)
         {
