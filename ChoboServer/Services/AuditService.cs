@@ -43,6 +43,7 @@ public enum AuditEntityType
     RestoreTable,
     RestoreTableShard,
     Server,
+    SqliteSelfBackup,
     User
 }
 
@@ -68,6 +69,7 @@ public static class AuditEntityTypes
             AuditEntityType.RestoreTable => "restore-table",
             AuditEntityType.RestoreTableShard => "restore-table-shard",
             AuditEntityType.Server => "server",
+            AuditEntityType.SqliteSelfBackup => "sqlite-self-backup",
             AuditEntityType.User => "user",
             _ => throw new ArgumentOutOfRangeException(nameof(entityType), entityType, "Unsupported audit entity type.")
         };

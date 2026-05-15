@@ -11,6 +11,7 @@ using ChoboServer.Data;
 using ChoboServer.Options;
 using ChoboServer.Repositories;
 using ChoboServer.Services;
+using Microsoft.Data.Sqlite;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
@@ -39,6 +40,10 @@ public sealed class ChoboFoundationTests
             ["CHOBO_DATA_RETENTION_INTERVAL"] = "00:10:00",
             ["Chobo__DataRetention__LogsBefore"] = "2026-05-14T10:00:00+00:00",
             ["CHOBO_DATA_RETENTION_AUDITS_BEFORE"] = "2026-05-14T11:00:00+00:00",
+            ["CHOBO_SQLITE_SELF_BACKUP_ENABLED"] = "true",
+            ["CHOBO_SQLITE_SELF_BACKUP_DIRECTORY"] = "env-sqlite-backups",
+            ["CHOBO_SQLITE_SELF_BACKUP_INTERVAL"] = "12:00:00",
+            ["CHOBO_SQLITE_SELF_BACKUP_POLL_INTERVAL"] = "00:04:00",
             ["Chobo__BackupRestore__MaxDop"] = "7",
             ["CHOBO_BACKUP_RESTORE_QUEUE_CAPACITY"] = "33",
             ["CHOBO_BACKUP_RESTORE_SCHEDULER_INTERVAL"] = "00:02:00",
@@ -57,6 +62,7 @@ public sealed class ChoboFoundationTests
         var security = configuration.GetSection("Chobo").Get<ChoboSecurityOptions>()!;
         var init = configuration.GetSection("Chobo:Init").Get<ChoboInitOptions>()!;
         var retention = configuration.GetSection("Chobo:DataRetention").Get<ChoboDataRetentionOptions>()!;
+        var selfBackup = configuration.GetSection("Chobo:SqliteSelfBackup").Get<ChoboSqliteSelfBackupOptions>()!;
         var backupRestore = configuration.GetSection("Chobo:BackupRestore").Get<ChoboBackupRestoreOptions>()!;
         var testHooks = configuration.GetSection("Chobo:TestHooks").Get<ChoboTestHooksOptions>()!;
 
@@ -67,6 +73,10 @@ public sealed class ChoboFoundationTests
         Assert.Equal(TimeSpan.FromMinutes(10), retention.Interval);
         Assert.Equal(DateTimeOffset.Parse("2026-05-14T10:00:00+00:00"), retention.LogsBefore);
         Assert.Equal(DateTimeOffset.Parse("2026-05-14T11:00:00+00:00"), retention.AuditsBefore);
+        Assert.True(selfBackup.Enabled);
+        Assert.Equal("env-sqlite-backups", selfBackup.Directory);
+        Assert.Equal(TimeSpan.FromHours(12), selfBackup.BackupInterval);
+        Assert.Equal(TimeSpan.FromMinutes(4), selfBackup.PollInterval);
         Assert.Equal(7, backupRestore.MaxDop);
         Assert.Equal(33, backupRestore.QueueCapacity);
         Assert.Equal(TimeSpan.FromMinutes(2), backupRestore.SchedulerInterval);
@@ -600,6 +610,75 @@ public sealed class ChoboFoundationTests
     }
 
     [Fact]
+    public async Task Sqlite_self_backup_background_service_creates_timestamped_copy_and_audit()
+    {
+        var dataDir = NewTestDataDirectory();
+        var backupDir = Path.Combine(dataDir, "self-backups");
+        await using var factory = CreateFactory(dataDir);
+        _ = AuthenticatedClient(factory);
+        var time = new MutableTimeProvider(DateTimeOffset.Parse("2026-05-15T10:11:12.123+00:00"));
+        var service = new SqliteSelfBackupBackgroundService(
+            factory.Services,
+            Options.Create(new ChoboSqliteSelfBackupOptions
+            {
+                Enabled = true,
+                Directory = backupDir,
+                BackupInterval = TimeSpan.FromDays(1)
+            }),
+            Options.Create(new ChoboStorageOptions { DataDirectory = dataDir }),
+            time,
+            Serilog.Core.Logger.None);
+
+        var backupPath = await service.RunOnceAsync();
+        var secondBackupPath = await service.RunOnceAsync();
+
+        Assert.Equal(Path.Combine(backupDir, "chobo-20260515-101112123Z.db"), backupPath);
+        Assert.Null(secondBackupPath);
+        Assert.True(File.Exists(backupPath));
+        Assert.Equal(1, await CountRowsAsync(backupPath!, "Users"));
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+        var state = await db.SqliteSelfBackupStates.SingleAsync();
+        Assert.Equal(time.GetUtcNow(), state.LastBackupAt);
+        Assert.Equal(backupPath, state.LastBackupPath);
+        Assert.Null(state.LastError);
+        Assert.True(await db.AuditEntries.AnyAsync(x => x.Action == "sqlite-self-backup-created" && x.EntityType == "sqlite-self-backup"));
+    }
+
+    [Fact]
+    public async Task Sqlite_self_backup_background_service_records_failure_state_and_audit()
+    {
+        var dataDir = NewTestDataDirectory();
+        var invalidBackupDirectory = Path.Combine(dataDir, "not-a-directory");
+        await using var factory = CreateFactory(dataDir);
+        _ = AuthenticatedClient(factory);
+        Directory.CreateDirectory(dataDir);
+        await File.WriteAllTextAsync(invalidBackupDirectory, "this blocks directory creation");
+        var service = new SqliteSelfBackupBackgroundService(
+            factory.Services,
+            Options.Create(new ChoboSqliteSelfBackupOptions
+            {
+                Enabled = true,
+                Directory = invalidBackupDirectory,
+                BackupInterval = TimeSpan.FromDays(1)
+            }),
+            Options.Create(new ChoboStorageOptions { DataDirectory = dataDir }),
+            new MutableTimeProvider(DateTimeOffset.Parse("2026-05-15T10:11:12.123+00:00")),
+            Serilog.Core.Logger.None);
+
+        await Assert.ThrowsAsync<IOException>(() => service.RunOnceAsync());
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+        var state = await db.SqliteSelfBackupStates.SingleAsync();
+        Assert.Null(state.LastBackupAt);
+        Assert.NotNull(state.LastAttemptAt);
+        Assert.Contains("not-a-directory", state.LastError);
+        Assert.True(await db.AuditEntries.AnyAsync(x => x.Action == "sqlite-self-backup-failed" && x.EntityType == "sqlite-self-backup" && x.Details.Contains("not-a-directory")));
+    }
+
+    [Fact]
     public async Task Sqlite_time_columns_are_stored_as_unix_millisecond_integers()
     {
         await using var factory = CreateFactory();
@@ -714,6 +793,27 @@ public sealed class ChoboFoundationTests
         }
 
         throw new InvalidOperationException($"Column {tableName}.{columnName} was not found.");
+    }
+
+    private static async Task<int> CountRowsAsync(string dbPath, string tableName)
+    {
+        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadOnly
+        }.ToString());
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT COUNT(*) FROM {tableName};";
+        return Convert.ToInt32(await command.ExecuteScalarAsync());
+    }
+
+    private sealed class MutableTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public DateTimeOffset UtcNow { get; set; } = utcNow;
+
+        public override DateTimeOffset GetUtcNow() =>
+            UtcNow;
     }
 
     private sealed class EnvironmentVariableScope : IDisposable
