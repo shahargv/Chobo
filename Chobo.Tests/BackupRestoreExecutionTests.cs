@@ -9,6 +9,8 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using System.Text.Encodings.Web;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Chobo.Tests;
 
@@ -870,6 +872,8 @@ public sealed class BackupRestoreExecutionTests
         Assert.NotNull(backup.CompletedAt);
         var backupDto = BackupRestoreMappingAccessor.ToDto(backup);
         Assert.Equal(backup.CompletedAt, backupDto.EndedAt);
+        var backupJson = SerializeRunDto(backupDto);
+        AssertRunJsonUsesEndedAt(backupJson);
         var audit = await fixture.Db.AuditEntries.SingleAsync(x => x.Action == "failed" && x.EntityType == "backup" && x.EntityId == backupId.ToString());
         Assert.Contains("Source ClickHouse instance is not reachable", audit.Details);
     }
@@ -952,6 +956,8 @@ public sealed class BackupRestoreExecutionTests
         Assert.NotNull(completed.CompletedAt);
         var restoreDto = BackupRestoreMappingAccessor.ToDto(completed);
         Assert.Equal(completed.CompletedAt, restoreDto.EndedAt);
+        var restoreJson = SerializeRunDto(restoreDto);
+        AssertRunJsonUsesEndedAt(restoreJson);
         Assert.Contains("Destination ClickHouse instance is not reachable", completed.FailureReason);
         Assert.Contains("sales.orders", completed.FailureReason);
         var audit = await fixture.Db.AuditEntries.SingleAsync(x => x.Action == "failed" && x.EntityType == "restore" && x.EntityId == restore.Id.ToString());
@@ -1004,6 +1010,25 @@ public sealed class BackupRestoreExecutionTests
 
     private static ClickHouseTableInfo Table(string database, string table, string engine, string columnsJson = "[]", string? schemaHash = null) =>
         new(database, table, engine, $"CREATE TABLE {database}.{table} (id UInt64) ENGINE = {engine} ORDER BY id", columnsJson, schemaHash ?? $"{database}.{table}.{engine}.{columnsJson}");
+
+    private static string SerializeRunDto<T>(T dto)
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            WriteIndented = true
+        };
+        options.Converters.Add(new JsonStringEnumConverter());
+        return JsonSerializer.Serialize(dto, options);
+    }
+
+    private static void AssertRunJsonUsesEndedAt(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        Assert.True(document.RootElement.TryGetProperty("endedAt", out var endedAt));
+        Assert.NotEqual(JsonValueKind.Null, endedAt.ValueKind);
+        Assert.False(document.RootElement.TryGetProperty("completedAt", out _));
+    }
 
     private sealed record SeedBackupTable(string Database, string Table, BackupTableStatus Status, string? OperationId, bool DataBackedUp);
 
