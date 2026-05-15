@@ -100,7 +100,8 @@ public sealed record ManualBackupRequest(
     Guid TargetId,
     PolicySelector Selector,
     BackupType BackupType = BackupType.Full,
-    Guid? PolicyId = null);
+    Guid? PolicyId = null,
+    bool SchemaOnly = false);
 
 public sealed record BackupListRequest(Guid? PolicyId, string? ClusterName, string? TableName, BackupRunStatus? Status);
 

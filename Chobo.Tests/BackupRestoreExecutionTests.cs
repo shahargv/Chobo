@@ -160,6 +160,45 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Backup_stores_schema_even_when_data_backup_fails()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+        fixture.ClickHouse.NextBackupStatus = "BACKUP_FAILED";
+        fixture.ClickHouse.NextBackupError = "simulated data backup failure";
+
+        var backupId = await fixture.CreateManualBackupAsync();
+        await fixture.RunBackupAsync(backupId);
+
+        fixture.Db.ChangeTracker.Clear();
+        var table = await fixture.Db.BackupTables.Include(x => x.SchemaDefinition).SingleAsync(x => x.BackupId == backupId);
+        Assert.NotEqual(Guid.Empty, table.SchemaDefinitionId);
+        Assert.NotNull(table.SchemaDefinition);
+        Assert.Equal("CREATE TABLE sales.orders (id UInt64) ENGINE = MergeTree ORDER BY id", table.SchemaDefinition!.CreateTableSql);
+        Assert.Equal(BackupTableStatus.Failed, table.Status);
+    }
+
+    [Fact]
+    public async Task Manual_schema_only_backup_stores_schema_without_starting_data_backup()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+
+        var backupId = await fixture.CreateManualBackupAsync(schemaOnly: true);
+        await fixture.RunBackupAsync(backupId);
+
+        fixture.Db.ChangeTracker.Clear();
+        var backup = await fixture.Db.Backups.Include(x => x.Tables).ThenInclude(x => x.SchemaDefinition).SingleAsync(x => x.Id == backupId);
+        Assert.Equal(BackupRunStatus.Succeeded, backup.Status);
+        var table = Assert.Single(backup.Tables);
+        Assert.False(table.DataBackedUp);
+        Assert.Equal(BackupTableStatus.Succeeded, table.Status);
+        Assert.Equal("SCHEMA_ONLY", table.ClickHouseStatus);
+        Assert.NotNull(table.SchemaDefinition);
+        Assert.Empty(fixture.ClickHouse.BackupStartTables);
+    }
+
+    [Fact]
     public async Task Incremental_backup_uses_parent_full_table_and_falls_back_to_full_for_new_table()
     {
         await using var fixture = await TestFixture.CreateAsync();
@@ -1542,7 +1581,7 @@ public sealed class BackupRestoreExecutionTests
             return new TestFixture(connection, services, db, fake, storageDeletion, sourceClusterId, targetClusterId, targetId);
         }
 
-        public async Task<Guid> CreateManualBackupAsync(PolicySelector? selector = null, string actorName = "system", Guid? actorUserId = null)
+        public async Task<Guid> CreateManualBackupAsync(PolicySelector? selector = null, string actorName = "system", Guid? actorUserId = null, bool schemaOnly = false)
         {
             var actor = Services.GetRequiredService<ActorContext>();
             actor.ActorName = actorName;
@@ -1555,7 +1594,7 @@ public sealed class BackupRestoreExecutionTests
                 TargetId = TargetId,
                 RequestedByName = actorName,
                 RequestedByUserId = actorUserId,
-                ManualRequestJson = System.Text.Json.JsonSerializer.Serialize(new ManualBackupRequest(SourceClusterId, TargetId, selector ?? PolicySelector.Empty), new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)
+                ManualRequestJson = System.Text.Json.JsonSerializer.Serialize(new ManualBackupRequest(SourceClusterId, TargetId, selector ?? PolicySelector.Empty, SchemaOnly: schemaOnly), new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)
                 {
                     Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
                 })
