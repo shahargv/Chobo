@@ -8,7 +8,7 @@ public sealed class TokenAuthMiddleware(RequestDelegate next)
     {
         var log = logger.ForContext<TokenAuthMiddleware>();
         if (context.Request.Path.StartsWithSegments("/health") ||
-            context.Request.Path.StartsWithSegments("/openapi"))
+            context.Request.Path.StartsWithSegments("/swagger"))
         {
             await next(context);
             return;

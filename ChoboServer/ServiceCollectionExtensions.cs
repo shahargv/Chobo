@@ -7,6 +7,7 @@ using ChoboServer.Services;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Microsoft.OpenApi;
 using Serilog;
 using System.Text.Encodings.Web;
 using System.Text.Json.Serialization;
@@ -33,7 +34,30 @@ public static class ServiceCollectionExtensions
             options.JsonSerializerOptions.WriteIndented = true;
             options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
         });
-        services.AddOpenApi();
+        services.AddEndpointsApiExplorer();
+        services.AddSwaggerGen(options =>
+        {
+            options.SwaggerDoc("v1", new OpenApiInfo
+            {
+                Title = "Chobo API",
+                Version = Chobo.Contracts.ChoboApi.ApiVersion.ToString()
+            });
+
+            options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+            {
+                Description = "Paste a Chobo access token. Swagger UI sends it as a Bearer token.",
+                Name = "Authorization",
+                In = ParameterLocation.Header,
+                Type = SecuritySchemeType.Http,
+                Scheme = "bearer",
+                BearerFormat = "Opaque"
+            });
+
+            options.AddSecurityRequirement(document => new OpenApiSecurityRequirement
+            {
+                [new OpenApiSecuritySchemeReference("Bearer", document, null)] = []
+            });
+        });
         services.AddSingleton<Serilog.ILogger>(serviceProvider =>
         {
             var storage = serviceProvider.GetRequiredService<IOptions<ChoboStorageOptions>>().Value;

@@ -204,6 +204,47 @@ public sealed class ChoboFoundationTests
     }
 
     [Fact]
+    public async Task Swagger_ui_exposes_bearer_token_authentication_without_opening_api_access()
+    {
+        await using var factory = CreateFactory();
+        var anonymous = factory.CreateClient();
+
+        var ui = await anonymous.GetAsync("/swagger/index.html");
+        var document = await anonymous.GetFromJsonAsync<JsonElement>("/swagger/v1/swagger.json", JsonOptions);
+        var users = await anonymous.GetAsync("/api/v1/users");
+
+        Assert.True(ui.IsSuccessStatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, users.StatusCode);
+        var schemes = document
+            .GetProperty("components")
+            .GetProperty("securitySchemes");
+        Assert.True(schemes.TryGetProperty("Bearer", out var bearer));
+        Assert.Equal("http", bearer.GetProperty("type").GetString());
+        Assert.Equal("bearer", bearer.GetProperty("scheme").GetString());
+        Assert.Contains(document.GetProperty("security").EnumerateArray(), requirement =>
+            requirement.TryGetProperty("Bearer", out _));
+    }
+
+    [Fact]
+    public void S3_target_address_uses_configured_path_style_mode()
+    {
+        var target = new BackupTargetEntity
+        {
+            Endpoint = "https://s3.example.com",
+            Bucket = "backup-bucket",
+            PathPrefix = "prod/backups",
+            ForcePathStyle = true
+        };
+
+        var pathStyle = S3TargetUrlBuilder.BuildObjectUrl(target, "db/table/file name.bin");
+        target.ForcePathStyle = false;
+        var virtualHost = S3TargetUrlBuilder.BuildObjectUrl(target, "db/table/file name.bin");
+
+        Assert.Equal("https://s3.example.com/backup-bucket/prod/backups/db/table/file%20name.bin", pathStyle.AbsoluteUri);
+        Assert.Equal("https://backup-bucket.s3.example.com/prod/backups/db/table/file%20name.bin", virtualHost.AbsoluteUri);
+    }
+
+    [Fact]
     public async Task Cluster_credentials_are_encrypted_and_hidden_from_api()
     {
         var dataDir = NewTestDataDirectory();

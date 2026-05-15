@@ -150,10 +150,10 @@ dotnet run --project .\ChoboCli\ChoboCli.csproj -- clusters add --name debug-clu
 Add MinIO as the backup target:
 
 ```powershell
-dotnet run --project .\ChoboCli\ChoboCli.csproj -- targets add-s3 --name debug-minio --endpoint http://minio:9000 --bucket data-bucket --access-key chobo-access-key --secret-key chobo-secret-key --force-path-style
+dotnet run --project .\ChoboCli\ChoboCli.csproj -- targets add-s3 --name debug-minio --endpoint http://host.docker.internal:9000 --bucket data-bucket --access-key chobo-access-key --secret-key chobo-secret-key --force-path-style
 ```
 
-Use `http://minio:9000` for the Chobo backup target because ClickHouse performs the backup and restore S3 calls from inside the Docker network. Use `http://localhost:9000` only for host-side tools that talk directly to MinIO.
+When ChoboServer is running on the host, use `http://host.docker.internal:9000` for the Chobo backup target. ChoboServer uses the target endpoint for connection tests and cleanup, while ClickHouse containers use it for backup and restore S3 calls; `host.docker.internal` is reachable from both sides in the local debug setup. Use `http://localhost:9000` only for host-side tools that talk directly to MinIO, and `http://minio:9000` only from containers on the `chobo-debug` Docker network.
 
 ## Debug Sharded Backup And Restore
 
