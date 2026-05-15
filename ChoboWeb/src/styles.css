@@ -180,8 +180,9 @@ input, select, textarea {
 textarea { min-height: 220px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .checkbox-row { display: inline-flex; grid-template-columns: none; align-items: center; gap: 8px; color: var(--text); }
 .checkbox-row input { width: 16px; min-height: 16px; }
+.row-checkbox { width: 16px; min-height: 16px; }
 
-.selector-builder, .schedule-editor, .retention-editor { display: grid; gap: 12px; }
+.selector-builder, .schedule-editor, .retention-editor, .restore-mapping-editor { display: grid; gap: 12px; }
 .field-wide { display: grid; gap: 6px; grid-column: span 2; }
 .segmented { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .rule-row {

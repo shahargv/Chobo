@@ -174,4 +174,11 @@ public sealed record InitiateRestoreRequest(
     bool AllowSchemaMismatch,
     RestoreLayout? Layout = null,
     int? SourceShard = null,
-    int? TargetShard = null);
+    int? TargetShard = null,
+    IReadOnlyList<RestoreTableMappingRequest>? Tables = null,
+    bool SchemaOnly = false);
+
+public sealed record RestoreTableMappingRequest(
+    Guid BackupTableId,
+    string? TargetDatabase,
+    string? TargetTable);

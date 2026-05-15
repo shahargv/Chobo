@@ -241,9 +241,30 @@ public sealed class InitiateRestoreRequestValidator : AbstractValidator<Initiate
         RuleFor(x => x.Layout).IsInEnum().When(x => x.Layout is not null);
         RuleFor(x => x.SourceShard).GreaterThan(0).When(x => x.SourceShard is not null);
         RuleFor(x => x.TargetShard).GreaterThan(0).When(x => x.TargetShard is not null);
+        RuleFor(x => x.Tables).Must(x => x is null || x.Count > 0).WithMessage("Tables must not be empty when provided.");
+        RuleForEach(x => x.Tables).SetValidator(new RestoreTableMappingRequestValidator()).When(x => x.Tables is not null);
         RuleFor(x => x)
             .Must(x => string.IsNullOrWhiteSpace(x.TargetDatabase) == string.IsNullOrWhiteSpace(x.TargetTable))
             .WithMessage("TargetDatabase and TargetTable must be provided together.");
+        RuleFor(x => x)
+            .Must(x => x.Tables is null || x.Tables.Select(t => t.BackupTableId).Distinct().Count() == x.Tables.Count)
+            .WithMessage("Restore table mappings must not contain duplicate backup table ids.");
+        RuleFor(x => x)
+            .Must(x => x.Tables is null || (string.IsNullOrWhiteSpace(x.Database) && string.IsNullOrWhiteSpace(x.Table) && string.IsNullOrWhiteSpace(x.TargetDatabase) && string.IsNullOrWhiteSpace(x.TargetTable)))
+            .WithMessage("Database, Table, TargetDatabase, and TargetTable are not supported when explicit table mappings are provided.");
+    }
+}
+
+public sealed class RestoreTableMappingRequestValidator : AbstractValidator<RestoreTableMappingRequest>
+{
+    public RestoreTableMappingRequestValidator()
+    {
+        RuleFor(x => x.BackupTableId).NotEmpty();
+        RuleFor(x => x.TargetDatabase).MaximumLength(512).When(x => x.TargetDatabase is not null);
+        RuleFor(x => x.TargetTable).MaximumLength(512).When(x => x.TargetTable is not null);
+        RuleFor(x => x)
+            .Must(x => string.IsNullOrWhiteSpace(x.TargetDatabase) == string.IsNullOrWhiteSpace(x.TargetTable))
+            .WithMessage("TargetDatabase and TargetTable must be provided together for each table mapping.");
     }
 }
 

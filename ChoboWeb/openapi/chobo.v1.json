@@ -3829,6 +3829,16 @@
             "type": "integer",
             "format": "int32",
             "nullable": true
+          },
+          "tables": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RestoreTableMappingRequest"
+            },
+            "nullable": true
+          },
+          "schemaOnly": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false
@@ -4207,6 +4217,24 @@
             "items": {
               "$ref": "#/components/schemas/RestoreTableShardDto"
             },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "RestoreTableMappingRequest": {
+        "type": "object",
+        "properties": {
+          "backupTableId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "targetDatabase": {
+            "type": "string",
+            "nullable": true
+          },
+          "targetTable": {
+            "type": "string",
             "nullable": true
           }
         },
