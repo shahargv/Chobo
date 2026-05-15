@@ -11,7 +11,7 @@ namespace ChoboServer.BackgroundServices;
 public sealed class BackupSchedulerDispatcherBackgroundService(
     IServiceProvider services,
     IOptions<ChoboBackupRestoreOptions> options,
-    BackupRestoreQueues queues,
+    IBackupRestoreQueues queues,
     Serilog.ILogger logger,
     TimeProvider timeProvider) : BackgroundService
 {
@@ -22,7 +22,6 @@ public sealed class BackupSchedulerDispatcherBackgroundService(
         "scheduled-backup-missed",
         "schedule-skip-active",
         "schedule-skip-active-policy",
-        "schedule-skip-unsupported",
         "schedule-skip-missing-policy"
     ];
 
@@ -52,7 +51,7 @@ public sealed class BackupSchedulerDispatcherBackgroundService(
     {
         using var scope = services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
-        var audit = scope.ServiceProvider.GetRequiredService<AuditService>();
+        var audit = scope.ServiceProvider.GetRequiredService<IAuditService>();
         var schedules = await db.BackupSchedules
             .Include(x => x.Policy)
             .Where(x => x.IsEnabled && !x.IsDeleted)
@@ -147,11 +146,6 @@ public sealed class BackupSchedulerDispatcherBackgroundService(
                 continue;
             }
 
-            if (schedule.BackupType != BackupType.Full)
-            {
-                await audit.RecordAsync("schedule-skip-unsupported", AuditEntityType.BackupSchedule, schedule.Id.ToString(), new { schedule.BackupType, plannedRunAt = latestOccurrence });
-                continue;
-            }
             if (schedule.Policy is null)
             {
                 await audit.RecordAsync("schedule-skip-missing-policy", AuditEntityType.BackupSchedule, schedule.Id.ToString(), new { plannedRunAt = latestOccurrence });

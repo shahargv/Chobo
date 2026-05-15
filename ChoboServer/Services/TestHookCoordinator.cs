@@ -3,7 +3,16 @@ using Microsoft.Extensions.Options;
 
 namespace ChoboServer.Services;
 
-public sealed class TestHookCoordinator(IOptions<ChoboTestHooksOptions> options)
+public interface ITestHookCoordinator
+{
+    bool Enabled { get; }
+    void DelayNextBackupBeforePoll();
+    void DelayNextRestoreBeforePoll();
+    Task MaybeDelayBackupBeforePollAsync(CancellationToken cancellationToken);
+    Task MaybeDelayRestoreBeforePollAsync(CancellationToken cancellationToken);
+}
+
+public sealed class TestHookCoordinator(IOptions<ChoboTestHooksOptions> options) : ITestHookCoordinator
 {
     private readonly object _lock = new();
     private bool _delayNextBackupBeforePoll;

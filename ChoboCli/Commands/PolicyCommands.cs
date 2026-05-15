@@ -55,13 +55,17 @@ public sealed class PolicyCommands : CliSubject
 
     private static BackupRetentionDto? Retention(OptionBag options)
     {
-        if (options.Optional("--retention-minutes") is not { } retentionMinutes)
+        var fullRetentionMinutes = options.Optional("--full-retention-minutes");
+        var incrementalRetentionMinutes = options.Optional("--incremental-retention-minutes");
+        if (fullRetentionMinutes is null && incrementalRetentionMinutes is null)
         {
             return null;
         }
 
         return new BackupRetentionDto(
-            int.Parse(retentionMinutes),
-            options.Optional("--min-backups-to-keep") is { } minBackupsToKeep ? int.Parse(minBackupsToKeep) : 0);
+            fullRetentionMinutes is null ? null : int.Parse(fullRetentionMinutes),
+            incrementalRetentionMinutes is null ? null : int.Parse(incrementalRetentionMinutes),
+            options.Optional("--min-backups-to-keep") is { } minBackupsToKeep ? int.Parse(minBackupsToKeep) : 0,
+            options.Optional("--min-full-backups-to-keep") is { } minFullBackupsToKeep ? int.Parse(minFullBackupsToKeep) : 0);
     }
 }

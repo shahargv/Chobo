@@ -67,7 +67,7 @@ S3 credentials are write-only.
 ChoboCli policies list
 ChoboCli policies add --name all --source-cluster-id <cluster-id> --target-id <target-id>
 ChoboCli policies add --name filtered --source-cluster-id <cluster-id> --target-id <target-id> --selector-file .\policy-selector.json
-ChoboCli policies update --id <policy-id> --name filtered --source-cluster-id <cluster-id> --target-id <target-id> --selector-file .\policy-selector.json
+ChoboCli policies update --id <policy-id> --name filtered --source-cluster-id <cluster-id> --target-id <target-id> --selector-file .\policy-selector.json --full-retention-minutes 43200 --incremental-retention-minutes 10080 --min-backups-to-keep 7 --min-full-backups-to-keep 2
 ChoboCli policies evaluate --id <policy-id> --inventory-file .\inventory.json
 ChoboCli policies remove --id <policy-id>
 ```
@@ -163,6 +163,7 @@ The same server surface also exposes flat general metrics at `/api/v1/metrics`, 
 
 ```powershell
 ChoboCli backup manual --cluster-id <cluster-id> --target-id <target-id> --selector-file .\policy-selector.json
+ChoboCli backup manual --policy-id <policy-id> --backup-type Incremental
 ChoboCli backups list --policy-id <policy-id>
 ChoboCli backups list --cluster-name source --table-name orders
 ChoboCli backups show --id <backup-id>
@@ -179,7 +180,7 @@ ChoboCli restores show --id <restore-id>
 ChoboCli restores wait --id <restore-id> --timeout-seconds 300 --poll-seconds 2
 ```
 
-Backup and restore commands return run records immediately. `wait` is a client-side polling helper.
+Backup and restore commands return run records immediately. `wait` is a client-side polling helper. Run JSON includes `startedAt` and `endedAt`; `endedAt` is when the actual run process reached a terminal outcome, including success, partial success, failure, or cancellation, not the last metadata update time.
 
 For MergeTree-family tables in `Cluster` mode, one logical backup table contains one shard task for each source shard. Chobo does not run ClickHouse `BACKUP ... ON CLUSTER`; it queries topology, picks one representative replica per shard, runs the shard operations manually, and records the selected source node in the backup metadata. `backups show` and `backups wait` include per-table `shards` arrays with source shard number, selected node, S3 path, status, operation id, and error details.
 

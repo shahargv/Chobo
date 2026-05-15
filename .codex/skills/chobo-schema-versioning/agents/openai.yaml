@@ -1,0 +1,3 @@
+display_name: Chobo Schema Versioning
+short_description: Manage Chobo schema versions and migrations by release.
+default_prompt: Use Chobo schema versioning rules to decide whether to edit the baseline schema or add a migration.

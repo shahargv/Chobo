@@ -5,7 +5,7 @@ namespace ChoboServer.BackgroundServices;
 
 public sealed class BackupExecutorBackgroundService(
     IServiceProvider services,
-    BackupRestoreQueues queues,
+    IBackupRestoreQueues queues,
     Serilog.ILogger logger) : BackgroundService
 {
     private readonly Serilog.ILogger _logger = logger.ForContext<BackupExecutorBackgroundService>();

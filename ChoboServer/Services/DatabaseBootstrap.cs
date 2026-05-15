@@ -1,3 +1,4 @@
+using Chobo.Contracts;
 using ChoboServer.Data;
 using ChoboServer.Options;
 using Microsoft.EntityFrameworkCore;
@@ -5,82 +6,94 @@ using Microsoft.Extensions.Options;
 
 namespace ChoboServer.Services;
 
-public static class DatabaseBootstrap
+public interface IDatabaseBootstrap
 {
-    public static async Task EnsureDatabaseObjectsAsync(ChoboDbContext db)
+    Task EnsureDatabaseObjectsAsync(CancellationToken cancellationToken = default);
+    Task EnsureSchemaStateAsync(CancellationToken cancellationToken = default);
+    Task TryInitializeFromOptionsAsync(CancellationToken cancellationToken = default);
+    Task BootstrapFirstStartupAsync(CancellationToken cancellationToken = default);
+    Task<bool> InitializeAsync(string adminUser, string accessToken, CancellationToken cancellationToken = default);
+}
+
+public sealed class DatabaseBootstrap(
+    ChoboDbContext db,
+    ISchemaUpgradeService schemaUpgrade,
+    ITokenService tokenService,
+    IOptions<ChoboInitOptions> initOptions,
+    IOptions<ChoboStorageOptions> storageOptions,
+    Serilog.ILogger logger) : IDatabaseBootstrap
+{
+    private readonly Serilog.ILogger _logger = logger.ForContext<DatabaseBootstrap>();
+
+    public async Task EnsureDatabaseObjectsAsync(CancellationToken cancellationToken = default)
     {
-        await db.Database.MigrateAsync();
+        await db.Database.MigrateAsync(cancellationToken);
     }
 
-    public static async Task EnsureSchemaStateAsync(ChoboDbContext db)
+    public async Task EnsureSchemaStateAsync(CancellationToken cancellationToken = default)
     {
-        if (!await db.SchemaStates.AnyAsync())
+        if (!await db.SchemaStates.AnyAsync(cancellationToken))
         {
             db.SchemaStates.Add(new SchemaStateEntity
             {
-                SchemaVersion = Chobo.Contracts.ChoboApi.SchemaVersion,
-                AppliedMigrationId = "20260509160000_InitialCreate",
+                SchemaVersion = ChoboApi.SchemaVersion,
+                AppliedMigrationId = "000000000001_Baseline",
                 AppliedAt = DateTimeOffset.UtcNow,
-                ProductVersion = Chobo.Contracts.ChoboApi.ProductVersion
+                ProductVersion = ChoboApi.ProductVersion
             });
-            await db.SaveChangesAsync();
+            await db.SaveChangesAsync(cancellationToken);
             return;
         }
 
-        var schema = await db.SchemaStates.SingleAsync();
-        await SchemaUpgradeService.UpgradeAsync(db, schema);
+        var schema = await db.SchemaStates.SingleAsync(cancellationToken);
+        await schemaUpgrade.UpgradeAsync(schema, cancellationToken);
     }
 
-    public static async Task TryInitializeFromOptionsAsync(IServiceProvider services)
+    public async Task TryInitializeFromOptionsAsync(CancellationToken cancellationToken = default)
     {
-        var options = services.GetRequiredService<IOptions<ChoboInitOptions>>().Value;
-        var logger = services.GetService<Serilog.ILogger>()?.ForContext(typeof(DatabaseBootstrap));
+        var options = initOptions.Value;
         var user = options.AdminUser;
         if (string.IsNullOrWhiteSpace(user))
         {
-            logger?.Information("Skipping initial admin creation because Chobo:Init:AdminUser is not configured.");
+            _logger.Information("Skipping initial admin creation because Chobo:Init:AdminUser is not configured.");
             return;
         }
 
         var token = options.AccessToken ?? TokenService.GenerateToken();
-        logger?.Information("Initial admin configuration detected for user {AdminUser}; access token configured: {HasAccessToken}.", user, options.AccessToken is not null);
+        _logger.Information("Initial admin configuration detected for user {AdminUser}; access token configured: {HasAccessToken}.", user, options.AccessToken is not null);
 
-        await InitializeAsync(services, user, token);
+        await InitializeAsync(user, token, cancellationToken);
     }
 
-    public static async Task BootstrapFirstStartupAsync(IServiceProvider services)
+    public async Task BootstrapFirstStartupAsync(CancellationToken cancellationToken = default)
     {
-        var options = services.GetRequiredService<IOptions<ChoboInitOptions>>().Value;
-        var storage = services.GetRequiredService<IOptions<ChoboStorageOptions>>().Value;
+        var options = initOptions.Value;
         var adminUser = string.IsNullOrWhiteSpace(options.AdminUser) ? "admin" : options.AdminUser;
         var token = options.AccessToken ?? TokenService.GenerateToken();
 
-        if (await InitializeAsync(services, adminUser, token))
+        if (await InitializeAsync(adminUser, token, cancellationToken))
         {
             Console.WriteLine(token);
-            var dataDirectory = ChoboPaths.GetDataDirectory(storage.DataDirectory);
+            var dataDirectory = ChoboPaths.GetDataDirectory(storageOptions.Value.DataDirectory);
             Directory.CreateDirectory(dataDirectory);
-            await File.WriteAllTextAsync(Path.Combine(dataDirectory, "_initialized"), DateTimeOffset.UtcNow.ToString("O"));
+            await File.WriteAllTextAsync(Path.Combine(dataDirectory, "_initialized"), DateTimeOffset.UtcNow.ToString("O"), cancellationToken);
         }
     }
 
-    public static async Task<bool> InitializeAsync(IServiceProvider services, string adminUser, string accessToken)
+    public async Task<bool> InitializeAsync(string adminUser, string accessToken, CancellationToken cancellationToken = default)
     {
-        var db = services.GetRequiredService<ChoboDbContext>();
-        var logger = services.GetService<Serilog.ILogger>()?.ForContext(typeof(DatabaseBootstrap));
-        await EnsureDatabaseObjectsAsync(db);
-        await EnsureSchemaStateAsync(db);
-        if (await db.Users.AnyAsync())
+        await EnsureDatabaseObjectsAsync(cancellationToken);
+        await EnsureSchemaStateAsync(cancellationToken);
+        if (await db.Users.AnyAsync(cancellationToken))
         {
-            logger?.Information("Skipping initial admin creation because users already exist.");
+            _logger.Information("Skipping initial admin creation because users already exist.");
             return false;
         }
 
         var user = new UserEntity { UserName = adminUser };
         db.Users.Add(user);
-        await db.SaveChangesAsync();
+        await db.SaveChangesAsync(cancellationToken);
 
-        var tokenService = services.GetRequiredService<TokenService>();
         db.AccessTokens.Add(tokenService.CreateToken(user.Id, "initial", accessToken));
         db.AuditEntries.Add(new AuditEntryEntity
         {
@@ -90,8 +103,8 @@ public static class DatabaseBootstrap
             EntityId = user.Id.ToString(),
             Details = "{}"
         });
-        await db.SaveChangesAsync();
-        logger?.Information("Initialized Chobo admin user {AdminUser} ({UserId}) and initial access token.", adminUser, user.Id);
+        await db.SaveChangesAsync(cancellationToken);
+        _logger.Information("Initialized Chobo admin user {AdminUser} ({UserId}) and initial access token.", adminUser, user.Id);
         return true;
     }
 }

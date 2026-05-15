@@ -32,6 +32,9 @@ permissions:
 
 env:
   SMOKE_SYSTEM_TESTS: SmokeCreateTables,ChoboCrudSmoke
+  SMOKE_SYSTEM_TEST_GLOBAL_TIMEOUT_SECONDS: 600
+  FULL_SYSTEM_TEST_GLOBAL_TIMEOUT_SECONDS: 1200
+  SYSTEM_TEST_TIMEOUT_SECONDS: 120
 
 jobs:
   master-smoke:
@@ -64,7 +67,7 @@ jobs:
           TEST_NAMES: ${{ env.SMOKE_SYSTEM_TESTS }}
         run: |
           $testNames = $env:TEST_NAMES -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }
-          ./TestingSuite/TestManager.ps1 -TestId "gha-master-smoke-${{ github.run_id }}" -TestName $testNames -GlobalTimeoutSeconds 1800 -TestTimeoutSeconds 300
+          ./TestingSuite/TestManager.ps1 -TestId "gha-master-smoke-${{ github.run_id }}" -TestName $testNames -GlobalTimeoutSeconds $env:SMOKE_SYSTEM_TEST_GLOBAL_TIMEOUT_SECONDS -TestTimeoutSeconds $env:SYSTEM_TEST_TIMEOUT_SECONDS
 
       - name: Upload system test results
         if: always()
@@ -207,8 +210,8 @@ jobs:
         run: |
           $arguments = @(
             '-TestId', 'gha-pr-comment-${{ github.run_id }}',
-            '-GlobalTimeoutSeconds', '1800',
-            '-TestTimeoutSeconds', '300'
+            '-GlobalTimeoutSeconds', "$env:FULL_SYSTEM_TEST_GLOBAL_TIMEOUT_SECONDS",
+            '-TestTimeoutSeconds', "$env:SYSTEM_TEST_TIMEOUT_SECONDS"
           )
 
           $testNames = $env:TEST_NAMES -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }
@@ -284,8 +287,8 @@ jobs:
         run: |
           $arguments = @(
             '-TestId', 'gha-manual-${{ github.run_id }}',
-            '-GlobalTimeoutSeconds', '1800',
-            '-TestTimeoutSeconds', '300'
+            '-GlobalTimeoutSeconds', "$env:FULL_SYSTEM_TEST_GLOBAL_TIMEOUT_SECONDS",
+            '-TestTimeoutSeconds', "$env:SYSTEM_TEST_TIMEOUT_SECONDS"
           )
 
           $testNames = $env:TEST_NAMES -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }

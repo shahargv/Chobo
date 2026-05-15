@@ -4,7 +4,7 @@ namespace ChoboServer.Services;
 
 public sealed class TokenAuthMiddleware(RequestDelegate next)
 {
-    public async Task InvokeAsync(HttpContext context, TokenService tokenService, ActorContext actor, Serilog.ILogger logger)
+    public async Task InvokeAsync(HttpContext context, ITokenService tokenService, ActorContext actor, Serilog.ILogger logger)
     {
         var log = logger.ForContext<TokenAuthMiddleware>();
         if (context.Request.Path.StartsWithSegments("/health") ||

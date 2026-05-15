@@ -83,13 +83,15 @@
             Args = @('backups', 'wait', '--id', '{backup.id}', '--timeout-seconds', '30', '--poll-seconds', '1')
             ExpectJson = @(
                 @{ Path = 'status'; Equals = 'Succeeded' }
+                @{ Path = 'startedAt'; NotEmpty = $true }
+                @{ Path = 'endedAt'; NotEmpty = $true }
                 @{ Path = 'tables'; Count = 5 }
                 @{ Path = 'requestedByName'; Equals = 'admin' }
                 @{ Path = 'manualRequestJson'; Contains = 'rules' }
                 @{ Path = 'tables[1].clickHouseOperationId'; NotEmpty = $true }
                 @{ Path = 'tables[1].clickHouseStatus'; Equals = 'BACKUP_CREATED' }
-                @{ Path = 'tables[1].s3Path'; Contains = 'backups/backup_core_source/line_items/manual/full/' }
-                @{ Path = 'tables[4].s3Path'; Contains = 'backups/backup_core_source/orders/manual/full/' }
+                @{ Path = 'tables[1].s3Path'; Contains = 'backups/full/manual/backup_core_source/line_items/' }
+                @{ Path = 'tables[4].s3Path'; Contains = 'backups/full/manual/backup_core_source/orders/' }
                 @{ Path = 'tables'; ContainsObject = @{ table = 'log_events'; dataBackedUp = $false; status = 'Succeeded' } }
                 @{ Path = 'tables'; ContainsObject = @{ table = 'join_lookup'; dataBackedUp = $false; status = 'Succeeded' } }
                 @{ Path = 'tables'; ContainsObject = @{ table = 'merge_orders'; dataBackedUp = $false; status = 'Succeeded' } }
@@ -101,8 +103,10 @@
             Args = @('backups', 'show', '--id', '{backup.id}')
             ExpectJson = @(
                 @{ Path = 'id'; Equals = '{backup.id}' }
+                @{ Path = 'startedAt'; NotEmpty = $true }
+                @{ Path = 'endedAt'; NotEmpty = $true }
                 @{ Path = 'tables[1].clickHouseOperationId'; NotEmpty = $true }
-                @{ Path = 'tables[1].s3Path'; Contains = '/manual/full/' }
+                @{ Path = 'tables[1].s3Path'; Contains = 'backups/full/manual/' }
             )
         }
         @{
@@ -144,6 +148,8 @@
             Args = @('restores', 'wait', '--id', '{sameClusterRestore.id}', '--timeout-seconds', '30', '--poll-seconds', '1')
             ExpectJson = @(
                 @{ Path = 'status'; Equals = 'Succeeded' }
+                @{ Path = 'startedAt'; NotEmpty = $true }
+                @{ Path = 'endedAt'; NotEmpty = $true }
                 @{ Path = 'tables[0].clickHouseOperationId'; NotEmpty = $true }
             )
         }
@@ -153,6 +159,8 @@
             Args = @('restores', 'show', '--id', '{sameClusterRestore.id}')
             ExpectJson = @(
                 @{ Path = 'id'; Equals = '{sameClusterRestore.id}' }
+                @{ Path = 'startedAt'; NotEmpty = $true }
+                @{ Path = 'endedAt'; NotEmpty = $true }
                 @{ Path = 'tables[0].clickHouseStatus'; Equals = 'RESTORED' }
             )
         }

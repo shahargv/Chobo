@@ -7,7 +7,13 @@ using Microsoft.EntityFrameworkCore;
 
 namespace ChoboServer.Services;
 
-public sealed class ExportImportService(ChoboDbContext db)
+public interface IExportImportService
+{
+    Task<ExportEnvelope> ExportAsync(bool configOnly);
+    Task ImportAsync(ExportEnvelope envelope, bool configOnly);
+}
+
+public sealed class ExportImportService(ChoboDbContext db) : IExportImportService
 {
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
@@ -34,7 +40,7 @@ public sealed class ExportImportService(ChoboDbContext db)
                 x.TargetId,
                 x.SelectorJsonVersion,
                 JsonSerializer.Deserialize<PolicySelector>(x.SelectorJson, JsonOptions)!,
-                x.RetentionMinutes is null ? null : new BackupRetentionDto(x.RetentionMinutes.Value, x.MinBackupsToKeep),
+                x.FullRetentionMinutes is null && x.IncrementalRetentionMinutes is null ? null : new BackupRetentionDto(x.FullRetentionMinutes, x.IncrementalRetentionMinutes, x.MinBackupsToKeep, x.MinFullBackupsToKeep),
                 x.FailedBackupRetentionMode,
                 x.IsDeleted,
                 x.CreatedAt,
@@ -94,8 +100,10 @@ public sealed class ExportImportService(ChoboDbContext db)
                 TargetId = x.TargetId,
                 SelectorJsonVersion = x.SelectorJsonVersion,
                 SelectorJson = JsonSerializer.Serialize(x.Selector, JsonOptions),
-                RetentionMinutes = x.Retention?.RetentionMinutes,
+                FullRetentionMinutes = x.Retention?.FullRetentionMinutes,
+                IncrementalRetentionMinutes = x.Retention?.IncrementalRetentionMinutes,
                 MinBackupsToKeep = x.Retention?.MinBackupsToKeep ?? 0,
+                MinFullBackupsToKeep = x.Retention?.MinFullBackupsToKeep ?? 0,
                 FailedBackupRetentionMode = x.FailedBackupRetentionMode,
                 IsDeleted = x.IsDeleted,
                 CreatedAt = x.CreatedAt,

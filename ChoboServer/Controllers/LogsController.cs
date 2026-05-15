@@ -1,11 +1,12 @@
 using Chobo.Contracts;
+using ChoboServer.Repositories;
 using ChoboServer.Services;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ChoboServer.Controllers;
 
 [ApiController]
-public sealed class LogsController(ApplicationLogStore logs, AuditService audit) : ControllerBase
+public sealed class LogsController(IApplicationLogStore logs, IAuditService audit) : ControllerBase
 {
     [HttpGet(ChoboApi.ApiPrefix + "/logs")]
     public Task<IReadOnlyList<ApplicationLogEntryDto>> List([FromQuery] DateTimeOffset? startTime, [FromQuery] DateTimeOffset? endTime, [FromQuery] int? last) =>
