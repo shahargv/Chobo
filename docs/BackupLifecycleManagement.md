@@ -12,7 +12,7 @@ Retention is configured on a backup policy:
 ChoboCli policies add --name nightly-prod --source-cluster-id <cluster-id> --target-id <target-id> --selector-file .\policy-selector.json --full-retention-minutes 43200 --incremental-retention-minutes 10080 --min-backups-to-keep 7 --min-full-backups-to-keep 2
 ```
 
-`--full-retention-minutes` and `--incremental-retention-minutes` set separate age thresholds. Chobo compares them to each successful backup's `completedAt` timestamp, falling back to `createdAt` when needed.
+`--full-retention-minutes` and `--incremental-retention-minutes` set separate age thresholds. Chobo compares them to each successful backup's `endedAt` timestamp, falling back to `createdAt` when needed.
 
 `--min-backups-to-keep` keeps the newest successful backups for the policy even if they are older than the retention threshold.
 

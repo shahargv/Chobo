@@ -40,7 +40,7 @@ public sealed record BackupDto(
     string? ManualRequestJson,
     DateTimeOffset CreatedAt,
     DateTimeOffset? StartedAt,
-    DateTimeOffset? CompletedAt,
+    DateTimeOffset? EndedAt,
     string? Error,
     string? FailureReason,
     bool IsPinned,
@@ -53,10 +53,7 @@ public sealed record BackupDto(
     DateTimeOffset? DeletedAt,
     string? DeletionError,
     int DeletionAttemptCount,
-    IReadOnlyList<BackupTableDto> Tables)
-{
-    public DateTimeOffset? EndedAt => CompletedAt;
-}
+    IReadOnlyList<BackupTableDto> Tables);
 
 public sealed record BackupTableDto(
     Guid Id,
@@ -122,13 +119,10 @@ public sealed record RestoreDto(
     string RequestJson,
     DateTimeOffset CreatedAt,
     DateTimeOffset? StartedAt,
-    DateTimeOffset? CompletedAt,
+    DateTimeOffset? EndedAt,
     string? Error,
     string? FailureReason,
-    IReadOnlyList<RestoreTableDto> Tables)
-{
-    public DateTimeOffset? EndedAt => CompletedAt;
-}
+    IReadOnlyList<RestoreTableDto> Tables);
 
 public sealed record RestoreTableDto(
     Guid Id,

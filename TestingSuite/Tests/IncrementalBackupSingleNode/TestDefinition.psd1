@@ -66,6 +66,8 @@
             Args = @('backups', 'wait', '--id', '{fullBackup.id}', '--timeout-seconds', '45', '--poll-seconds', '1')
             ExpectJson = @(
                 @{ Path = 'status'; Equals = 'Succeeded' }
+                @{ Path = 'startedAt'; NotEmpty = $true }
+                @{ Path = 'endedAt'; NotEmpty = $true }
                 @{ Path = 'backupType'; Equals = 'Full' }
                 @{ Path = 'tables[0].effectiveBackupType'; Equals = 'Full' }
                 @{ Path = 'tables[0].s3Path'; Contains = 'backups/full/' }
@@ -84,6 +86,8 @@
             Args = @('backups', 'wait', '--id', '{incrementalBackup.id}', '--timeout-seconds', '45', '--poll-seconds', '1')
             ExpectJson = @(
                 @{ Path = 'status'; Equals = 'Succeeded' }
+                @{ Path = 'startedAt'; NotEmpty = $true }
+                @{ Path = 'endedAt'; NotEmpty = $true }
                 @{ Path = 'backupType'; Equals = 'Incremental' }
                 @{ Path = 'tables'; ContainsObject = @{ table = 'orders'; effectiveBackupType = 'Incremental' } }
                 @{ Path = 'tables'; ContainsObject = @{ table = 'new_orders'; effectiveBackupType = 'Full' } }
@@ -102,6 +106,8 @@
             Args = @('restores', 'wait', '--id', '{restore.id}', '--timeout-seconds', '60', '--poll-seconds', '1')
             ExpectJson = @(
                 @{ Path = 'status'; Equals = 'Succeeded' }
+                @{ Path = 'startedAt'; NotEmpty = $true }
+                @{ Path = 'endedAt'; NotEmpty = $true }
             )
         }
     )
