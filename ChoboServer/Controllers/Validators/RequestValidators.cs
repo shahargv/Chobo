@@ -141,21 +141,21 @@ public sealed class PolicySelectorRuleValidator : AbstractValidator<PolicySelect
     public PolicySelectorRuleValidator()
     {
         RuleFor(x => x.Action).IsInEnum();
-        RuleFor(x => x.Database).NotNull().SetValidator(new SelectorPatternValidator("database"));
-        RuleFor(x => x.Table).NotNull().SetValidator(new SelectorPatternValidator("table"));
+        RuleFor(x => x.Database).NotNull().SetValidator(new SelectorPatternValidator());
+        RuleFor(x => x.Table).NotNull().SetValidator(new SelectorPatternValidator());
     }
 }
 
 public sealed class SelectorPatternValidator : AbstractValidator<SelectorPattern>
 {
-    public SelectorPatternValidator(string name)
+    public SelectorPatternValidator()
     {
         RuleFor(x => x.Kind).IsInEnum();
         RuleFor(x => x.Value).NotNull().MaximumLength(512);
         RuleFor(x => x.Value)
             .NotEmpty()
             .When(x => x.Kind is PolicyMatchKind.Exact or PolicyMatchKind.Wildcard)
-            .WithMessage($"{name} selector value is required.");
+            .WithMessage("Selector value is required.");
     }
 }
 
