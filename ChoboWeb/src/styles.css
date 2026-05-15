@@ -232,7 +232,7 @@ pre, .token-box {
   top: calc(100% + 6px);
   right: 0;
   z-index: 5;
-  width: min(260px, 70vw);
+  width: min(300px, 76vw);
   padding: 10px;
   display: grid;
   gap: 10px;
@@ -240,6 +240,40 @@ pre, .token-box {
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: var(--shadow);
+}
+.filter-option-list {
+  display: grid;
+  gap: 4px;
+  max-height: 220px;
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+.filter-option {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 28px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  color: var(--text);
+  font-weight: 600;
+}
+.filter-option:hover { background: #eef7fa; }
+.filter-option input { width: 16px; min-height: 16px; }
+.filter-option span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.filter-option em {
+  min-width: 24px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #e8eef6;
+  color: var(--muted);
+  font-style: normal;
+  font-size: 11px;
+  text-align: center;
 }
 .stack { display: grid; gap: 8px; }
 .empty { color: var(--muted); padding: 14px; background: var(--surface-muted); border-radius: 8px; }
