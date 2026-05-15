@@ -6,15 +6,16 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
 
-if (args.Length > 0 && string.Equals(args[0], "init", StringComparison.OrdinalIgnoreCase))
-{
-    await LocalCommands.InitializeAsync(args.Skip(1).ToArray());
-    return;
-}
-
 var builder = WebApplication.CreateBuilder(args);
 ChoboConfiguration.AddChoboConfigurationSources(builder.Configuration, args);
 var choboDataDirectory = GetChoboDataDirectory(builder.Configuration);
+var dbPath = Path.Combine(choboDataDirectory, "chobo.db");
+var initializedMarkerPath = Path.Combine(choboDataDirectory, "_initialized");
+var firstStartup = !File.Exists(dbPath) && !File.Exists(initializedMarkerPath);
+if (!File.Exists(dbPath) && File.Exists(initializedMarkerPath))
+{
+    throw new InvalidOperationException($"Chobo data directory is marked initialized but SQLite database is missing at {dbPath}.");
+}
 
 await EnsureDatabaseSchemaBeforeLoggingAsync(builder.Configuration);
 
@@ -27,7 +28,7 @@ builder.Host.UseSerilog();
 builder.Services.AddChoboServer(builder.Configuration);
 
 var app = builder.Build();
-await app.Services.InitializeChoboDatabaseAsync();
+await app.Services.InitializeChoboDatabaseAsync(firstStartup);
 
 if (app.Environment.IsDevelopment())
 {

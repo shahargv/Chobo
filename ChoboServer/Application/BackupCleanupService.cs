@@ -7,7 +7,7 @@ namespace ChoboServer.Application;
 
 public sealed class BackupCleanupService(
     ChoboDbContext db,
-    IBackupStorageDeletionService storageDeletion,
+    IBackupStorageOperations storageOperations,
     AuditService audit,
     Serilog.ILogger logger)
 {
@@ -37,7 +37,11 @@ public sealed class BackupCleanupService(
 
         try
         {
-            await storageDeletion.DeleteBackupDataAsync(backup, cancellationToken);
+            foreach (var directoryPath in BackupDirectories(backup))
+            {
+                await storageOperations.DeleteDirectoryAsync(backup.Target!, directoryPath, cancellationToken);
+            }
+
             backup.Status = finalStatus;
             backup.DeletedAt = DateTimeOffset.UtcNow;
             backup.DeletionError = null;
@@ -52,6 +56,24 @@ public sealed class BackupCleanupService(
             await db.SaveChangesAsync(CancellationToken.None);
             await audit.RecordAsync("backup-cleanup-failed", AuditEntityType.Backup, backup.Id.ToString(), new { reason, finalStatus, error = ex.Message, backup.DeletionAttemptCount });
             return false;
+        }
+    }
+
+    private static IEnumerable<string> BackupDirectories(BackupEntity backup)
+    {
+        foreach (var table in backup.Tables)
+        {
+            var shardPaths = table.Shards.Select(x => x.S3Path).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.Ordinal).ToList();
+            if (shardPaths.Count == 0)
+            {
+                yield return table.S3Path;
+                continue;
+            }
+
+            foreach (var path in shardPaths)
+            {
+                yield return path;
+            }
         }
     }
 }

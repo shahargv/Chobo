@@ -24,24 +24,6 @@ public static class ChoboConfiguration
         AddChoboEnvironmentAliases(configuration);
     }
 
-    public static IConfiguration BuildLocalCommandConfiguration(string[] args)
-    {
-        var environmentName = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT")
-            ?? Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT");
-        var builder = new ConfigurationBuilder()
-            .SetBasePath(AppContext.BaseDirectory)
-            .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false);
-
-        if (!string.IsNullOrWhiteSpace(environmentName))
-        {
-            builder.AddJsonFile($"appsettings.{environmentName}.json", optional: true, reloadOnChange: false);
-        }
-
-        AddChoboConfigurationSources(builder, args, addStandardEnvironmentAndCommandLine: true);
-        AddLocalCommandAliases(builder, args);
-        return builder.Build();
-    }
-
     private static void AddChoboEnvironmentAliases(IConfigurationBuilder configuration)
     {
         var values = new Dictionary<string, string?>();
@@ -64,19 +46,6 @@ public static class ChoboConfiguration
         }
     }
 
-    private static void AddLocalCommandAliases(IConfigurationBuilder configuration, string[] args)
-    {
-        var values = new Dictionary<string, string?>();
-        AddOptionAlias(values, args, "--data-directory", "Chobo:DataDirectory");
-        AddOptionAlias(values, args, "--encryption-key-base64", "Chobo:EncryptionKeyBase64");
-        AddOptionAlias(values, args, "--admin-user", "Chobo:Init:AdminUser");
-        AddOptionAlias(values, args, "--access-token", "Chobo:Init:AccessToken");
-        if (values.Count > 0)
-        {
-            configuration.AddInMemoryCollection(values);
-        }
-    }
-
     private static void AddAlias(IDictionary<string, string?> values, string environmentName, string configurationKey)
     {
         var value = Environment.GetEnvironmentVariable(environmentName);
@@ -84,27 +53,5 @@ public static class ChoboConfiguration
         {
             values[configurationKey] = value;
         }
-    }
-
-    private static void AddOptionAlias(IDictionary<string, string?> values, string[] args, string optionName, string configurationKey)
-    {
-        var value = GetOption(args, optionName);
-        if (value is not null)
-        {
-            values[configurationKey] = value;
-        }
-    }
-
-    private static string? GetOption(string[] args, string name)
-    {
-        for (var i = 0; i < args.Length - 1; i++)
-        {
-            if (string.Equals(args[i], name, StringComparison.OrdinalIgnoreCase))
-            {
-                return args[i + 1];
-            }
-        }
-
-        return null;
     }
 }

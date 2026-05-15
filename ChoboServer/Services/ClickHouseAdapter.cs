@@ -36,7 +36,7 @@ public interface IClickHouseAdapter
     Task<ClickHouseOperationStatus> GetOperationStatusAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string operationId, CancellationToken cancellationToken);
 }
 
-public sealed class ClickHouseAdapter(CredentialProtector protector, Serilog.ILogger logger) : IClickHouseAdapter
+public sealed class ClickHouseAdapter(ICredentialProtector protector, Serilog.ILogger logger) : IClickHouseAdapter
 {
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(20);
     private readonly Serilog.ILogger _logger = logger.ForContext<ClickHouseAdapter>();
@@ -162,7 +162,9 @@ public sealed class ClickHouseAdapter(CredentialProtector protector, Serilog.ILo
     public async Task<ClickHouseOperationResult> StartBackupShardAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, BackupTargetEntity target, BackupTableEntity table, BackupTableShardEntity shard, CancellationToken cancellationToken)
     {
         var s3 = S3Endpoint(target, shard.S3Path);
-        var sql = $"BACKUP TABLE {ClickHouseSql.Qualified(table.Database, table.Table)} TO {ClickHouseSql.S3(s3, protector.Unprotect(target.EncryptedAccessKey) ?? "", protector.Unprotect(target.EncryptedSecretKey) ?? "")} ASYNC";
+        var accessKey = await protector.DecryptAsync(target.EncryptedAccessKey, target.EncryptedAccessKeyKeyId, cancellationToken) ?? "";
+        var secretKey = await protector.DecryptAsync(target.EncryptedSecretKey, target.EncryptedSecretKeyKeyId, cancellationToken) ?? "";
+        var sql = $"BACKUP TABLE {ClickHouseSql.Qualified(table.Database, table.Table)} TO {ClickHouseSql.S3(s3, accessKey, secretKey)} ASYNC";
         _logger.Information("Submitting ClickHouse backup for {Database}.{Table} shard {ShardNumber} on {Host}:{Port} to {S3Path}.", table.Database, table.Table, shard.SourceShardNumber, endpoint.Host, endpoint.Port, shard.S3Path);
         return await StartOperationAsync(endpoint, cluster, sql, cancellationToken);
     }
@@ -180,7 +182,9 @@ public sealed class ClickHouseAdapter(CredentialProtector protector, Serilog.ILo
         var s3 = S3Endpoint(target, backupShard.S3Path);
         var from = ClickHouseSql.Qualified(backupTable.Database, backupTable.Table);
         var to = ClickHouseSql.Qualified(shard.RestoreDatabase, shard.RestoreTableName);
-        var sql = $"RESTORE TABLE {from} AS {to} FROM {ClickHouseSql.S3(s3, protector.Unprotect(target.EncryptedAccessKey) ?? "", protector.Unprotect(target.EncryptedSecretKey) ?? "")} ASYNC";
+        var accessKey = await protector.DecryptAsync(target.EncryptedAccessKey, target.EncryptedAccessKeyKeyId, cancellationToken) ?? "";
+        var secretKey = await protector.DecryptAsync(target.EncryptedSecretKey, target.EncryptedSecretKeyKeyId, cancellationToken) ?? "";
+        var sql = $"RESTORE TABLE {from} AS {to} FROM {ClickHouseSql.S3(s3, accessKey, secretKey)} ASYNC";
         _logger.Information("Submitting ClickHouse restore for {SourceDatabase}.{SourceTable} source shard {SourceShard} to {TargetDatabase}.{TargetTable} on {Host}:{Port}.", backupTable.Database, backupTable.Table, backupShard.SourceShardNumber, shard.RestoreDatabase, shard.RestoreTableName, endpoint.Host, endpoint.Port);
         return await StartOperationAsync(endpoint, cluster, sql, cancellationToken);
     }
@@ -254,7 +258,7 @@ public sealed class ClickHouseAdapter(CredentialProtector protector, Serilog.ILo
 
     private async Task<List<List<string>>> QueryAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string sql, CancellationToken cancellationToken)
     {
-        var settings = CreateSettings(endpoint, cluster);
+        var settings = await CreateSettingsAsync(endpoint, cluster, cancellationToken);
         await using var connection = new ClickHouseConnection(settings);
         await connection.OpenAsync(cancellationToken);
         await using var command = connection.CreateCommand(sql);
@@ -285,10 +289,10 @@ public sealed class ClickHouseAdapter(CredentialProtector protector, Serilog.ILo
         }
     }
 
-    private ClickHouseClientSettings CreateSettings(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster)
+    private async Task<ClickHouseClientSettings> CreateSettingsAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, CancellationToken cancellationToken)
     {
-        var user = protector.Unprotect(cluster.EncryptedUserName);
-        var password = protector.Unprotect(cluster.EncryptedPassword);
+        var user = await protector.DecryptAsync(cluster.EncryptedUserName, cluster.EncryptedUserNameKeyId, cancellationToken);
+        var password = await protector.DecryptAsync(cluster.EncryptedPassword, cluster.EncryptedPasswordKeyId, cancellationToken);
         var settings = new ClickHouseClientSettings
         {
             Host = endpoint.Host,

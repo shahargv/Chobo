@@ -105,7 +105,7 @@ Chobo:Init:AdminUser = admin
 Chobo:Init:AccessToken = dev-static-access-token
 ```
 
-That means normal local debugging does not require running `ChoboServer init` every time. On first startup, ChoboServer creates the SQLite database under `data-dev`, creates the admin user, and stores the deterministic access token. On later startups, it reuses the same database and AES key.
+On first startup, ChoboServer creates the SQLite database under `data-dev`, creates the admin user, stores the deterministic access token, and writes the `_initialized` marker. On later startups, it reuses the same database and AES key files.
 
 The repository-relative `data-dev` default keeps the debug database local to the workspace without depending on machine-specific user profile paths.
 
