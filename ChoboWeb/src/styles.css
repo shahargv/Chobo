@@ -166,6 +166,11 @@ button:disabled, .primary:disabled, .secondary:disabled, .ghost:disabled, .dange
   grid-template-columns: repeat(4, minmax(180px, 1fr));
   gap: 12px;
 }
+.column-filters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(160px, 1fr));
+  gap: 10px;
+}
 label { display: grid; gap: 6px; color: #405166; font-size: 12px; font-weight: 700; }
 .field-label { color: #405166; font-size: 12px; font-weight: 700; }
 input, select, textarea {
