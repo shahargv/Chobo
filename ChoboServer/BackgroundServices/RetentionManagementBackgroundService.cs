@@ -40,7 +40,7 @@ public sealed class RetentionManagementBackgroundService(
         using (var scope = services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
-            var audit = scope.ServiceProvider.GetRequiredService<AuditService>();
+            var audit = scope.ServiceProvider.GetRequiredService<IAuditService>();
             await MarkExpiredAsync(db, audit, cancellationToken);
             pending = await db.Backups
                 .Where(x => x.Status == BackupRunStatus.ManualDeleteRequested || x.Status == BackupRunStatus.BackupExpiredDeleteStarted)
@@ -67,7 +67,7 @@ public sealed class RetentionManagementBackgroundService(
         }, cancellationToken);
     }
 
-    private async Task MarkExpiredAsync(ChoboDbContext db, AuditService audit, CancellationToken cancellationToken)
+    private async Task MarkExpiredAsync(ChoboDbContext db, IAuditService audit, CancellationToken cancellationToken)
     {
         var now = timeProvider.GetUtcNow();
         var policies = await db.BackupPolicies

@@ -7,7 +7,7 @@ namespace ChoboServer.BackgroundServices;
 
 public sealed class BackupRestoreResumeBackgroundService(
     IServiceProvider services,
-    BackupRestoreQueues queues,
+    IBackupRestoreQueues queues,
     Serilog.ILogger logger) : BackgroundService
 {
     private readonly Serilog.ILogger _logger = logger.ForContext<BackupRestoreResumeBackgroundService>();
@@ -18,7 +18,7 @@ public sealed class BackupRestoreResumeBackgroundService(
         {
             using var scope = services.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
-            var audit = scope.ServiceProvider.GetRequiredService<AuditService>();
+            var audit = scope.ServiceProvider.GetRequiredService<IAuditService>();
             var backups = await db.Backups
                 .Where(x => x.Status == BackupRunStatus.Queued || x.Status == BackupRunStatus.Running)
                 .Select(x => x.Id)

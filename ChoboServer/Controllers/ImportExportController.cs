@@ -5,7 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace ChoboServer.Controllers;
 
 [ApiController]
-public sealed class ImportExportController(ExportImportService exports, AuditService audit) : ControllerBase
+public sealed class ImportExportController(IExportImportService exports, IAuditService audit) : ControllerBase
 {
     [HttpGet(ChoboApi.ApiPrefix + "/data/export")]
     public Task<ExportEnvelope> ExportData() => exports.ExportAsync(configOnly: false);

@@ -40,7 +40,7 @@ public sealed class BackupsGarbageCollectorBackgroundService(
         using (var scope = services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
-            var audit = scope.ServiceProvider.GetRequiredService<AuditService>();
+            var audit = scope.ServiceProvider.GetRequiredService<IAuditService>();
             await MarkFailedBackupsAsync(db, audit, cancellationToken);
             await MarkOrphanIncrementalBackupsAsync(db, audit, cancellationToken);
             pending = await db.Backups
@@ -58,7 +58,7 @@ public sealed class BackupsGarbageCollectorBackgroundService(
         }, cancellationToken);
     }
 
-    private async Task MarkFailedBackupsAsync(ChoboDbContext db, AuditService audit, CancellationToken cancellationToken)
+    private async Task MarkFailedBackupsAsync(ChoboDbContext db, IAuditService audit, CancellationToken cancellationToken)
     {
         var now = timeProvider.GetUtcNow();
         var backups = await db.Backups
@@ -80,7 +80,7 @@ public sealed class BackupsGarbageCollectorBackgroundService(
         }
     }
 
-    private static async Task MarkDependentIncrementalBackupsAsync(ChoboDbContext db, AuditService audit, Guid fullBackupId, DateTimeOffset now, string reason, CancellationToken cancellationToken)
+    private static async Task MarkDependentIncrementalBackupsAsync(ChoboDbContext db, IAuditService audit, Guid fullBackupId, DateTimeOffset now, string reason, CancellationToken cancellationToken)
     {
         var deletedStatuses = DeletedStatuses;
         var dependentIds = await db.BackupTables
@@ -104,7 +104,7 @@ public sealed class BackupsGarbageCollectorBackgroundService(
         }
     }
 
-    private static async Task MarkOrphanIncrementalBackupsAsync(ChoboDbContext db, AuditService audit, CancellationToken cancellationToken)
+    private static async Task MarkOrphanIncrementalBackupsAsync(ChoboDbContext db, IAuditService audit, CancellationToken cancellationToken)
     {
         var now = DateTimeOffset.UtcNow;
         var deletedStatuses = DeletedStatuses;

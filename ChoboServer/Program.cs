@@ -42,7 +42,7 @@ static async Task EnsureDatabaseSchemaBeforeLoggingAsync(IServiceCollection serv
 {
     using var provider = services.BuildServiceProvider();
     using var scope = provider.CreateScope();
-    var bootstrap = scope.ServiceProvider.GetRequiredService<DatabaseBootstrap>();
+    var bootstrap = scope.ServiceProvider.GetRequiredService<IDatabaseBootstrap>();
     await bootstrap.EnsureDatabaseObjectsAsync();
     await bootstrap.EnsureSchemaStateAsync();
     var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();

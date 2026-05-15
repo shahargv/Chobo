@@ -6,13 +6,22 @@ using Microsoft.Extensions.Options;
 
 namespace ChoboServer.Services;
 
+public interface IDatabaseBootstrap
+{
+    Task EnsureDatabaseObjectsAsync(CancellationToken cancellationToken = default);
+    Task EnsureSchemaStateAsync(CancellationToken cancellationToken = default);
+    Task TryInitializeFromOptionsAsync(CancellationToken cancellationToken = default);
+    Task BootstrapFirstStartupAsync(CancellationToken cancellationToken = default);
+    Task<bool> InitializeAsync(string adminUser, string accessToken, CancellationToken cancellationToken = default);
+}
+
 public sealed class DatabaseBootstrap(
     ChoboDbContext db,
-    SchemaUpgradeService schemaUpgrade,
-    TokenService tokenService,
+    ISchemaUpgradeService schemaUpgrade,
+    ITokenService tokenService,
     IOptions<ChoboInitOptions> initOptions,
     IOptions<ChoboStorageOptions> storageOptions,
-    Serilog.ILogger logger)
+    Serilog.ILogger logger) : IDatabaseBootstrap
 {
     private readonly Serilog.ILogger _logger = logger.ForContext<DatabaseBootstrap>();
 

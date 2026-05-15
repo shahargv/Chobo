@@ -10,7 +10,7 @@ public sealed class TargetApplicationService(
     IUnitOfWork unitOfWork,
     ICredentialProtector protector,
     IBackupStorageOperations storageOperations,
-    AuditService audit)
+    IAuditService audit)
 {
     public async Task<IReadOnlyList<BackupTargetDto>> ListAsync() =>
         (await targets.ListActiveAsync()).Select(ToDto).ToList();

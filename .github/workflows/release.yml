@@ -20,6 +20,8 @@ permissions:
 
 env:
   DOCKER_IMAGE: shahargv/chobo
+  FULL_SYSTEM_TEST_GLOBAL_TIMEOUT_SECONDS: 1200
+  SYSTEM_TEST_TIMEOUT_SECONDS: 120
 
 jobs:
   prepare:
@@ -77,7 +79,7 @@ jobs:
 
       - name: Full system tests
         shell: pwsh
-        run: ./TestingSuite/TestManager.ps1 -TestId "gha-release-${{ github.run_id }}" -GlobalTimeoutSeconds 1800 -TestTimeoutSeconds 300
+        run: ./TestingSuite/TestManager.ps1 -TestId "gha-release-${{ github.run_id }}" -GlobalTimeoutSeconds $env:FULL_SYSTEM_TEST_GLOBAL_TIMEOUT_SECONDS -TestTimeoutSeconds $env:SYSTEM_TEST_TIMEOUT_SECONDS
 
       - name: Upload system test results
         if: always()

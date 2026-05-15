@@ -10,8 +10,8 @@ namespace ChoboServer.Application;
 
 public sealed class BackupApplicationService(
     ChoboDbContext db,
-    BackupRestoreQueues queues,
-    AuditService audit,
+    IBackupRestoreQueues queues,
+    IAuditService audit,
     ActorContext actor,
     Serilog.ILogger logger)
 {

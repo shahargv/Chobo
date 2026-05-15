@@ -7,7 +7,13 @@ using Microsoft.EntityFrameworkCore;
 
 namespace ChoboServer.Services;
 
-public sealed class ExportImportService(ChoboDbContext db)
+public interface IExportImportService
+{
+    Task<ExportEnvelope> ExportAsync(bool configOnly);
+    Task ImportAsync(ExportEnvelope envelope, bool configOnly);
+}
+
+public sealed class ExportImportService(ChoboDbContext db) : IExportImportService
 {
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 

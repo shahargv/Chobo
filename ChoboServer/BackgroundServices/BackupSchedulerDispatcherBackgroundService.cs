@@ -11,7 +11,7 @@ namespace ChoboServer.BackgroundServices;
 public sealed class BackupSchedulerDispatcherBackgroundService(
     IServiceProvider services,
     IOptions<ChoboBackupRestoreOptions> options,
-    BackupRestoreQueues queues,
+    IBackupRestoreQueues queues,
     Serilog.ILogger logger,
     TimeProvider timeProvider) : BackgroundService
 {
@@ -51,7 +51,7 @@ public sealed class BackupSchedulerDispatcherBackgroundService(
     {
         using var scope = services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
-        var audit = scope.ServiceProvider.GetRequiredService<AuditService>();
+        var audit = scope.ServiceProvider.GetRequiredService<IAuditService>();
         var schedules = await db.BackupSchedules
             .Include(x => x.Policy)
             .Where(x => x.IsEnabled && !x.IsDeleted)

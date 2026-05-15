@@ -4,7 +4,15 @@ using Microsoft.Extensions.Options;
 
 namespace ChoboServer.Services;
 
-public sealed class BackupRestoreQueues
+public interface IBackupRestoreQueues
+{
+    Channel<Guid> Backups { get; }
+    Channel<Guid> Restores { get; }
+    ValueTask QueueBackupAsync(Guid id, CancellationToken cancellationToken = default);
+    ValueTask QueueRestoreAsync(Guid id, CancellationToken cancellationToken = default);
+}
+
+public sealed class BackupRestoreQueues : IBackupRestoreQueues
 {
     public BackupRestoreQueues(IOptions<ChoboBackupRestoreOptions> options)
     {

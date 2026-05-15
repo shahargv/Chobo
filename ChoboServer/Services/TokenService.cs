@@ -5,7 +5,13 @@ using Microsoft.EntityFrameworkCore;
 
 namespace ChoboServer.Services;
 
-public sealed class TokenService(ChoboDbContext db, Serilog.ILogger logger)
+public interface ITokenService
+{
+    Task<(UserEntity User, AccessTokenEntity Token)> AuthenticateAsync(string token);
+    AccessTokenEntity CreateToken(Guid userId, string name, string rawToken);
+}
+
+public sealed class TokenService(ChoboDbContext db, Serilog.ILogger logger) : ITokenService
 {
     private readonly Serilog.ILogger _logger = logger.ForContext<TokenService>();
 

@@ -53,7 +53,10 @@ public sealed record BackupDto(
     DateTimeOffset? DeletedAt,
     string? DeletionError,
     int DeletionAttemptCount,
-    IReadOnlyList<BackupTableDto> Tables);
+    IReadOnlyList<BackupTableDto> Tables)
+{
+    public DateTimeOffset? EndedAt => CompletedAt;
+}
 
 public sealed record BackupTableDto(
     Guid Id,
@@ -122,7 +125,10 @@ public sealed record RestoreDto(
     DateTimeOffset? CompletedAt,
     string? Error,
     string? FailureReason,
-    IReadOnlyList<RestoreTableDto> Tables);
+    IReadOnlyList<RestoreTableDto> Tables)
+{
+    public DateTimeOffset? EndedAt => CompletedAt;
+}
 
 public sealed record RestoreTableDto(
     Guid Id,

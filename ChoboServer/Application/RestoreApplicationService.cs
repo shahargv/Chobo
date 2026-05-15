@@ -10,9 +10,9 @@ namespace ChoboServer.Application;
 
 public sealed class RestoreApplicationService(
     ChoboDbContext db,
-    BackupRestoreQueues queues,
+    IBackupRestoreQueues queues,
     IClickHouseAdapter clickHouse,
-    AuditService audit,
+    IAuditService audit,
     ActorContext actor,
     Serilog.ILogger logger)
 {

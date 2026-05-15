@@ -868,6 +868,8 @@ public sealed class BackupRestoreExecutionTests
         Assert.Equal(BackupRunStatus.Failed, backup.Status);
         Assert.Contains("Source ClickHouse instance is not reachable", backup.FailureReason);
         Assert.NotNull(backup.CompletedAt);
+        var backupDto = BackupRestoreMappingAccessor.ToDto(backup);
+        Assert.Equal(backup.CompletedAt, backupDto.EndedAt);
         var audit = await fixture.Db.AuditEntries.SingleAsync(x => x.Action == "failed" && x.EntityType == "backup" && x.EntityId == backupId.ToString());
         Assert.Contains("Source ClickHouse instance is not reachable", audit.Details);
     }
@@ -947,6 +949,9 @@ public sealed class BackupRestoreExecutionTests
         fixture.Db.ChangeTracker.Clear();
         var completed = await fixture.Db.Restores.Include(x => x.Tables).SingleAsync(x => x.Id == restore.Id);
         Assert.Equal(RestoreRunStatus.Failed, completed.Status);
+        Assert.NotNull(completed.CompletedAt);
+        var restoreDto = BackupRestoreMappingAccessor.ToDto(completed);
+        Assert.Equal(completed.CompletedAt, restoreDto.EndedAt);
         Assert.Contains("Destination ClickHouse instance is not reachable", completed.FailureReason);
         Assert.Contains("sales.orders", completed.FailureReason);
         var audit = await fixture.Db.AuditEntries.SingleAsync(x => x.Action == "failed" && x.EntityType == "restore" && x.EntityId == restore.Id.ToString());
@@ -1219,16 +1224,17 @@ public sealed class BackupRestoreExecutionTests
                 .AddScoped<IBackupStorageOperations>(provider => provider.GetRequiredService<FakeBackupStorageOperations>())
                 .AddScoped<PolicySelectorEvaluationService>()
                 .AddScoped<ActorContext>()
-                .AddScoped<AuditService>()
+                .AddScoped<IActorContext>(provider => provider.GetRequiredService<ActorContext>())
+                .AddScoped<IAuditService, AuditService>()
                 .AddSingleton(Options.Create(new ChoboTestHooksOptions()))
-                .AddSingleton<TestHookCoordinator>()
+                .AddSingleton<ITestHookCoordinator, TestHookCoordinator>()
                 .AddScoped<DashboardApplicationService>()
                 .AddScoped<BackupApplicationService>()
                 .AddScoped<RestoreApplicationService>()
                 .AddScoped<BackupRunnerService>()
                 .AddScoped<RestoreRunnerService>()
                 .AddScoped<BackupCleanupService>()
-                .AddSingleton<BackupRestoreQueues>()
+                .AddSingleton<IBackupRestoreQueues, BackupRestoreQueues>()
                 .AddSingleton(Options.Create(options ?? new ChoboBackupRestoreOptions { MaxDop = 3, PollInterval = TimeSpan.FromMilliseconds(1), SchedulerInterval = TimeSpan.FromSeconds(1) }))
                 .AddSingleton(Options.Create(new RetentionManagementOptions { Interval = TimeSpan.FromSeconds(1), MaxDop = 2 }))
                 .AddSingleton(Options.Create(new BackupsGarbageCollectorOptions { Interval = TimeSpan.FromSeconds(1), MaxDop = 2 }))
@@ -1574,6 +1580,62 @@ public sealed class BackupRestoreExecutionTests
                         shard.Status,
                         shard.ClickHouseOperationId,
                         shard.ClickHouseStatus,
+                        shard.StartedAt,
+                        shard.CompletedAt,
+                        shard.Error)).ToList())).ToList());
+
+        public static RestoreDto ToDto(RestoreEntity restore) =>
+            new(
+                restore.Id,
+                restore.BackupId,
+                restore.TargetClusterId,
+                restore.Status,
+                restore.Append,
+                restore.AllowSchemaMismatch,
+                restore.Layout,
+                restore.SourceShard,
+                restore.TargetShard,
+                restore.RequestedByUserId,
+                restore.RequestedByName,
+                restore.RequestJson,
+                restore.CreatedAt,
+                restore.StartedAt,
+                restore.CompletedAt,
+                restore.Error,
+                restore.FailureReason,
+                restore.Tables.Select(table => new RestoreTableDto(
+                    table.Id,
+                    table.RestoreId,
+                    table.BackupTableId,
+                    table.SourceDatabase,
+                    table.SourceTable,
+                    table.TargetDatabase,
+                    table.TargetTable,
+                    table.Status,
+                    table.ClickHouseOperationId,
+                    table.ClickHouseStatus,
+                    table.Warning,
+                    table.StartedAt,
+                    table.CompletedAt,
+                    table.Error,
+                    table.Shards.Select(shard => new RestoreTableShardDto(
+                        shard.Id,
+                        shard.RestoreTableId,
+                        shard.BackupTableShardId,
+                        shard.SourceShardNumber,
+                        shard.TargetShardNumber,
+                        shard.TargetShardName,
+                        shard.TargetReplicaNumber,
+                        shard.TargetHost,
+                        shard.TargetPort,
+                        shard.TargetUseTls,
+                        shard.LayoutRole,
+                        shard.RestoreDatabase,
+                        shard.RestoreTableName,
+                        shard.Status,
+                        shard.ClickHouseOperationId,
+                        shard.ClickHouseStatus,
+                        shard.Warning,
                         shard.StartedAt,
                         shard.CompletedAt,
                         shard.Error)).ToList())).ToList());
