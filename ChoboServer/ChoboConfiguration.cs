@@ -34,6 +34,10 @@ public static class ChoboConfiguration
         AddAlias(values, "CHOBO_DATA_RETENTION_INTERVAL", "Chobo:DataRetention:Interval");
         AddAlias(values, "CHOBO_DATA_RETENTION_LOGS_BEFORE", "Chobo:DataRetention:LogsBefore");
         AddAlias(values, "CHOBO_DATA_RETENTION_AUDITS_BEFORE", "Chobo:DataRetention:AuditsBefore");
+        AddAlias(values, "CHOBO_SQLITE_SELF_BACKUP_ENABLED", "Chobo:SqliteSelfBackup:Enabled");
+        AddAlias(values, "CHOBO_SQLITE_SELF_BACKUP_DIRECTORY", "Chobo:SqliteSelfBackup:Directory");
+        AddAlias(values, "CHOBO_SQLITE_SELF_BACKUP_INTERVAL", "Chobo:SqliteSelfBackup:BackupInterval");
+        AddAlias(values, "CHOBO_SQLITE_SELF_BACKUP_POLL_INTERVAL", "Chobo:SqliteSelfBackup:PollInterval");
         AddAlias(values, "CHOBO_BACKUP_RESTORE_MAX_DOP", "Chobo:BackupRestore:MaxDop");
         AddAlias(values, "CHOBO_BACKUP_RESTORE_QUEUE_CAPACITY", "Chobo:BackupRestore:QueueCapacity");
         AddAlias(values, "CHOBO_BACKUP_RESTORE_SCHEDULER_INTERVAL", "Chobo:BackupRestore:SchedulerInterval");

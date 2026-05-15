@@ -61,6 +61,14 @@ public sealed class Baseline : Migration
                 Properties TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS SqliteSelfBackupStates (
+                Id INTEGER NOT NULL CONSTRAINT PK_SqliteSelfBackupStates PRIMARY KEY AUTOINCREMENT,
+                LastBackupAt INTEGER NULL,
+                LastBackupPath TEXT NULL,
+                LastAttemptAt INTEGER NULL,
+                LastError TEXT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS ClickHouseClusters (
                 Id TEXT NOT NULL CONSTRAINT PK_ClickHouseClusters PRIMARY KEY,
                 Name TEXT NOT NULL,
@@ -364,6 +372,7 @@ public sealed class Baseline : Migration
             DROP TABLE IF EXISTS BackupTargets;
             DROP TABLE IF EXISTS ClickHouseAccessNodes;
             DROP TABLE IF EXISTS ClickHouseClusters;
+            DROP TABLE IF EXISTS SqliteSelfBackupStates;
             DROP TABLE IF EXISTS ApplicationLogEntries;
             DROP TABLE IF EXISTS AuditEntries;
             DROP TABLE IF EXISTS AccessTokens;

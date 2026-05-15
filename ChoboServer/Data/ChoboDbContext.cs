@@ -23,12 +23,14 @@ public sealed class ChoboDbContext(DbContextOptions<ChoboDbContext> options) : D
     public DbSet<RestoreEntity> Restores => Set<RestoreEntity>();
     public DbSet<RestoreTableEntity> RestoreTables => Set<RestoreTableEntity>();
     public DbSet<RestoreTableShardEntity> RestoreTableShards => Set<RestoreTableShardEntity>();
+    public DbSet<SqliteSelfBackupStateEntity> SqliteSelfBackupStates => Set<SqliteSelfBackupStateEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         UseUnixMillisecondTimestamps(modelBuilder);
 
         modelBuilder.Entity<SchemaStateEntity>().HasKey(x => x.Id);
+        modelBuilder.Entity<SqliteSelfBackupStateEntity>().HasKey(x => x.Id);
         modelBuilder.Entity<UserEntity>().HasIndex(x => x.UserName).IsUnique();
         modelBuilder.Entity<AccessTokenEntity>().HasIndex(x => x.TokenHash).IsUnique();
         modelBuilder.Entity<AccessTokenEntity>().HasIndex(x => x.TokenLookupHash);
