@@ -166,11 +166,6 @@ button:disabled, .primary:disabled, .secondary:disabled, .ghost:disabled, .dange
   grid-template-columns: repeat(4, minmax(180px, 1fr));
   gap: 12px;
 }
-.column-filters {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(160px, 1fr));
-  gap: 10px;
-}
 label { display: grid; gap: 6px; color: #405166; font-size: 12px; font-weight: 700; }
 .field-label { color: #405166; font-size: 12px; font-weight: 700; }
 input, select, textarea {
@@ -222,6 +217,30 @@ pre, .token-box {
 .summary-row.valid { border-color: rgba(20, 122, 82, .45); background: rgba(20, 122, 82, .06); }
 .summary-row.invalid { border-color: rgba(180, 35, 24, .45); background: rgba(180, 35, 24, .06); }
 .field-error { color: var(--bad) !important; }
+.filterable-header { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.header-filter {
+  min-height: 24px;
+  width: 26px;
+  padding: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+}
+.header-filter:hover, .header-filter.active { background: #d7eef4; color: var(--accent-strong); }
+.filter-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 5;
+  width: min(260px, 70vw);
+  padding: 10px;
+  display: grid;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
 .stack { display: grid; gap: 8px; }
 .empty { color: var(--muted); padding: 14px; background: var(--surface-muted); border-radius: 8px; }
 .section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
