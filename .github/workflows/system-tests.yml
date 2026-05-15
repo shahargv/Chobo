@@ -2,23 +2,43 @@ name: System Tests
 
 on:
   push:
-    branches: [main]
-  schedule:
-    - cron: '0 2 * * *'
+    branches: [master]
+  issue_comment:
+    types: [created]
   workflow_dispatch:
+    inputs:
+      suite:
+        description: Which system tests to run on master
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - smoke
+          - custom
+      test_names:
+        description: Comma or space separated test names when suite is custom
+        required: false
+        type: string
 
 concurrency:
-  group: system-tests-${{ github.ref }}
+  group: system-tests-${{ github.event_name }}-${{ github.event.issue.number || github.ref }}
   cancel-in-progress: false
 
 permissions:
   contents: read
+  issues: write
+  pull-requests: read
+
+env:
+  SMOKE_SYSTEM_TESTS: SmokeCreateTables,ChoboCrudSmoke
 
 jobs:
-  full-system-tests:
-    name: Full system test suite
+  master-smoke:
+    name: Master build, unit tests, and smoke system tests
+    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 70
 
     steps:
       - name: Checkout
@@ -29,15 +49,258 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      - name: Run full system test suite
+      - name: Restore
+        run: dotnet restore Chobo.sln
+
+      - name: Build
+        run: dotnet build Chobo.sln -c Release --no-restore
+
+      - name: Unit tests
+        run: dotnet test Chobo.Tests/Chobo.Tests.csproj -c Release --no-build -v minimal --blame-hang --blame-hang-timeout 30s
+
+      - name: Run smoke system tests
         shell: pwsh
-        run: ./TestingSuite/TestManager.ps1 -TestId "gha-full-${{ github.run_id }}" -GlobalTimeoutSeconds 1800 -TestTimeoutSeconds 300
+        env:
+          TEST_NAMES: ${{ env.SMOKE_SYSTEM_TESTS }}
+        run: |
+          $testNames = $env:TEST_NAMES -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+          ./TestingSuite/TestManager.ps1 -TestId "gha-master-smoke-${{ github.run_id }}" -TestName $testNames -GlobalTimeoutSeconds 1800 -TestTimeoutSeconds 300
 
       - name: Upload system test results
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: full-system-test-results
+          name: master-smoke-system-test-results
+          path: .artifacts/TestResults
+          if-no-files-found: ignore
+          retention-days: 30
+
+  prepare-comment:
+    name: Resolve PR comment command
+    if: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request != null && contains(github.event.comment.body, '/system-test') }}
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.command.outputs.should_run }}
+      test_names: ${{ steps.command.outputs.test_names }}
+      pr_head_sha: ${{ steps.command.outputs.pr_head_sha }}
+      pr_head_repo: ${{ steps.command.outputs.pr_head_repo }}
+      description: ${{ steps.command.outputs.description }}
+
+    steps:
+      - name: Parse command
+        id: command
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const allowedAssociations = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
+            const association = context.payload.comment.author_association;
+            const issueNumber = context.payload.issue.number;
+
+            if (!allowedAssociations.has(association)) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                body: 'Ignoring `/system-test`: only repository owners, members, and collaborators can start system tests from comments.'
+              });
+              core.setOutput('should_run', 'false');
+              return;
+            }
+
+            const body = context.payload.comment.body || '';
+            const commandLine = body.split(/\r?\n/).map(line => line.trim()).find(line => line.startsWith('/system-test'));
+
+            if (!commandLine) {
+              core.setOutput('should_run', 'false');
+              return;
+            }
+
+            const rawSelection = commandLine.replace(/^\/system-test\b/i, '').trim();
+            let testNames = '';
+            let description = 'full system test suite';
+
+            if (!rawSelection || /^help$/i.test(rawSelection)) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                body: [
+                  'Usage:',
+                  '- `/system-test all`',
+                  '- `/system-test smoke`',
+                  '- `/system-test SmokeCreateTables`',
+                  '- `/system-test SmokeCreateTables,ChoboCrudSmoke`'
+                ].join('\n')
+              });
+              core.setOutput('should_run', 'false');
+              return;
+            }
+
+            if (/^all$/i.test(rawSelection)) {
+              testNames = '';
+            } else if (/^smoke$/i.test(rawSelection)) {
+              testNames = process.env.SMOKE_SYSTEM_TESTS;
+              description = `smoke system tests (${testNames})`;
+            } else {
+              const names = rawSelection
+                .split(/[,\s]+/)
+                .map(name => name.trim())
+                .filter(Boolean);
+
+              if (!names.length || names.some(name => !/^[A-Za-z0-9_-]+$/.test(name))) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  body: 'Could not parse `/system-test`. Use `all`, `smoke`, or comma/space separated test names like `/system-test SmokeCreateTables,ChoboCrudSmoke`.'
+                });
+                core.setOutput('should_run', 'false');
+                return;
+              }
+
+              testNames = names.join(',');
+              description = `selected system tests (${testNames})`;
+            }
+
+            const { data: pullRequest } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: issueNumber
+            });
+
+            core.setOutput('should_run', 'true');
+            core.setOutput('test_names', testNames);
+            core.setOutput('pr_head_sha', pullRequest.head.sha);
+            core.setOutput('pr_head_repo', pullRequest.head.repo.full_name);
+            core.setOutput('description', description);
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body: `Queued ${description} for ${pullRequest.head.sha.substring(0, 12)}.`
+            });
+
+  pr-comment-system-tests:
+    name: PR comment requested system tests
+    needs: prepare-comment
+    if: ${{ needs.prepare-comment.outputs.should_run == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ needs.prepare-comment.outputs.pr_head_repo }}
+          ref: ${{ needs.prepare-comment.outputs.pr_head_sha }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Run requested system tests
+        shell: pwsh
+        env:
+          TEST_NAMES: ${{ needs.prepare-comment.outputs.test_names }}
+        run: |
+          $arguments = @(
+            '-TestId', 'gha-pr-comment-${{ github.run_id }}',
+            '-GlobalTimeoutSeconds', '1800',
+            '-TestTimeoutSeconds', '300'
+          )
+
+          $testNames = $env:TEST_NAMES -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+          if ($testNames.Count -gt 0) {
+            $arguments += @('-TestName')
+            $arguments += $testNames
+          }
+
+          ./TestingSuite/TestManager.ps1 @arguments
+
+      - name: Upload system test results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pr-comment-system-test-results
+          path: .artifacts/TestResults
+          if-no-files-found: ignore
+          retention-days: 14
+
+  manual-system-tests:
+    name: Manual master system tests
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v6
+        with:
+          ref: master
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Resolve selected tests
+        id: tests
+        shell: pwsh
+        env:
+          SUITE: ${{ inputs.suite }}
+          REQUESTED_TEST_NAMES: ${{ inputs.test_names }}
+          SMOKE_TEST_NAMES: ${{ env.SMOKE_SYSTEM_TESTS }}
+        run: |
+          $suite = $env:SUITE.Trim().ToLowerInvariant()
+          $testNames = ''
+
+          if ($suite -eq 'smoke') {
+            $testNames = $env:SMOKE_TEST_NAMES
+          } elseif ($suite -eq 'custom') {
+            $names = $env:REQUESTED_TEST_NAMES -split '[,\s]+' | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+            if ($names.Count -eq 0) {
+              throw 'Manual custom system tests require test_names.'
+            }
+
+            foreach ($name in $names) {
+              if ($name -notmatch '^[A-Za-z0-9_-]+$') {
+                throw "Invalid test name '$name'."
+              }
+            }
+
+            $testNames = $names -join ','
+          } elseif ($suite -ne 'all') {
+            throw "Unknown suite '$suite'."
+          }
+
+          "test_names=$testNames" >> $env:GITHUB_OUTPUT
+
+      - name: Run selected system tests
+        shell: pwsh
+        env:
+          TEST_NAMES: ${{ steps.tests.outputs.test_names }}
+        run: |
+          $arguments = @(
+            '-TestId', 'gha-manual-${{ github.run_id }}',
+            '-GlobalTimeoutSeconds', '1800',
+            '-TestTimeoutSeconds', '300'
+          )
+
+          $testNames = $env:TEST_NAMES -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+          if ($testNames.Count -gt 0) {
+            $arguments += @('-TestName')
+            $arguments += $testNames
+          }
+
+          ./TestingSuite/TestManager.ps1 @arguments
+
+      - name: Upload system test results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: manual-system-test-results
           path: .artifacts/TestResults
           if-no-files-found: ignore
           retention-days: 30
