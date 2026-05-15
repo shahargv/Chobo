@@ -243,9 +243,17 @@ public sealed class InitiateRestoreRequestValidator : AbstractValidator<Initiate
         RuleFor(x => x.TargetTable).MaximumLength(512).When(x => x.TargetTable is not null);
         RuleFor(x => x.Layout).IsInEnum().When(x => x.Layout is not null);
         RuleFor(x => x.SourceShard).GreaterThan(0).When(x => x.SourceShard is not null);
+        RuleFor(x => x.SourceShards).Must(x => x is null || x.Count > 0).WithMessage("SourceShards must not be empty when provided.");
+        RuleForEach(x => x.SourceShards).GreaterThan(0).When(x => x.SourceShards is not null);
         RuleFor(x => x.TargetShard).GreaterThan(0).When(x => x.TargetShard is not null);
         RuleFor(x => x.Tables).Must(x => x is null || x.Count > 0).WithMessage("Tables must not be empty when provided.");
         RuleForEach(x => x.Tables).SetValidator(new RestoreTableMappingRequestValidator()).When(x => x.Tables is not null);
+        RuleFor(x => x)
+            .Must(x => x.SourceShard is null || x.SourceShards is null)
+            .WithMessage("Use either SourceShard or SourceShards, not both.");
+        RuleFor(x => x)
+            .Must(x => x.SourceShards is null || x.SourceShards.Distinct().Count() == x.SourceShards.Count)
+            .WithMessage("SourceShards must not contain duplicates.");
         RuleFor(x => x)
             .Must(x => string.IsNullOrWhiteSpace(x.TargetDatabase) == string.IsNullOrWhiteSpace(x.TargetTable))
             .WithMessage("TargetDatabase and TargetTable must be provided together.");

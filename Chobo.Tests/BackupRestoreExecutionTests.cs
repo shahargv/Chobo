@@ -1036,6 +1036,37 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Restore_can_select_multiple_source_shards()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        fixture.ClickHouse.Topology.Clear();
+        fixture.ClickHouse.Topology.AddRange([
+            new ClickHouseShardReplicaInfo(1, "shard-1", 1, "restore-s1", 9000, false, 0),
+            new ClickHouseShardReplicaInfo(2, "shard-2", 1, "restore-s2", 9000, false, 0)
+        ]);
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Succeeded, "backup-op", true)
+        ], shardCount: 3);
+        backup.Status = BackupRunStatus.Succeeded;
+        await fixture.Db.SaveChangesAsync();
+
+        var restore = await fixture.Services.GetRequiredService<RestoreApplicationService>().InitiateAsync(new InitiateRestoreRequest(
+            backup.Id,
+            fixture.TargetClusterId,
+            null,
+            null,
+            null,
+            null,
+            false,
+            false,
+            Layout: RestoreLayout.Redistribute,
+            SourceShards: [1, 3]));
+
+        var table = Assert.Single(restore.Tables);
+        Assert.Equal([1, 3], table.Shards.Select(x => x.SourceShardNumber).Order().ToArray());
+    }
+
+    [Fact]
     public async Task Restore_schema_only_creates_tables_without_submitting_restore_operations()
     {
         await using var fixture = await TestFixture.CreateAsync();
