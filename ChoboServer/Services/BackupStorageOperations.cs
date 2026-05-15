@@ -12,6 +12,7 @@ public interface IBackupStorageOperations
     Task DeleteDirectoryAsync(BackupTargetEntity target, string directoryPath, CancellationToken cancellationToken = default);
     Task WriteObjectAsync(BackupTargetEntity target, string path, byte[] content, CancellationToken cancellationToken = default);
     Task<byte[]> ReadObjectAsync(BackupTargetEntity target, string path, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<string>> ListObjectPathsAsync(BackupTargetEntity target, string rootPath, CancellationToken cancellationToken = default);
     Task DeleteObjectAsync(BackupTargetEntity target, string path, CancellationToken cancellationToken = default);
     Task<StorageConnectionTestResult> TestConnectionAsync(BackupTargetEntity target, CancellationToken cancellationToken = default);
 }
@@ -27,6 +28,9 @@ public sealed class BackupStorageOperations(
 
     public Task<byte[]> ReadObjectAsync(BackupTargetEntity target, string path, CancellationToken cancellationToken = default) =>
         For(target).ReadObjectAsync(target, path, cancellationToken);
+
+    public Task<IReadOnlyList<string>> ListObjectPathsAsync(BackupTargetEntity target, string rootPath, CancellationToken cancellationToken = default) =>
+        For(target).ListObjectPathsAsync(target, rootPath, cancellationToken);
 
     public Task DeleteObjectAsync(BackupTargetEntity target, string path, CancellationToken cancellationToken = default) =>
         For(target).DeleteObjectAsync(target, path, cancellationToken);
@@ -93,6 +97,17 @@ public sealed class S3BackupStorageOperations(ICredentialProtector protector, Se
         using var output = new MemoryStream();
         await response.ResponseStream.CopyToAsync(output, cancellationToken);
         return output.ToArray();
+    }
+
+    public async Task<IReadOnlyList<string>> ListObjectPathsAsync(BackupTargetEntity target, string rootPath, CancellationToken cancellationToken = default)
+    {
+        var storagePrefix = S3TargetUrlBuilder.StoragePath(target, rootPath).TrimStart('/');
+        using var client = await CreateClientAsync(target, cancellationToken);
+        var keys = await ListKeysAsync(client, target.Bucket, storagePrefix, cancellationToken);
+        var targetPrefix = string.IsNullOrWhiteSpace(target.PathPrefix) ? "" : target.PathPrefix.Trim('/').Trim() + "/";
+        return keys
+            .Select(key => key.StartsWith(targetPrefix, StringComparison.Ordinal) ? key[targetPrefix.Length..] : key)
+            .ToList();
     }
 
     public async Task DeleteObjectAsync(BackupTargetEntity target, string path, CancellationToken cancellationToken = default)

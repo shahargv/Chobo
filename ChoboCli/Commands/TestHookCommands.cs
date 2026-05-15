@@ -11,6 +11,7 @@ public sealed class TestHookCommands : CliSubject
         Verb("delay-next-backup-before-poll", "Delay the next backup after operation id persistence.", DelayNextBackupBeforePollAsync);
         Verb("delay-next-restore-before-poll", "Delay the next restore after operation id persistence.", DelayNextRestoreBeforePollAsync);
         Verb("crash", "Crash the server process.", CrashAsync);
+        Verb("delete-sqlite-and-crash", "Delete server SQLite files and crash the server process.", DeleteSqliteAndCrashAsync);
     }
 
     public override string Name => "test-hooks";
@@ -36,4 +37,7 @@ public sealed class TestHookCommands : CliSubject
 
     private static Task<object?> CrashAsync(CommandContext context) =>
         CommandHelpers.WithClient(context, client => client.PostAsync("test-hooks/crash", new { }));
+
+    private static Task<object?> DeleteSqliteAndCrashAsync(CommandContext context) =>
+        CommandHelpers.WithClient(context, client => client.PostAsync("test-hooks/delete-sqlite-and-crash", new { }));
 }

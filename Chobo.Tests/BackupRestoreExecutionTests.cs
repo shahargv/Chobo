@@ -8,6 +8,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -16,6 +17,8 @@ namespace Chobo.Tests;
 
 public sealed class BackupRestoreExecutionTests
 {
+    private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
+
     [Fact]
     public async Task Backup_paths_are_self_descriptive_and_unique()
     {
@@ -55,6 +58,84 @@ public sealed class BackupRestoreExecutionTests
         fixture.Db.ChangeTracker.Clear();
         var tables = await fixture.Db.BackupTables.Select(x => x.Database + "." + x.Table).ToListAsync();
         Assert.Equal(["sales.orders"], tables);
+    }
+
+    [Fact]
+    public async Task Backup_runner_writes_credentials_free_storage_manifest()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+
+        var backupId = await fixture.CreateManualBackupAsync();
+        await fixture.RunBackupAsync(backupId);
+
+        var manifestEntry = fixture.StorageDeletion.Objects.First(x => x.Key.EndsWith(BackupStorageManifestService.ManifestRelativePath, StringComparison.Ordinal));
+        var manifestJson = Encoding.UTF8.GetString(manifestEntry.Value);
+        var manifest = JsonSerializer.Deserialize<BackupStorageManifestV1>(manifestJson, JsonOptions)!;
+
+        Assert.Equal(backupId, manifest.Backup.Id);
+        Assert.Equal(BackupRunStatus.Succeeded, manifest.Backup.Status);
+        Assert.Equal("source", manifest.SourceCluster.Name);
+        Assert.Null(manifestJson.Contains("EncryptedPassword", StringComparison.OrdinalIgnoreCase) ? "leaked" : null);
+        Assert.DoesNotContain("secret", manifestJson, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(manifest.Tables, x => x.Database == "sales" && x.Table == "orders");
+    }
+
+    [Fact]
+    public async Task Backup_metadata_recovery_recreates_failed_backup_metadata_from_storage_manifest()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var failed = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "failed_orders", BackupTableStatus.Failed, "failed-op", true)
+        ]);
+        failed.Status = BackupRunStatus.Failed;
+        failed.FailureReason = "simulated failure";
+        failed.Error = "simulated failure";
+        await fixture.Db.SaveChangesAsync();
+        await fixture.Services.GetRequiredService<IBackupStorageManifestService>().WriteManifestAsync(failed.Id);
+
+        var storedObjects = fixture.StorageDeletion.Objects.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal);
+        await fixture.Db.BackupTableShards.ExecuteDeleteAsync();
+        await fixture.Db.BackupTables.ExecuteDeleteAsync();
+        await fixture.Db.Backups.ExecuteDeleteAsync();
+        await fixture.Db.BackupPolicies.ExecuteDeleteAsync();
+        await fixture.Db.SchemaDefinitions.ExecuteDeleteAsync();
+        await fixture.Db.ClickHouseAccessNodes.ExecuteDeleteAsync();
+        await fixture.Db.ClickHouseClusters.ExecuteDeleteAsync();
+        await fixture.Db.BackupTargets.ExecuteDeleteAsync();
+        var scanTargetId = Guid.NewGuid();
+        fixture.Db.BackupTargets.Add(new BackupTargetEntity
+        {
+            Id = scanTargetId,
+            Name = "scan-target",
+            Endpoint = "http://minio:9000",
+            Bucket = "data-bucket",
+            Region = "us-east-1",
+            EncryptedAccessKey = "encrypted-access",
+            EncryptedSecretKey = "encrypted-secret"
+        });
+        await fixture.Db.SaveChangesAsync();
+        fixture.Db.ChangeTracker.Clear();
+        fixture.StorageDeletion.Objects.Clear();
+        foreach (var entry in storedObjects)
+        {
+            fixture.StorageDeletion.Objects[entry.Key] = entry.Value;
+        }
+
+        var result = await fixture.Services.GetRequiredService<IBackupStorageManifestService>()
+            .RecoverFromScanAsync(new RecoverBackupMetadataScanRequest(scanTargetId, ""));
+
+        Assert.Equal(1, result.ImportedBackupCount);
+        var recovered = await fixture.Db.Backups.Include(x => x.Tables).ThenInclude(x => x.Shards).SingleAsync(x => x.Id == failed.Id);
+        Assert.Equal(BackupRunStatus.Failed, recovered.Status);
+        Assert.Equal("simulated failure", recovered.FailureReason);
+        Assert.Equal("failed_orders", Assert.Single(recovered.Tables).Table);
+        Assert.Equal("encrypted-access", (await fixture.Db.BackupTargets.SingleAsync(x => x.Id == fixture.TargetId)).EncryptedAccessKey);
+
+        var second = await fixture.Services.GetRequiredService<IBackupStorageManifestService>()
+            .RecoverFromScanAsync(new RecoverBackupMetadataScanRequest(scanTargetId, ""));
+        Assert.Equal(0, second.ImportedBackupCount);
+        Assert.Equal(1, second.UpdatedBackupCount);
     }
 
     [Fact]
@@ -1011,6 +1092,14 @@ public sealed class BackupRestoreExecutionTests
     private static ClickHouseTableInfo Table(string database, string table, string engine, string columnsJson = "[]", string? schemaHash = null) =>
         new(database, table, engine, $"CREATE TABLE {database}.{table} (id UInt64) ENGINE = {engine} ORDER BY id", columnsJson, schemaHash ?? $"{database}.{table}.{engine}.{columnsJson}");
 
+    private static JsonSerializerOptions CreateJsonOptions()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        options.Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
+        options.Converters.Add(new JsonStringEnumConverter());
+        return options;
+    }
+
     private static string SerializeRunDto<T>(T dto)
     {
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
@@ -1184,6 +1273,7 @@ public sealed class BackupRestoreExecutionTests
     private sealed class FakeBackupStorageOperations : IBackupStorageOperations
     {
         public List<string> DeletedDirectories { get; } = [];
+        public Dictionary<string, byte[]> Objects { get; } = new(StringComparer.Ordinal);
         public bool FailNextDelete { get; set; }
 
         public Task DeleteDirectoryAsync(BackupTargetEntity target, string directoryPath, CancellationToken cancellationToken = default)
@@ -1198,11 +1288,17 @@ public sealed class BackupRestoreExecutionTests
             return Task.CompletedTask;
         }
 
-        public Task WriteObjectAsync(BackupTargetEntity target, string path, byte[] content, CancellationToken cancellationToken = default) =>
-            Task.CompletedTask;
+        public Task WriteObjectAsync(BackupTargetEntity target, string path, byte[] content, CancellationToken cancellationToken = default)
+        {
+            Objects[path] = content;
+            return Task.CompletedTask;
+        }
 
         public Task<byte[]> ReadObjectAsync(BackupTargetEntity target, string path, CancellationToken cancellationToken = default) =>
-            Task.FromResult(Array.Empty<byte>());
+            Task.FromResult(Objects.TryGetValue(path, out var content) ? content : Array.Empty<byte>());
+
+        public Task<IReadOnlyList<string>> ListObjectPathsAsync(BackupTargetEntity target, string rootPath, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<string>>(Objects.Keys.Where(x => x.StartsWith(rootPath, StringComparison.Ordinal)).ToList());
 
         public Task DeleteObjectAsync(BackupTargetEntity target, string path, CancellationToken cancellationToken = default) =>
             Task.CompletedTask;
@@ -1255,6 +1351,7 @@ public sealed class BackupRestoreExecutionTests
                 .AddSingleton<ITestHookCoordinator, TestHookCoordinator>()
                 .AddScoped<DashboardApplicationService>()
                 .AddScoped<BackupApplicationService>()
+                .AddScoped<IBackupStorageManifestService, BackupStorageManifestService>()
                 .AddScoped<RestoreApplicationService>()
                 .AddScoped<BackupRunnerService>()
                 .AddScoped<RestoreRunnerService>()
