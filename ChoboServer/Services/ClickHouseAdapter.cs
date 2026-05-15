@@ -322,9 +322,7 @@ public sealed class ClickHouseAdapter(ICredentialProtector protector, Serilog.IL
 
     private static string S3Endpoint(BackupTargetEntity target, string path)
     {
-        var endpoint = target.Endpoint.TrimEnd('/');
-        var prefix = string.IsNullOrWhiteSpace(target.PathPrefix) ? "" : target.PathPrefix.Trim('/').Trim() + "/";
-        return $"{endpoint}/{target.Bucket.Trim('/')}/{prefix}{path.TrimStart('/')}";
+        return S3TargetUrlBuilder.BuildObjectUrl(target, path).ToString();
     }
 
     private static string Hash(string value) =>
