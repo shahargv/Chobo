@@ -967,15 +967,27 @@ function ManualBackupButton() {
 
 function EntriesPage({ title, last, setLast, onClear, headers, rows }: { title: string; last: number; setLast: (value: number) => void; onClear: (before: string) => void; headers: string[]; rows: string[][] }) {
   const [filters, setFilters] = useState<string[]>(() => headers.map(() => ""));
+  const [activeFilter, setActiveFilter] = useState<number | null>(null);
   const visibleRows = rows.filter((row) => filters.every((filter, index) => !filter.trim() || row[index]?.toLowerCase().includes(filter.trim().toLowerCase())));
   return <Page title={title} action={<Input label="Last" type="number" value={`${last}`} onChange={(value) => setLast(Number(value) || 100)} />}>
     <section className="panel">
-      <div className="column-filters">
-        {headers.map((header, index) => (
-          <Input key={header} label={`${header} filter`} value={filters[index] ?? ""} onChange={(value) => setFilters(filters.map((filter, i) => i === index ? value : filter))} />
-        ))}
-      </div>
-      <DataTable headers={headers}>{visibleRows.map((row, index) => <tr key={index}>{row.map((cell, i) => <td key={i}>{cell}</td>)}</tr>)}</DataTable>
+      <div className="table-wrap"><table><thead><tr>{headers.map((header, index) => (
+        <th key={header}>
+          <div className="filterable-header">
+            <span>{header}</span>
+            <button className={`header-filter ${filters[index] ? "active" : ""}`} title={`Filter ${header}`} onClick={() => setActiveFilter(activeFilter === index ? null : index)}><ListFilter size={13} /></button>
+            {activeFilter === index && <div className="filter-popover">
+              <label>{header} contains<input autoFocus value={filters[index] ?? ""} onChange={(event) => setFilters(filters.map((filter, i) => i === index ? event.target.value : filter))} onKeyDown={(event) => {
+                if (event.key === "Escape") setActiveFilter(null);
+              }} /></label>
+              <div className="actions">
+                <button className="ghost" onClick={() => setFilters(filters.map((filter, i) => i === index ? "" : filter))}>Clear</button>
+                <button className="secondary" onClick={() => setActiveFilter(null)}>Apply</button>
+              </div>
+            </div>}
+          </div>
+        </th>
+      ))}</tr></thead><tbody>{visibleRows.map((row, index) => <tr key={index}>{row.map((cell, i) => <td key={i}>{cell}</td>)}</tr>)}</tbody></table></div>
       <span className="hint">{visibleRows.length} of {rows.length} row(s)</span>
       <button className="danger" onClick={() => onClear(new Date().toISOString())}>Clear before now</button>
     </section>
