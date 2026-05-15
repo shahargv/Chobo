@@ -39,6 +39,7 @@ ChoboCli clusters list
 ChoboCli clusters add --name prod --mode Cluster --node ch1:9000,ch2:9000 --username default --password secret --backup-restore-maxdop 3 --clickhouse-cluster-name prod_cluster
 ChoboCli clusters add --name local --mode SingleInstance --host localhost --port 9000
 ChoboCli clusters update --id <cluster-id> --name prod --mode Cluster --node ch1:9000,ch2:9000
+ChoboCli clusters test-connection --id <cluster-id>
 ChoboCli clusters remove --id <cluster-id>
 ```
 
@@ -54,6 +55,7 @@ For `Cluster` mode, `--clickhouse-cluster-name` should match the ClickHouse `sys
 ChoboCli targets list
 ChoboCli targets add-s3 --name minio --endpoint http://localhost:9000 --bucket data-bucket --access-key key --secret-key secret --force-path-style
 ChoboCli targets update-s3 --id <target-id> --name minio --endpoint http://localhost:9000 --bucket data-bucket
+ChoboCli targets test-connection --id <target-id>
 ChoboCli targets remove --id <target-id>
 ```
 

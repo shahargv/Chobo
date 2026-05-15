@@ -60,12 +60,13 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ActorContext>();
         services.AddScoped<TokenService>();
         services.AddScoped<AuditService>();
-        services.AddScoped<CredentialProtector>();
+        services.AddSingleton<IAesKeyRepository, FileAesKeyRepository>();
+        services.AddScoped<ICredentialProtector, CredentialProtector>();
         services.AddScoped<ExportImportService>();
         services.AddScoped<ClickHouseAdapter>();
         services.AddScoped<IClickHouseAdapter>(serviceProvider => serviceProvider.GetRequiredService<ClickHouseAdapter>());
-        services.AddScoped<S3BackupStorageDeleter>();
-        services.AddScoped<IBackupStorageDeletionService, BackupStorageDeletionService>();
+        services.AddScoped<S3BackupStorageOperations>();
+        services.AddScoped<IBackupStorageOperations, BackupStorageOperations>();
         services.AddScoped<ApplicationLogStore>();
         services.AddScoped<AuditStore>();
         services.AddSingleton<TestHookCoordinator>();
@@ -99,13 +100,26 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
-    public static async Task InitializeChoboDatabaseAsync(this IServiceProvider services)
+    public static async Task InitializeChoboDatabaseAsync(this IServiceProvider services, bool firstStartup)
     {
         using var scope = services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
         await DatabaseBootstrap.EnsureDatabaseObjectsAsync(db);
         await DatabaseBootstrap.EnsureSchemaStateAsync(db);
         await DatabasePerformanceMaintenance.EnsureAsync(db);
-        await DatabaseBootstrap.TryInitializeFromOptionsAsync(scope.ServiceProvider);
+
+        var storage = scope.ServiceProvider.GetRequiredService<IOptions<ChoboStorageOptions>>().Value;
+        var dataDirectory = ChoboPaths.GetDataDirectory(storage.DataDirectory);
+        var markerPath = Path.Combine(dataDirectory, "_initialized");
+        var hasUsers = await db.Users.AnyAsync();
+        if (File.Exists(markerPath) && !hasUsers)
+        {
+            throw new InvalidOperationException($"Chobo data directory is marked initialized but no users exist in SQLite database at {Path.Combine(dataDirectory, "chobo.db")}.");
+        }
+
+        if (firstStartup || (!File.Exists(markerPath) && !hasUsers))
+        {
+            await DatabaseBootstrap.BootstrapFirstStartupAsync(scope.ServiceProvider);
+        }
     }
 }

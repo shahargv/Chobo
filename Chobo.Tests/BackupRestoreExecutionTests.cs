@@ -425,7 +425,7 @@ public sealed class BackupRestoreExecutionTests
 
         Assert.NotNull(dto);
         Assert.Equal(BackupRunStatus.ManualDeleteRequested, dto!.Status);
-        Assert.Empty(fixture.StorageDeletion.DeletedBackupIds);
+        Assert.Empty(fixture.StorageDeletion.DeletedDirectories);
         Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "delete-requested" && x.EntityId == backup.Id.ToString()));
     }
 
@@ -445,7 +445,7 @@ public sealed class BackupRestoreExecutionTests
         fixture.Db.ChangeTracker.Clear();
         var completed = await fixture.Db.Backups.SingleAsync(x => x.Id == backup.Id);
         Assert.Equal(BackupRunStatus.ManualDeleted, completed.Status);
-        Assert.Contains(backup.Id, fixture.StorageDeletion.DeletedBackupIds);
+        Assert.NotEmpty(fixture.StorageDeletion.DeletedDirectories);
         Assert.Equal(1, await fixture.Db.Backups.CountAsync(x => x.Id == backup.Id));
         Assert.True(await fixture.Db.BackupTables.AnyAsync(x => x.BackupId == backup.Id));
         Assert.True(await fixture.Db.BackupTableShards.AnyAsync(x => x.BackupTable!.BackupId == backup.Id));
@@ -866,12 +866,12 @@ public sealed class BackupRestoreExecutionTests
         public void ReleaseBlockedStatus() => _releaseStatus.TrySetResult();
     }
 
-    private sealed class FakeBackupStorageDeletionService : IBackupStorageDeletionService
+    private sealed class FakeBackupStorageOperations : IBackupStorageOperations
     {
-        public List<Guid> DeletedBackupIds { get; } = [];
+        public List<string> DeletedDirectories { get; } = [];
         public bool FailNextDelete { get; set; }
 
-        public Task DeleteBackupDataAsync(BackupEntity backup, CancellationToken cancellationToken = default)
+        public Task DeleteDirectoryAsync(BackupTargetEntity target, string directoryPath, CancellationToken cancellationToken = default)
         {
             if (FailNextDelete)
             {
@@ -879,9 +879,21 @@ public sealed class BackupRestoreExecutionTests
                 throw new InvalidOperationException("simulated cleanup crash");
             }
 
-            DeletedBackupIds.Add(backup.Id);
+            DeletedDirectories.Add(directoryPath);
             return Task.CompletedTask;
         }
+
+        public Task WriteObjectAsync(BackupTargetEntity target, string path, byte[] content, CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
+
+        public Task<byte[]> ReadObjectAsync(BackupTargetEntity target, string path, CancellationToken cancellationToken = default) =>
+            Task.FromResult(Array.Empty<byte>());
+
+        public Task DeleteObjectAsync(BackupTargetEntity target, string path, CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
+
+        public Task<StorageConnectionTestResult> TestConnectionAsync(BackupTargetEntity target, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new StorageConnectionTestResult(target.Id, target.Type, true, "ok"));
     }
 
     private sealed class TestFixture : IAsyncDisposable
@@ -890,12 +902,12 @@ public sealed class BackupRestoreExecutionTests
         public IServiceProvider Services { get; }
         public ChoboDbContext Db { get; }
         public FakeClickHouseAdapter ClickHouse { get; }
-        public FakeBackupStorageDeletionService StorageDeletion { get; }
+        public FakeBackupStorageOperations StorageDeletion { get; }
         public Guid SourceClusterId { get; }
         public Guid TargetClusterId { get; }
         public Guid TargetId { get; }
 
-        private TestFixture(SqliteConnection connection, IServiceProvider services, ChoboDbContext db, FakeClickHouseAdapter clickHouse, FakeBackupStorageDeletionService storageDeletion, Guid sourceClusterId, Guid targetClusterId, Guid targetId)
+        private TestFixture(SqliteConnection connection, IServiceProvider services, ChoboDbContext db, FakeClickHouseAdapter clickHouse, FakeBackupStorageOperations storageDeletion, Guid sourceClusterId, Guid targetClusterId, Guid targetId)
         {
             _connection = connection;
             Services = services;
@@ -912,14 +924,14 @@ public sealed class BackupRestoreExecutionTests
             var connection = new SqliteConnection("DataSource=:memory:");
             await connection.OpenAsync();
             var fake = new FakeClickHouseAdapter();
-            var storageDeletion = new FakeBackupStorageDeletionService();
+            var storageDeletion = new FakeBackupStorageOperations();
             var services = new ServiceCollection()
                 .AddSingleton(connection)
                 .AddDbContext<ChoboDbContext>((provider, builder) => builder.UseSqlite(provider.GetRequiredService<SqliteConnection>()))
                 .AddSingleton(fake)
                 .AddScoped<IClickHouseAdapter>(provider => provider.GetRequiredService<FakeClickHouseAdapter>())
                 .AddSingleton(storageDeletion)
-                .AddScoped<IBackupStorageDeletionService>(provider => provider.GetRequiredService<FakeBackupStorageDeletionService>())
+                .AddScoped<IBackupStorageOperations>(provider => provider.GetRequiredService<FakeBackupStorageOperations>())
                 .AddScoped<PolicySelectorEvaluationService>()
                 .AddScoped<ActorContext>()
                 .AddScoped<AuditService>()

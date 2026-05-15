@@ -8,7 +8,8 @@ namespace ChoboServer.Application;
 public sealed class ClusterApplicationService(
     IClusterRepository clusters,
     IUnitOfWork unitOfWork,
-    CredentialProtector protector,
+    ICredentialProtector protector,
+    IClickHouseAdapter clickHouse,
     AuditService audit)
 {
     public async Task<IReadOnlyList<ClusterDto>> ListAsync() =>
@@ -17,14 +18,18 @@ public sealed class ClusterApplicationService(
     public async Task<ClusterDto> AddAsync(UpsertClusterRequest request)
     {
         Validate(request);
+        var userName = await protector.EncryptAsync(request.UserName);
+        var password = await protector.EncryptAsync(request.Password);
         var cluster = new ClickHouseClusterEntity
         {
             Name = request.Name.Trim(),
             Mode = request.Mode,
             BackupRestoreMaxDop = NormalizeMaxDop(request.BackupRestoreMaxDop),
             ClickHouseClusterName = NormalizeClusterName(request.ClickHouseClusterName),
-            EncryptedUserName = protector.Protect(request.UserName),
-            EncryptedPassword = protector.Protect(request.Password),
+            EncryptedUserName = userName?.Ciphertext,
+            EncryptedUserNameKeyId = userName?.KeyId,
+            EncryptedPassword = password?.Ciphertext,
+            EncryptedPasswordKeyId = password?.KeyId,
             AccessNodes = request.AccessNodes.Select(ToEntity).ToList()
         };
 
@@ -53,11 +58,15 @@ public sealed class ClusterApplicationService(
         cluster.UpdatedAt = DateTimeOffset.UtcNow;
         if (request.UserName is not null)
         {
-            cluster.EncryptedUserName = protector.Protect(request.UserName);
+            var userName = await protector.EncryptAsync(request.UserName);
+            cluster.EncryptedUserName = userName?.Ciphertext;
+            cluster.EncryptedUserNameKeyId = userName?.KeyId;
         }
         if (request.Password is not null)
         {
-            cluster.EncryptedPassword = protector.Protect(request.Password);
+            var password = await protector.EncryptAsync(request.Password);
+            cluster.EncryptedPassword = password?.Ciphertext;
+            cluster.EncryptedPasswordKeyId = password?.KeyId;
         }
 
         clusters.RemoveNodes(cluster.AccessNodes.ToList());
@@ -88,6 +97,25 @@ public sealed class ClusterApplicationService(
 
         await audit.RecordAsync("delete", AuditEntityType.Cluster, id.ToString(), AuditDetails.Deactivation(previous, ToDto(cluster)));
         return true;
+    }
+
+    public async Task<ClusterConnectionTestResult?> TestConnectionAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var cluster = await clusters.FindActiveAsync(id);
+        if (cluster is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            await clickHouse.ExecuteAsync(cluster, "SELECT 1", cancellationToken);
+            return new ClusterConnectionTestResult(cluster.Id, true, "ClickHouse connection succeeded.");
+        }
+        catch (Exception ex)
+        {
+            return new ClusterConnectionTestResult(cluster.Id, false, ex.Message);
+        }
     }
 
     private static void Validate(UpsertClusterRequest request)

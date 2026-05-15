@@ -11,6 +11,7 @@ public sealed class ClusterCommands : CliSubject
         Verb("add", "Add a ClickHouse cluster.", AddAsync);
         Verb("update", "Update a ClickHouse cluster.", UpdateAsync);
         Verb("remove", "Soft-delete a ClickHouse cluster.", RemoveAsync);
+        Verb("test-connection", "Test a ClickHouse cluster connection.", TestConnectionAsync);
     }
 
     public override string Name => "clusters";
@@ -34,6 +35,9 @@ public sealed class ClusterCommands : CliSubject
 
     private static Task<object?> RemoveAsync(CommandContext context) =>
         CommandHelpers.WithClient(context, client => client.DeleteAsync($"clusters/{context.Command.Options.Required("--id")}"));
+
+    private static Task<object?> TestConnectionAsync(CommandContext context) =>
+        CommandHelpers.WithClient(context, client => client.PostAsync($"clusters/{context.Command.Options.Required("--id")}/test-connection", new { }));
 
     private static UpsertClusterRequest Request(OptionBag options)
     {

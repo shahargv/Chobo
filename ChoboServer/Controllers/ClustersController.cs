@@ -34,4 +34,11 @@ public sealed class ClustersController(ClusterApplicationService clusters) : Con
     {
         return await clusters.RemoveAsync(id) ? NoContent() : NotFound();
     }
+
+    [HttpPost("{id:guid}/test-connection")]
+    public async Task<ActionResult<ClusterConnectionTestResult>> TestConnection(Guid id, CancellationToken cancellationToken)
+    {
+        var result = await clusters.TestConnectionAsync(id, cancellationToken);
+        return result is null ? NotFound() : result;
+    }
 }

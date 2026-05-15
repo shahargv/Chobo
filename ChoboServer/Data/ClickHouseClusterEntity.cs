@@ -9,7 +9,9 @@ public sealed class ClickHouseClusterEntity
     public ClusterMode Mode { get; set; }
     public List<ClickHouseAccessNodeEntity> AccessNodes { get; set; } = [];
     public string? EncryptedUserName { get; set; }
+    public Guid? EncryptedUserNameKeyId { get; set; }
     public string? EncryptedPassword { get; set; }
+    public Guid? EncryptedPasswordKeyId { get; set; }
     public int? BackupRestoreMaxDop { get; set; }
     public string? ClickHouseClusterName { get; set; }
     public bool IsDeleted { get; set; }
