@@ -61,7 +61,7 @@ const navItems = [
   { to: "/restores", label: "Restores", icon: RotateCcw },
   { to: "/policies", label: "Policies", icon: Settings2 },
   { to: "/schedules", label: "Schedules", icon: CalendarClock },
-  { to: "/clusters", label: "Clusters", icon: Server },
+  { to: "/clusters", label: "ClickHouse Clusters", icon: Server },
   { to: "/targets", label: "Backup Storage", icon: HardDrive },
   { to: "/users", label: "Users", icon: Users },
   { to: "/logs", label: "Logs", icon: FileClock },
@@ -104,7 +104,7 @@ export function App() {
             <div className="brand-mark">C</div>
             <div>
               <strong>Chobo</strong>
-              <span>Backup console</span>
+              <span>ClickHouse Backup Orchestrator</span>
             </div>
           </div>
           <nav>
@@ -292,7 +292,7 @@ function buildOnboardingSteps(input: OnboardingInput): OnboardingStep[] {
   return [
     {
       number: 1,
-      title: "Configure clusters",
+      title: "Configure ClickHouse clusters",
       body: "Add the ClickHouse source or target clusters Chobo can connect to.",
       to: "/clusters",
       action: "Add cluster",
@@ -376,7 +376,7 @@ function OnboardingComplete() {
         <ShieldCheck size={20} />
         <div>
           <strong>Onboarding complete</strong>
-          <span>Clusters, backup storage, policy, schedule, first backup, and restore practice are all present.</span>
+          <span>ClickHouse clusters, backup storage, policy, schedule, first backup, and restore practice are all present.</span>
         </div>
       </div>
     </section>
@@ -810,7 +810,7 @@ function Clusters() {
     onError: (error) => showToast({ kind: "error", text: String(error) })
   });
   return (
-    <CrudPage title="Clusters" showForm={showForm} onAdd={() => { reset(); setShowForm(true); }} formTitle={editing ? "Edit cluster" : "Create cluster"} saveLabel={editing ? "Update cluster" : "Save cluster"} onCancel={reset} onSave={() => save.mutate()} form={<>
+    <CrudPage title="ClickHouse Clusters" showForm={showForm} onAdd={() => { reset(); setShowForm(true); }} formTitle={editing ? "Edit ClickHouse cluster" : "Create ClickHouse cluster"} saveLabel={editing ? "Update cluster" : "Save cluster"} onCancel={reset} onSave={() => save.mutate()} form={<>
       <Input label="Name" value={draft.name} onChange={(value) => setDraft({ ...draft, name: value })} />
       <Select label="Mode" value={draft.mode} onChange={(value) => setDraft({ ...draft, mode: value as UpsertClusterRequest["mode"] })} options={[["SingleInstance", "Single instance"], ["Cluster", "Cluster"]]} />
       <Input label="Nodes" value={formatNodes(draft.accessNodes)} onChange={(value) => setDraft({ ...draft, accessNodes: parseNodes(value, draft.accessNodes.some((node) => node.useTls)) })} />
