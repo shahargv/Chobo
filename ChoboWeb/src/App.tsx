@@ -501,32 +501,32 @@ function Policies() {
   const policies = useQuery({ queryKey: ["policies"], queryFn: () => api.policies() });
   const clusters = useQuery({ queryKey: ["clusters"], queryFn: () => api.clusters() });
   const targets = useQuery({ queryKey: ["targets"], queryFn: () => api.targets() });
+  const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<BackupPolicyDto | null>(null);
-  const [draft, setDraft] = useState<UpsertPolicyRequest>(() => ({ name: "", sourceClusterId: "", targetId: "", selector: emptySelector, failedBackupRetentionMode: "KeepAndExcludeFromMinBackupsToKeep" }));
+  const defaultPolicyDraft = (): UpsertPolicyRequest => ({ name: "", sourceClusterId: "", targetId: "", selector: emptySelector, retention: { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 }, failedBackupRetentionMode: "KeepAndExcludeFromMinBackupsToKeep" });
+  const [draft, setDraft] = useState<UpsertPolicyRequest>(() => defaultPolicyDraft());
+  const simulation = useQuery({
+    queryKey: ["policy-simulation", draft.sourceClusterId, draft.selector],
+    queryFn: () => api.simulatePolicy({ sourceClusterId: draft.sourceClusterId, selector: draft.selector }),
+    enabled: showForm && draft.sourceClusterId.length > 0,
+    retry: false
+  });
+  const reset = () => {
+    setShowForm(false);
+    setEditing(null);
+    setDraft(defaultPolicyDraft());
+  };
   const save = useMutation({
     mutationFn: () => editing ? api.updatePolicy(editing.id, draft) : api.addPolicy(draft),
     onSuccess: () => {
       showToast({ kind: "success", text: "Policy saved." });
       policies.refetch();
-      setEditing(null);
-      setDraft({ name: "", sourceClusterId: "", targetId: "", selector: emptySelector, failedBackupRetentionMode: "KeepAndExcludeFromMinBackupsToKeep" });
+      reset();
     },
     onError: (error) => showToast({ kind: "error", text: String(error) })
   });
   return (
-    <Page title="Policies">
-      <section className="panel form-panel">
-        <h2>{editing ? "Edit policy" : "Create policy"}</h2>
-        <div className="form-grid">
-          <Input label="Name" value={draft.name} onChange={(value) => setDraft({ ...draft, name: value })} />
-          <Select label="Source cluster" value={draft.sourceClusterId} onChange={(value) => setDraft({ ...draft, sourceClusterId: value })} options={(clusters.data ?? []).map((cluster) => [cluster.id, cluster.name])} />
-          <Select label="Target" value={draft.targetId} onChange={(value) => setDraft({ ...draft, targetId: value })} options={(targets.data ?? []).map((target) => [target.id, target.name])} />
-          <Select label="Failed backups" value={draft.failedBackupRetentionMode} onChange={(value) => setDraft({ ...draft, failedBackupRetentionMode: value as FailedBackupRetentionMode })} options={[["KeepAndExcludeFromMinBackupsToKeep", "Keep, exclude from minimum"], ["DeleteByGarbageCollectorAfterFailure", "Garbage collect failed backups"]]} />
-        </div>
-        <SelectorBuilder selector={draft.selector} onChange={(selector) => setDraft({ ...draft, selector })} />
-        <RetentionEditor value={draft.retention ?? null} onChange={(retention) => setDraft({ ...draft, retention })} />
-        <button className="primary" onClick={() => save.mutate()}><Save size={16} /> Save policy</button>
-      </section>
+    <Page title="Policies" action={<button className="primary" onClick={() => { setEditing(null); setDraft(defaultPolicyDraft()); setShowForm(true); }}><Save size={16} /> Add policy</button>}>
       <section className="panel">
         <DataTable headers={["Name", "Source", "Target", "Rules", "Retention", "Actions"]}>
           {(policies.data ?? []).map((policy) => (
@@ -535,28 +535,38 @@ function Policies() {
               <td>{nameOf(clusters.data, policy.sourceClusterId)}</td>
               <td>{nameOf(targets.data, policy.targetId)}</td>
               <td>{policy.selector.rules.length}</td>
-              <td>{policy.retention ? `${policy.retention.minBackupsToKeep} backups` : "server default"}</td>
+              <td>{policy.retention ? `${policy.retention.minBackupsToKeep} backups` : "default"}</td>
               <td><button className="ghost" onClick={() => {
                 setEditing(policy);
-                setDraft({ name: policy.name, sourceClusterId: policy.sourceClusterId, targetId: policy.targetId, selector: policy.selector, retention: policy.retention, failedBackupRetentionMode: policy.failedBackupRetentionMode });
+                setDraft({ name: policy.name, sourceClusterId: policy.sourceClusterId, targetId: policy.targetId, selector: policy.selector, retention: policy.retention ?? { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 }, failedBackupRetentionMode: policy.failedBackupRetentionMode });
+                setShowForm(true);
               }}>Edit</button></td>
             </tr>
           ))}
         </DataTable>
       </section>
+      {showForm && <section className="panel form-panel">
+        <div className="section-head"><h2>{editing ? "Edit policy" : "Create policy"}</h2><button className="ghost" onClick={reset}>Cancel</button></div>
+        <div className="form-grid">
+          <Input label="Name" value={draft.name} onChange={(value) => setDraft({ ...draft, name: value })} />
+          <Select label="Source cluster" value={draft.sourceClusterId} onChange={(value) => setDraft({ ...draft, sourceClusterId: value })} options={(clusters.data ?? []).map((cluster) => [cluster.id, cluster.name])} />
+          <Select label="Target" value={draft.targetId} onChange={(value) => setDraft({ ...draft, targetId: value })} options={(targets.data ?? []).map((target) => [target.id, target.name])} />
+          <Select label="Failed backups" value={draft.failedBackupRetentionMode} onChange={(value) => setDraft({ ...draft, failedBackupRetentionMode: value as FailedBackupRetentionMode })} options={[["KeepAndExcludeFromMinBackupsToKeep", "Keep"], ["DeleteByGarbageCollectorAfterFailure", "Garbage collect failed backups"]]} />
+        </div>
+        <SelectorBuilder selector={draft.selector} inventory={simulation.data?.inventory ?? []} selected={simulation.data?.tables ?? []} isLoading={simulation.isFetching} error={simulation.error ? String(simulation.error) : null} onChange={(selector) => setDraft({ ...draft, selector })} />
+        <RetentionEditor value={draft.retention ?? { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 }} onChange={(retention) => setDraft({ ...draft, retention })} />
+        <button className="primary" onClick={() => save.mutate()}><Save size={16} /> Save policy</button>
+      </section>}
     </Page>
   );
 }
 
-function SelectorBuilder({ selector, onChange }: { selector: PolicySelector; onChange: (selector: PolicySelector) => void }) {
-  const inventory = [
+function SelectorBuilder({ selector, inventory, selected, isLoading, error, onChange }: { selector: PolicySelector; inventory: Array<{ database: string; table: string }>; selected: Array<{ database: string; table: string }>; isLoading: boolean; error: string | null; onChange: (selector: PolicySelector) => void }) {
+  const preview = inventory.length > 0 ? selected : evaluateSelector(selector, [
     { database: "sales", table: "orders" },
     { database: "sales", table: "fact_clickstream_raw" },
-    { database: "system", table: "query_log" },
-    { database: "tenant_gold", table: "monthly_scratch" },
-    { database: "tenant_demo", table: "daily_scratch" }
-  ];
-  const selected = evaluateSelector(selector, inventory);
+    { database: "tenant_gold", table: "monthly_scratch" }
+  ]);
   const updateRule = (index: number, rule: PolicySelectorRule) => onChange({ ...selector, rules: selector.rules.map((item, i) => i === index ? rule : item) });
   return (
     <div className="selector-builder">
@@ -580,8 +590,11 @@ function SelectorBuilder({ selector, onChange }: { selector: PolicySelector; onC
       <div className="preview-grid">
         <pre>{JSON.stringify(selector, null, 2)}</pre>
         <div>
-          <h4>Preview</h4>
-          {selected.map((table) => <span className="chip" key={`${table.database}.${table.table}`}>{table.database}.{table.table}</span>)}
+          <h4>Simulation</h4>
+          {isLoading && <span className="hint">Loading tables from ClickHouse...</span>}
+          {error && <span className="field-error">{error}</span>}
+          {!isLoading && !error && inventory.length > 0 && <span className="hint">{preview.length} of {inventory.length} table(s) will be backed up.</span>}
+          {preview.map((table) => <span className="chip" key={`${table.database}.${table.table}`}>{table.database}.{table.table}</span>)}
         </div>
       </div>
     </div>
@@ -602,20 +615,17 @@ function PatternEditor({ label, pattern, onChange }: { label: string; pattern: {
   );
 }
 
-function RetentionEditor({ value, onChange }: { value: UpsertPolicyRequest["retention"] | null; onChange: (value: UpsertPolicyRequest["retention"] | null) => void }) {
-  const enabled = value !== null;
-  const retention = value ?? { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 };
+function RetentionEditor({ value, onChange }: { value: NonNullable<UpsertPolicyRequest["retention"]>; onChange: (value: NonNullable<UpsertPolicyRequest["retention"]>) => void }) {
+  const retention = value;
   return (
     <div className="retention-editor">
-      <label className="checkbox-row"><input type="checkbox" checked={enabled} onChange={(event) => onChange(event.target.checked ? retention : null)} /> Override retention</label>
-      {enabled && (
-        <div className="form-grid">
-          <Input label="Full retention minutes" type="number" value={retention.fullRetentionMinutes?.toString() ?? ""} onChange={(value) => onChange({ ...retention, fullRetentionMinutes: value ? Number(value) : null })} />
-          <Input label="Incremental retention minutes" type="number" value={retention.incrementalRetentionMinutes?.toString() ?? ""} onChange={(value) => onChange({ ...retention, incrementalRetentionMinutes: value ? Number(value) : null })} />
-          <Input label="Min backups to keep" type="number" value={`${retention.minBackupsToKeep}`} onChange={(value) => onChange({ ...retention, minBackupsToKeep: Number(value) || 0 })} />
-          <Input label="Min full backups" type="number" value={`${retention.minFullBackupsToKeep}`} onChange={(value) => onChange({ ...retention, minFullBackupsToKeep: Number(value) || 0 })} />
-        </div>
-      )}
+      <h3>Retention</h3>
+      <div className="form-grid">
+        <Input label="Full retention minutes" type="number" value={retention.fullRetentionMinutes?.toString() ?? ""} onChange={(value) => onChange({ ...retention, fullRetentionMinutes: value ? Number(value) : null })} />
+        <Input label="Incremental retention minutes" type="number" value={retention.incrementalRetentionMinutes?.toString() ?? ""} onChange={(value) => onChange({ ...retention, incrementalRetentionMinutes: value ? Number(value) : null })} />
+        <Input label="Min backups to keep" type="number" value={`${retention.minBackupsToKeep}`} onChange={(value) => onChange({ ...retention, minBackupsToKeep: Number(value) || 0 })} />
+        <Input label="Min full backups" type="number" value={`${retention.minFullBackupsToKeep}`} onChange={(value) => onChange({ ...retention, minFullBackupsToKeep: Number(value) || 0 })} />
+      </div>
     </div>
   );
 }
@@ -624,9 +634,16 @@ function Schedules() {
   const { api, showToast } = useApi();
   const schedules = useQuery({ queryKey: ["schedules"], queryFn: () => api.schedules() });
   const policies = useQuery({ queryKey: ["policies"], queryFn: () => api.policies() });
+  const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<BackupScheduleDto | null>(null);
   const [scheduleDraft, setScheduleDraft] = useState<ScheduleDraft>(defaultScheduleDraft);
   const [draft, setDraft] = useState<UpsertScheduleRequest>({ name: "", policyId: "", backupType: "Full", cronExpression: buildCron(defaultScheduleDraft), timeZoneId: "UTC", isEnabled: true, missedRunGracePeriod: null, description: null });
+  const reset = () => {
+    setShowForm(false);
+    setEditing(null);
+    setScheduleDraft(defaultScheduleDraft);
+    setDraft({ name: "", policyId: "", backupType: "Full", cronExpression: buildCron(defaultScheduleDraft), timeZoneId: "UTC", isEnabled: true, missedRunGracePeriod: null, description: null });
+  };
   const cronExpression = scheduleDraft.cronExpression.trim();
   const cronValidation = useQuery({
     queryKey: ["schedule-cron-validation", cronExpression, draft.timeZoneId],
@@ -642,6 +659,7 @@ function Schedules() {
     onSuccess: () => {
       showToast({ kind: "success", text: "Schedule saved." });
       schedules.refetch();
+      reset();
     },
     onError: (error) => showToast({ kind: "error", text: String(error) })
   });
@@ -652,9 +670,29 @@ function Schedules() {
     !cronValidation.isFetching &&
     !save.isPending;
   return (
-    <Page title="Schedules">
-      <section className="panel form-panel">
-        <h2>{editing ? "Edit schedule" : "Create schedule"}</h2>
+    <Page title="Schedules" action={<button className="primary" onClick={() => { reset(); setShowForm(true); }}><Save size={16} /> Add schedule</button>}>
+      <section className="panel">
+        <DataTable headers={["Name", "Policy", "Type", "Cron", "Timezone", "Enabled", "Actions"]}>
+          {(schedules.data ?? []).map((schedule) => (
+            <tr key={schedule.id}>
+              <td>{schedule.name}</td>
+              <td>{nameOf(policies.data, schedule.policyId)}</td>
+              <td>{schedule.backupType}</td>
+              <td className="mono">{schedule.cronExpression}</td>
+              <td>{schedule.timeZoneId}</td>
+              <td>{schedule.isEnabled ? "yes" : "no"}</td>
+              <td><button className="ghost" onClick={() => {
+                setEditing(schedule);
+                setScheduleDraft(parseCronToDraft(schedule.cronExpression));
+                setDraft({ name: schedule.name, policyId: schedule.policyId, backupType: schedule.backupType, cronExpression: schedule.cronExpression, timeZoneId: schedule.timeZoneId, isEnabled: schedule.isEnabled, missedRunGracePeriod: schedule.missedRunGracePeriod, description: schedule.description });
+                setShowForm(true);
+              }}>Edit</button></td>
+            </tr>
+          ))}
+        </DataTable>
+      </section>
+      {showForm && <section className="panel form-panel">
+        <div className="section-head"><h2>{editing ? "Edit schedule" : "Create schedule"}</h2><button className="ghost" onClick={reset}>Cancel</button></div>
         <div className="form-grid">
           <Input label="Name" value={draft.name} onChange={(value) => setDraft({ ...draft, name: value })} />
           <Select label="Policy" value={draft.policyId} onChange={(value) => setDraft({ ...draft, policyId: value })} options={(policies.data ?? []).map((policy) => [policy.id, policy.name])} />
@@ -674,26 +712,7 @@ function Schedules() {
         </div>
         <label className="checkbox-row"><input type="checkbox" checked={draft.isEnabled} onChange={(event) => setDraft({ ...draft, isEnabled: event.target.checked })} /> Enabled</label>
         <button className="primary" disabled={!canSaveSchedule} onClick={() => save.mutate()}><Save size={16} /> {cronValidation.data?.isValid ? "Save schedule" : "Validate cron before saving"}</button>
-      </section>
-      <section className="panel">
-        <DataTable headers={["Name", "Policy", "Type", "Cron", "Timezone", "Enabled", "Actions"]}>
-          {(schedules.data ?? []).map((schedule) => (
-            <tr key={schedule.id}>
-              <td>{schedule.name}</td>
-              <td>{nameOf(policies.data, schedule.policyId)}</td>
-              <td>{schedule.backupType}</td>
-              <td className="mono">{schedule.cronExpression}</td>
-              <td>{schedule.timeZoneId}</td>
-              <td>{schedule.isEnabled ? "yes" : "no"}</td>
-              <td><button className="ghost" onClick={() => {
-                setEditing(schedule);
-                setScheduleDraft(parseCronToDraft(schedule.cronExpression));
-                setDraft({ name: schedule.name, policyId: schedule.policyId, backupType: schedule.backupType, cronExpression: schedule.cronExpression, timeZoneId: schedule.timeZoneId, isEnabled: schedule.isEnabled, missedRunGracePeriod: schedule.missedRunGracePeriod, description: schedule.description });
-              }}>Edit</button></td>
-            </tr>
-          ))}
-        </DataTable>
-      </section>
+      </section>}
     </Page>
   );
 }
@@ -726,29 +745,40 @@ function ScheduleEditor({ draft, timezone, onChange }: { draft: ScheduleDraft; t
 function Clusters() {
   const { api, showToast } = useApi();
   const clusters = useQuery({ queryKey: ["clusters"], queryFn: () => api.clusters() });
+  const [showForm, setShowForm] = useState(false);
+  const [modifyCredentials, setModifyCredentials] = useState(true);
   const [editing, setEditing] = useState<ClusterDto | null>(null);
   const [draft, setDraft] = useState<UpsertClusterRequest>({ name: "", mode: "SingleInstance", accessNodes: [{ host: "localhost", port: 9000, useTls: false }], userName: null, password: null });
+  const clickHouseNames = useQuery({ queryKey: ["clickhouse-cluster-names", editing?.id], queryFn: () => api.clickHouseClusterNames(editing!.id), enabled: !!editing && draft.mode === "Cluster", retry: false });
   const reset = () => {
+    setShowForm(false);
     setEditing(null);
+    setModifyCredentials(true);
     setDraft({ name: "", mode: "SingleInstance", accessNodes: [{ host: "localhost", port: 9000, useTls: false }], userName: null, password: null });
   };
   const save = useMutation({
-    mutationFn: () => editing ? api.updateCluster(editing.id, draft) : api.addCluster(draft),
+    mutationFn: () => editing ? api.updateCluster(editing.id, modifyCredentials ? draft : { ...draft, userName: null, password: null }) : api.addCluster(draft),
     onSuccess: () => { showToast({ kind: "success", text: "Cluster saved." }); clusters.refetch(); reset(); },
     onError: (error) => showToast({ kind: "error", text: String(error) })
   });
   return (
-    <CrudPage title="Clusters" formTitle={editing ? "Edit cluster" : "Create cluster"} saveLabel={editing ? "Update cluster" : "Save cluster"} onCancel={editing ? reset : undefined} onSave={() => save.mutate()} form={<>
+    <CrudPage title="Clusters" showForm={showForm} onAdd={() => { reset(); setShowForm(true); }} formTitle={editing ? "Edit cluster" : "Create cluster"} saveLabel={editing ? "Update cluster" : "Save cluster"} onCancel={reset} onSave={() => save.mutate()} form={<>
       <Input label="Name" value={draft.name} onChange={(value) => setDraft({ ...draft, name: value })} />
       <Select label="Mode" value={draft.mode} onChange={(value) => setDraft({ ...draft, mode: value as UpsertClusterRequest["mode"] })} options={[["SingleInstance", "Single instance"], ["Cluster", "Cluster"]]} />
       <Input label="Nodes" value={formatNodes(draft.accessNodes)} onChange={(value) => setDraft({ ...draft, accessNodes: parseNodes(value, draft.accessNodes.some((node) => node.useTls)) })} />
       <Input label="Max DOP" type="number" value={draft.backupRestoreMaxDop?.toString() ?? ""} onChange={(value) => setDraft({ ...draft, backupRestoreMaxDop: value ? Number(value) : null })} />
-      <Input label="ClickHouse cluster name" value={draft.clickHouseClusterName ?? ""} onChange={(value) => setDraft({ ...draft, clickHouseClusterName: value || null })} />
+      {draft.mode === "Cluster" && (editing
+        ? <Select label="ClickHouse system.clusters name" value={draft.clickHouseClusterName ?? ""} onChange={(value) => setDraft({ ...draft, clickHouseClusterName: value || null })} options={clickHouseClusterNameOptions(clickHouseNames.data?.names ?? [], draft.clickHouseClusterName)} />
+        : <Input label="ClickHouse system.clusters name" value={draft.clickHouseClusterName ?? ""} onChange={(value) => setDraft({ ...draft, clickHouseClusterName: value || null })} />)}
+      {draft.mode === "Cluster" && <span className="hint field-wide">{editing ? "Choose the ClickHouse topology entry Chobo should use. Leave empty when ClickHouse exposes exactly one cluster." : "After saving the connection, edit this cluster to choose from the live system.clusters list."}</span>}
       <label className="checkbox-row"><input type="checkbox" checked={draft.accessNodes.some((node) => node.useTls)} onChange={(event) => setDraft({ ...draft, accessNodes: draft.accessNodes.map((node) => ({ ...node, useTls: event.target.checked })) })} /> Use TLS</label>
-      <Input label="Username" value={draft.userName ?? ""} onChange={(value) => setDraft({ ...draft, userName: value || null })} />
-      <Input label="Password" type="password" value={draft.password ?? ""} onChange={(value) => setDraft({ ...draft, password: value || null })} />
+      {editing && <label className="checkbox-row"><input type="checkbox" checked={modifyCredentials} onChange={(event) => setModifyCredentials(event.target.checked)} /> Modify credentials</label>}
+      {(!editing || modifyCredentials) && <Input label="Username" value={draft.userName ?? ""} onChange={(value) => setDraft({ ...draft, userName: value || null })} />}
+      {(!editing || modifyCredentials) && <Input label="Password" type="password" value={draft.password ?? ""} onChange={(value) => setDraft({ ...draft, password: value || null })} />}
     </>} table={<DataTable headers={["Name", "Mode", "Nodes", "Max DOP", "Actions"]}>{(clusters.data ?? []).map((cluster) => <tr key={cluster.id}><td>{cluster.name}</td><td>{cluster.mode}</td><td>{cluster.accessNodes.map((node) => `${node.host}:${node.port}`).join(", ")}</td><td>{cluster.backupRestoreMaxDop ?? "default"}</td><td className="actions"><button className="ghost" onClick={() => {
       setEditing(cluster);
+      setShowForm(true);
+      setModifyCredentials(false);
       setDraft({ name: cluster.name, mode: cluster.mode, accessNodes: cluster.accessNodes.map((node) => ({ host: node.host, port: node.port, useTls: node.useTls })), userName: null, password: null, backupRestoreMaxDop: cluster.backupRestoreMaxDop, clickHouseClusterName: cluster.clickHouseClusterName });
     }}>Edit</button><button className="ghost" onClick={() => api.testCluster(cluster.id).then((x) => showToast({ kind: x.succeeded ? "success" : "error", text: x.message }))}>Test</button></td></tr>)}</DataTable>} />
   );
@@ -757,18 +787,22 @@ function Clusters() {
 function Targets() {
   const { api, showToast } = useApi();
   const targets = useQuery({ queryKey: ["targets"], queryFn: () => api.targets() });
+  const [showForm, setShowForm] = useState(false);
+  const [modifyCredentials, setModifyCredentials] = useState(true);
   const [editing, setEditing] = useState<BackupTargetDto | null>(null);
   const [draft, setDraft] = useState<UpsertS3TargetRequest>({ name: "", endpoint: "http://localhost:9000", region: "us-east-1", bucket: "", pathPrefix: null, forcePathStyle: true, accessKey: null, secretKey: null });
   const reset = () => {
+    setShowForm(false);
     setEditing(null);
+    setModifyCredentials(true);
     setDraft({ name: "", endpoint: "http://localhost:9000", region: "us-east-1", bucket: "", pathPrefix: null, forcePathStyle: true, accessKey: null, secretKey: null });
   };
   const save = useMutation({
-    mutationFn: () => editing ? api.updateTarget(editing.id, draft) : api.addTarget(draft),
+    mutationFn: () => editing ? api.updateTarget(editing.id, modifyCredentials ? draft : { ...draft, accessKey: null, secretKey: null }) : api.addTarget(draft),
     onSuccess: () => { showToast({ kind: "success", text: "Target saved." }); targets.refetch(); reset(); },
     onError: (error) => showToast({ kind: "error", text: String(error) })
   });
-  return <CrudPage title="Targets" formTitle={editing ? "Edit target" : "Create target"} saveLabel={editing ? "Update target" : "Save target"} onCancel={editing ? reset : undefined} onSave={() => save.mutate()} form={<>
+  return <CrudPage title="Targets" showForm={showForm} onAdd={() => { reset(); setShowForm(true); }} formTitle={editing ? "Edit target" : "Create target"} saveLabel={editing ? "Update target" : "Save target"} onCancel={reset} onSave={() => save.mutate()} form={<>
     <Input label="Name" value={draft.name} onChange={(value) => setDraft({ ...draft, name: value })} />
     <Input label="Endpoint" value={draft.endpoint} onChange={(value) => setDraft({ ...draft, endpoint: value })} />
     <Input label="Bucket" value={draft.bucket} onChange={(value) => setDraft({ ...draft, bucket: value })} />
@@ -786,10 +820,13 @@ function Targets() {
           : "Uses bucket.endpoint/key. Use when your S3 provider requires virtual-hosted buckets."}
       </span>
     </div>
-    <Input label="Access key" value={draft.accessKey ?? ""} onChange={(value) => setDraft({ ...draft, accessKey: value || null })} />
-    <Input label="Secret key" type="password" value={draft.secretKey ?? ""} onChange={(value) => setDraft({ ...draft, secretKey: value || null })} />
+    {editing && <label className="checkbox-row"><input type="checkbox" checked={modifyCredentials} onChange={(event) => setModifyCredentials(event.target.checked)} /> Modify credentials</label>}
+    {(!editing || modifyCredentials) && <Input label="Access key" value={draft.accessKey ?? ""} onChange={(value) => setDraft({ ...draft, accessKey: value || null })} />}
+    {(!editing || modifyCredentials) && <Input label="Secret key" type="password" value={draft.secretKey ?? ""} onChange={(value) => setDraft({ ...draft, secretKey: value || null })} />}
   </>} table={<DataTable headers={["Name", "Endpoint", "Bucket", "Addressing", "Prefix", "Actions"]}>{(targets.data ?? []).map((target) => <tr key={target.id}><td>{target.name}</td><td>{target.s3.endpoint}</td><td>{target.s3.bucket}</td><td>{target.s3.forcePathStyle ? "Path style" : "Virtual-host style"}</td><td>{target.s3.pathPrefix ?? ""}</td><td className="actions"><button className="ghost" onClick={() => {
     setEditing(target);
+    setShowForm(true);
+    setModifyCredentials(false);
     setDraft({ name: target.name, endpoint: target.s3.endpoint, region: target.s3.region, bucket: target.s3.bucket, pathPrefix: target.s3.pathPrefix, forcePathStyle: target.s3.forcePathStyle, accessKey: null, secretKey: null });
   }}>Edit</button><button className="ghost" onClick={() => api.testTarget(target.id).then((x) => showToast({ kind: x.succeeded ? "success" : "error", text: x.message }))}>Test</button></td></tr>)}</DataTable>} />;
 }
@@ -797,24 +834,26 @@ function Targets() {
 function UsersPage() {
   const { api, showToast } = useApi();
   const users = useQuery({ queryKey: ["users"], queryFn: () => api.users() });
+  const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState("");
   const [oneTimeToken, setOneTimeToken] = useState<CreateUserResponse | CreateAccessTokenResponse | null>(null);
   const create = useMutation({
     mutationFn: () => api.addUser({ userName: name }),
-    onSuccess: (result) => { setOneTimeToken(result); showToast({ kind: "success", text: "User created. Copy the token now." }); users.refetch(); },
+    onSuccess: (result) => { setOneTimeToken(result); setShowForm(false); setName(""); showToast({ kind: "success", text: "User created. Copy the token now." }); users.refetch(); },
     onError: (error) => showToast({ kind: "error", text: String(error) })
   });
   return (
-    <Page title="Users">
-      <section className="panel form-panel">
-        <h2>Create user</h2>
-        <Input label="User name" value={name} onChange={setName} />
-        <button className="primary" onClick={() => create.mutate()}><Users size={16} /> Add user</button>
-        {oneTimeToken && <pre className="token-box">{oneTimeToken.accessToken}</pre>}
-      </section>
+    <Page title="Users" action={<button className="primary" onClick={() => setShowForm(true)}><Users size={16} /> Add user</button>}>
       <section className="panel">
         <DataTable headers={["User", "Active", "Created", "Actions"]}>{(users.data ?? []).map((user) => <UserRow key={user.id} user={user} />)}</DataTable>
       </section>
+      {showForm && (
+      <section className="panel form-panel">
+        <div className="section-head"><h2>Create user</h2><button className="ghost" onClick={() => setShowForm(false)}>Cancel</button></div>
+        <Input label="User name" value={name} onChange={setName} />
+        <button className="primary" onClick={() => create.mutate()}><Users size={16} /> Add user</button>
+      </section>)}
+      {oneTimeToken && <section className="panel"><h2>One-time token</h2><pre className="token-box">{oneTimeToken.accessToken}</pre></section>}
     </Page>
   );
 }
@@ -886,8 +925,8 @@ function EntriesPage({ title, last, setLast, onClear, headers, rows }: { title: 
   </Page>;
 }
 
-function CrudPage({ title, formTitle, saveLabel = "Save", form, table, onSave, onCancel }: { title: string; formTitle?: string; saveLabel?: string; form: ReactNode; table: ReactNode; onSave: () => void; onCancel?: () => void }) {
-  return <Page title={title}><section className="panel form-panel">{formTitle && <h2>{formTitle}</h2>}<div className="form-grid">{form}</div><div className="actions"><button className="primary" onClick={onSave}><Save size={16} /> {saveLabel}</button>{onCancel && <button className="ghost" onClick={onCancel}>Cancel</button>}</div></section><section className="panel">{table}</section></Page>;
+function CrudPage({ title, showForm, onAdd, formTitle, saveLabel = "Save", form, table, onSave, onCancel }: { title: string; showForm: boolean; onAdd: () => void; formTitle?: string; saveLabel?: string; form: ReactNode; table: ReactNode; onSave: () => void; onCancel?: () => void }) {
+  return <Page title={title} action={!showForm ? <button className="primary" onClick={onAdd}><Save size={16} /> Add</button> : undefined}><section className="panel">{table}</section>{showForm && <section className="panel form-panel"><div className="section-head">{formTitle && <h2>{formTitle}</h2>}{onCancel && <button className="ghost" onClick={onCancel}>Cancel</button>}</div><div className="form-grid">{form}</div><div className="actions"><button className="primary" onClick={onSave}><Save size={16} /> {saveLabel}</button></div></section>}</Page>;
 }
 
 function Page({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
@@ -953,6 +992,12 @@ function parseNodes(value: string, useTls: boolean): UpsertClusterRequest["acces
     });
 
   return nodes.length > 0 ? nodes : [{ host: "", port: 9000, useTls }];
+}
+
+function clickHouseClusterNameOptions(names: string[], current?: string | null) {
+  const options = [...names];
+  if (current && !options.includes(current)) options.unshift(current);
+  return options.map((name) => [name, name]);
 }
 
 function presetLabel(value: string) {

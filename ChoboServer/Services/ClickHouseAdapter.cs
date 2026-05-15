@@ -23,6 +23,7 @@ public sealed record ClickHouseShardReplicaInfo(int ShardNumber, string? ShardNa
 public interface IClickHouseAdapter
 {
     Task<IReadOnlyList<ClickHouseTableInfo>> GetTablesAsync(ClickHouseClusterEntity cluster, CancellationToken cancellationToken);
+    Task<IReadOnlyList<string>> GetClusterNamesAsync(ClickHouseClusterEntity cluster, CancellationToken cancellationToken);
     Task<ClickHouseTableInfo?> GetTableAsync(ClickHouseClusterEntity cluster, string database, string table, CancellationToken cancellationToken);
     Task<ClickHouseTableInfo?> GetTableAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string database, string table, CancellationToken cancellationToken);
     Task ExecuteAsync(ClickHouseClusterEntity cluster, string sql, CancellationToken cancellationToken);
@@ -65,6 +66,22 @@ public sealed class ClickHouseAdapter(ICredentialProtector protector, Serilog.IL
 
         _logger.Information("Read {TableCount} ClickHouse tables for cluster {ClusterId}.", result.Count, cluster.Id);
         return result;
+    }
+
+    public async Task<IReadOnlyList<string>> GetClusterNamesAsync(ClickHouseClusterEntity cluster, CancellationToken cancellationToken)
+    {
+        if (cluster.Mode == Chobo.Contracts.ClusterMode.SingleInstance)
+        {
+            return [];
+        }
+
+        var rows = await QueryAsync(cluster, """
+            SELECT DISTINCT cluster
+            FROM system.clusters
+            ORDER BY cluster
+            """, cancellationToken);
+
+        return rows.Select(row => row[0]).Where(x => !string.IsNullOrWhiteSpace(x)).ToList();
     }
 
     public async Task<ClickHouseTableInfo?> GetTableAsync(ClickHouseClusterEntity cluster, string database, string table, CancellationToken cancellationToken)
