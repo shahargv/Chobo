@@ -966,6 +966,69 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Restore_can_select_multiple_tables_with_target_mappings()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Succeeded, "backup-op", true),
+            new SeedBackupTable("sales", "items", BackupTableStatus.Succeeded, "backup-op", true)
+        ]);
+        backup.Status = BackupRunStatus.Succeeded;
+        await fixture.Db.SaveChangesAsync();
+        var tables = backup.Tables.OrderBy(x => x.Table).ToList();
+
+        var restore = await fixture.Services.GetRequiredService<RestoreApplicationService>().InitiateAsync(new InitiateRestoreRequest(
+            backup.Id,
+            fixture.TargetClusterId,
+            null,
+            null,
+            null,
+            null,
+            false,
+            false,
+            Tables: [
+                new RestoreTableMappingRequest(tables[0].Id, "restored", "items_copy"),
+                new RestoreTableMappingRequest(tables[1].Id, "restored", "orders_copy")
+            ]));
+
+        Assert.Equal(2, restore.Tables.Count);
+        Assert.Contains(restore.Tables, x => x.SourceTable == "items" && x.TargetDatabase == "restored" && x.TargetTable == "items_copy");
+        Assert.Contains(restore.Tables, x => x.SourceTable == "orders" && x.TargetDatabase == "restored" && x.TargetTable == "orders_copy");
+    }
+
+    [Fact]
+    public async Task Restore_schema_only_creates_tables_without_submitting_restore_operations()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Succeeded, "backup-op", true)
+        ]);
+        backup.Status = BackupRunStatus.Succeeded;
+        await fixture.Db.SaveChangesAsync();
+
+        var restore = await fixture.Services.GetRequiredService<RestoreApplicationService>().InitiateAsync(new InitiateRestoreRequest(
+            backup.Id,
+            fixture.TargetClusterId,
+            null,
+            null,
+            "restored",
+            "orders_schema",
+            false,
+            false,
+            SchemaOnly: true));
+        await fixture.RunRestoreAsync(restore.Id);
+
+        fixture.Db.ChangeTracker.Clear();
+        var completed = await fixture.Db.Restores.Include(x => x.Tables).ThenInclude(x => x.Shards).SingleAsync(x => x.Id == restore.Id);
+        Assert.Equal(RestoreRunStatus.Succeeded, completed.Status);
+        var table = Assert.Single(completed.Tables);
+        Assert.Equal(RestoreTableStatus.Succeeded, table.Status);
+        Assert.Empty(table.Shards);
+        Assert.Empty(fixture.ClickHouse.RestoreStartTables);
+        Assert.Contains(fixture.ClickHouse.ExecuteSql, sql => sql.Contains("CREATE TABLE IF NOT EXISTS `restored`.`orders_schema`", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Schema_definitions_are_reused_by_hash()
     {
         await using var fixture = await TestFixture.CreateAsync();
@@ -1197,6 +1260,7 @@ public sealed class BackupRestoreExecutionTests
         public List<string> BackupStartTables { get; } = [];
         public List<string?> BackupBasePaths { get; } = [];
         public List<string> RestoreStartTables { get; } = [];
+        public List<string> ExecuteSql { get; } = [];
         public int MaxConcurrentBackupStarts { get; private set; }
         public TimeSpan StartDelay { get; set; }
         public bool BlockOperationStatus { get; set; }
@@ -1238,6 +1302,7 @@ public sealed class BackupRestoreExecutionTests
                 throw ExecuteException;
             }
 
+            ExecuteSql.Add(sql);
             return Task.CompletedTask;
         }
 
@@ -1248,6 +1313,7 @@ public sealed class BackupRestoreExecutionTests
                 throw ExecuteException;
             }
 
+            ExecuteSql.Add(sql);
             return Task.CompletedTask;
         }
 

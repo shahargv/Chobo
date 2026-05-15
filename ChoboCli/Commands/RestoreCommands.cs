@@ -1,5 +1,6 @@
 using Chobo.Contracts;
 using ChoboCli.Cli;
+using System.Text.Json;
 
 namespace ChoboCli.Commands;
 
@@ -16,6 +17,7 @@ public sealed class RestoreCommand : CliSubject
     private static Task<object?> InitiateAsync(CommandContext context)
     {
         var required = context.Command.Options.Require("--backup-id", "--target-cluster-id");
+        var tableMappings = ParseTableMappings(context.Command.Options);
         var request = new InitiateRestoreRequest(
             Guid.Parse(required["--backup-id"]),
             Guid.Parse(required["--target-cluster-id"]),
@@ -27,8 +29,23 @@ public sealed class RestoreCommand : CliSubject
             context.Command.Options.Has("--allow-schema-mismatch"),
             context.Command.Options.Optional("--layout") is { } layout ? ParseLayout(layout) : null,
             context.Command.Options.Optional("--source-shard") is { } sourceShard ? int.Parse(sourceShard) : null,
-            context.Command.Options.Optional("--target-shard") is { } targetShard ? int.Parse(targetShard) : null);
+            context.Command.Options.Optional("--target-shard") is { } targetShard ? int.Parse(targetShard) : null,
+            tableMappings,
+            context.Command.Options.Has("--schema-only"));
         return CommandHelpers.WithClient(context, client => client.PostAsync("restores/initiate", request));
+    }
+
+    private static IReadOnlyList<RestoreTableMappingRequest>? ParseTableMappings(OptionBag options)
+    {
+        var json = options.Optional("--table-mappings-json");
+        if (options.Optional("--table-mappings-file") is { } path)
+        {
+            json = File.ReadAllText(path);
+        }
+
+        return string.IsNullOrWhiteSpace(json)
+            ? null
+            : JsonSerializer.Deserialize<IReadOnlyList<RestoreTableMappingRequest>>(json, new JsonSerializerOptions(JsonSerializerDefaults.Web));
     }
 
     private static RestoreLayout ParseLayout(string value) =>

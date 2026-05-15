@@ -133,7 +133,7 @@ public sealed class RestoreRunnerService(
                 throw new InvalidOperationException($"Append restore requires target table {table.TargetDatabase}.{table.TargetTable} to already exist.");
             }
 
-            if (!backupTable.DataBackedUp)
+            if (!backupTable.DataBackedUp || orderedShards.Count == 0)
             {
                 if (existing is null)
                 {
@@ -144,7 +144,7 @@ public sealed class RestoreRunnerService(
                 table.CompletedAt = DateTimeOffset.UtcNow;
                 await scopedDb.SaveChangesAsync(cancellationToken);
                 _logger.Information("Restore table {RestoreTableId} {TargetDatabase}.{TargetTable} completed as schema-only.", table.Id, table.TargetDatabase, table.TargetTable);
-                await scopedAudit.RecordAsync("table-skipped", AuditEntityType.RestoreTable, table.Id.ToString(), new { reason = "schema-only" });
+                await scopedAudit.RecordAsync("table-skipped", AuditEntityType.RestoreTable, table.Id.ToString(), new { reason = "schema-only", requested = orderedShards.Count == 0 && backupTable.DataBackedUp });
                 return;
             }
 

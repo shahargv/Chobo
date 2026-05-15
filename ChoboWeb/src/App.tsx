@@ -42,6 +42,7 @@ import type {
   PolicySelector,
   PolicySelectorAction,
   PolicySelectorRule,
+  RestoreTableMappingRequest,
   RestoreLayout,
   UpsertClusterRequest,
   UpsertPolicyRequest,
@@ -54,6 +55,8 @@ import { buildCron, dayOptions, defaultScheduleDraft, parseCronToDraft, Schedule
 import { emptySelector } from "./policies";
 
 type Toast = { kind: "success" | "error"; text: string } | null;
+type RestoreScope = "All" | "Selected";
+type RestoreMappingDraft = RestoreTableMappingRequest & { selected: boolean };
 
 const navItems = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -453,9 +456,38 @@ function Restores() {
   const restores = useQuery({ queryKey: ["restores"], queryFn: () => api.restores() });
   const backups = useQuery({ queryKey: ["backups"], queryFn: () => api.backups() });
   const clusters = useQuery({ queryKey: ["clusters"], queryFn: () => api.clusters() });
-  const [request, setRequest] = useState<InitiateRestoreRequest>({ backupId: "", targetClusterId: "", append: false, allowSchemaMismatch: false, layout: "Preserve" });
+  const [request, setRequest] = useState<InitiateRestoreRequest>({ backupId: "", targetClusterId: "", append: false, allowSchemaMismatch: false, layout: "Preserve", schemaOnly: false });
+  const [scope, setScope] = useState<RestoreScope>("All");
+  const [mappings, setMappings] = useState<RestoreMappingDraft[]>([]);
+  const selectedBackup = (backups.data ?? []).find((backup) => backup.id === request.backupId) ?? null;
+  useEffect(() => {
+    if (!selectedBackup) {
+      setMappings([]);
+      return;
+    }
+
+    setMappings(selectedBackup.tables.map((table) => ({
+      backupTableId: table.id,
+      targetDatabase: table.database,
+      targetTable: table.table,
+      selected: true
+    })));
+  }, [selectedBackup?.id]);
+  const restoreRequest = (): InitiateRestoreRequest => ({
+    ...request,
+    tables: scope === "Selected"
+      ? mappings
+        .filter((mapping) => mapping.selected)
+        .map(({ selected: _, ...mapping }) => ({
+          ...mapping,
+          targetDatabase: mapping.targetDatabase || null,
+          targetTable: mapping.targetTable || null
+        }))
+      : null
+  });
+  const restoreErrors = validateRestoreRequest(request, scope, mappings);
   const mutation = useMutation({
-    mutationFn: () => api.initiateRestore(request),
+    mutationFn: () => api.initiateRestore(restoreRequest()),
     onSuccess: () => {
       showToast({ kind: "success", text: "Restore queued." });
       restores.refetch();
@@ -469,14 +501,23 @@ function Restores() {
         <div className="form-grid">
           <Select label="Backup" value={request.backupId} onChange={(value) => setRequest({ ...request, backupId: value })} options={(backups.data ?? []).map((b) => [b.id, `${b.backupType} · ${formatTime(b.createdAt)}`])} />
           <Select label="Target cluster" value={request.targetClusterId} onChange={(value) => setRequest({ ...request, targetClusterId: value })} options={(clusters.data ?? []).map((c) => [c.id, c.name])} />
-          <Input label="Target database" value={request.targetDatabase ?? ""} onChange={(value) => setRequest({ ...request, targetDatabase: value || null })} />
-          <Input label="Target table" value={request.targetTable ?? ""} onChange={(value) => setRequest({ ...request, targetTable: value || null })} />
           <Select label="Layout" value={request.layout ?? "Preserve"} onChange={(value) => setRequest({ ...request, layout: value as RestoreLayout })} options={[["Preserve", "Preserve"], ["Redistribute", "Redistribute"], ["SingleNode", "Single node"]]} />
           <Input label="Source shard" type="number" value={request.sourceShard?.toString() ?? ""} onChange={(value) => setRequest({ ...request, sourceShard: value ? Number(value) : null })} />
           <label className="checkbox-row"><input type="checkbox" checked={request.append} onChange={(event) => setRequest({ ...request, append: event.target.checked })} /> Append into existing table</label>
           <label className="checkbox-row"><input type="checkbox" checked={request.allowSchemaMismatch} onChange={(event) => setRequest({ ...request, allowSchemaMismatch: event.target.checked })} /> Allow schema mismatch</label>
+          <label className="checkbox-row"><input type="checkbox" checked={request.schemaOnly} onChange={(event) => setRequest({ ...request, schemaOnly: event.target.checked })} /> Restore schema only</label>
         </div>
-        <button className="primary" onClick={() => mutation.mutate()}><RotateCcw size={16} /> Queue restore</button>
+        <div className="restore-scope">
+          <span className="field-label">Tables</span>
+          <div className="segmented">
+            <button type="button" className={scope === "All" ? "selected" : "ghost"} onClick={() => setScope("All")}>Restore all tables</button>
+            <button type="button" className={scope === "Selected" ? "selected" : "ghost"} onClick={() => setScope("Selected")}>Choose tables</button>
+          </div>
+        </div>
+        {scope === "Selected" && <RestoreMappingsEditor backup={selectedBackup} mappings={mappings} onChange={setMappings} />}
+        {request.schemaOnly && <span className="hint">Schema-only restore creates the target tables without restoring data from backup storage.</span>}
+        {restoreErrors.map((error) => <span className="field-error" key={error}>{error}</span>)}
+        <button className="primary" disabled={restoreErrors.length > 0 || mutation.isPending} onClick={() => mutation.mutate()}><RotateCcw size={16} /> Queue restore</button>
       </section>
       <section className="panel">
         <DataTable headers={["Status", "Backup", "Target", "Layout", "Started", "Failure"]}>
@@ -493,6 +534,32 @@ function Restores() {
         </DataTable>
       </section>
     </Page>
+  );
+}
+
+function RestoreMappingsEditor({ backup, mappings, onChange }: { backup: BackupDto | null; mappings: RestoreMappingDraft[]; onChange: (mappings: RestoreMappingDraft[]) => void }) {
+  if (!backup) return <Empty text="Choose a backup to select tables." />;
+  if (backup.tables.length === 0) return <Empty text="This backup does not contain restorable tables." />;
+  const update = (id: string, patch: Partial<RestoreMappingDraft>) => onChange(mappings.map((mapping) => mapping.backupTableId === id ? { ...mapping, ...patch } : mapping));
+  return (
+    <div className="restore-mapping-editor">
+      <div className="section-head">
+        <h3>Table mappings</h3>
+        <span className="hint">Select one or more source tables and choose where each one should be restored.</span>
+      </div>
+      <DataTable headers={["Restore", "Source table", "Target database", "Target table", "Mode"]}>
+        {backup.tables.map((table) => {
+          const mapping = mappings.find((item) => item.backupTableId === table.id) ?? { backupTableId: table.id, targetDatabase: table.database, targetTable: table.table, selected: false };
+          return <tr key={table.id}>
+            <td><input className="row-checkbox" type="checkbox" checked={mapping.selected} onChange={(event) => update(table.id, { selected: event.target.checked })} /></td>
+            <td>{table.database}.{table.table}</td>
+            <td><input value={mapping.targetDatabase ?? ""} disabled={!mapping.selected} onChange={(event) => update(table.id, { targetDatabase: event.target.value })} /></td>
+            <td><input value={mapping.targetTable ?? ""} disabled={!mapping.selected} onChange={(event) => update(table.id, { targetTable: event.target.value })} /></td>
+            <td>{table.dataBackedUp ? "Schema + data" : "Schema only"}</td>
+          </tr>;
+        })}
+      </DataTable>
+    </div>
   );
 }
 
@@ -1089,6 +1156,22 @@ function validatePolicyDraft(draft: UpsertPolicyRequest) {
   if (!draft.targetId) errors.push("Choose backup storage.");
   if (draft.selector.rules.length === 0) errors.push("Add at least one selector rule.");
   return errors;
+}
+
+function validateRestoreRequest(request: InitiateRestoreRequest, scope: RestoreScope, mappings: RestoreMappingDraft[]) {
+  const errors: string[] = [];
+  if (!request.backupId) errors.push("Choose a backup.");
+  if (!request.targetClusterId) errors.push("Choose a target ClickHouse cluster.");
+  if (scope === "Selected") {
+    const selected = mappings.filter((mapping) => mapping.selected);
+    if (selected.length === 0) errors.push("Choose at least one table to restore.");
+    selected.forEach((mapping) => {
+      if (!mapping.targetDatabase?.trim() || !mapping.targetTable?.trim()) {
+        errors.push("Every selected table needs a target database and target table.");
+      }
+    });
+  }
+  return [...new Set(errors)];
 }
 
 function formatNodes(nodes: UpsertClusterRequest["accessNodes"]) {
