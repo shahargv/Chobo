@@ -25,8 +25,8 @@ public sealed class ExportImportService(ChoboDbContext db)
         var payload = new ExportPayload(
             users.Select(x => new UserExport(x.Id, x.UserName, x.IsActive, x.CreatedAt, x.DeactivatedAt)).ToList(),
             tokens.Select(x => new AccessTokenExport(x.Id, x.UserId, x.Name, x.TokenHash, x.TokenLookupHash, x.Salt, x.IsActive, x.CreatedAt, x.DeactivatedAt)).ToList(),
-            clusters.Select(x => new ClusterExport(x.Id, x.Name, x.Mode, x.AccessNodes.Select(n => new AccessNodeDto(n.Id, n.Host, n.Port, n.UseTls)).ToList(), x.EncryptedUserName, x.EncryptedPassword, x.BackupRestoreMaxDop, x.IsDeleted, x.CreatedAt, x.UpdatedAt, x.DeletedAt)).ToList(),
-            targets.Select(x => new BackupTargetExport(x.Id, x.Name, x.Type, new S3TargetSettingsDto(x.Endpoint, x.Region, x.Bucket, x.PathPrefix, x.ForcePathStyle), x.EncryptedAccessKey, x.EncryptedSecretKey, x.IsDeleted, x.CreatedAt, x.UpdatedAt, x.DeletedAt)).ToList(),
+            clusters.Select(x => new ClusterExport(x.Id, x.Name, x.Mode, x.AccessNodes.Select(n => new AccessNodeDto(n.Id, n.Host, n.Port, n.UseTls)).ToList(), x.EncryptedUserName, x.EncryptedUserNameKeyId, x.EncryptedPassword, x.EncryptedPasswordKeyId, x.BackupRestoreMaxDop, x.IsDeleted, x.CreatedAt, x.UpdatedAt, x.DeletedAt)).ToList(),
+            targets.Select(x => new BackupTargetExport(x.Id, x.Name, x.Type, new S3TargetSettingsDto(x.Endpoint, x.Region, x.Bucket, x.PathPrefix, x.ForcePathStyle), x.EncryptedAccessKey, x.EncryptedAccessKeyKeyId, x.EncryptedSecretKey, x.EncryptedSecretKeyKeyId, x.IsDeleted, x.CreatedAt, x.UpdatedAt, x.DeletedAt)).ToList(),
             policies.Select(x => new BackupPolicyExport(
                 x.Id,
                 x.Name,
@@ -80,12 +80,12 @@ public sealed class ExportImportService(ChoboDbContext db)
             {
                 db.ClickHouseClusters.Add(new ClickHouseClusterEntity
                 {
-                    Id = cluster.Id, Name = cluster.Name, Mode = cluster.Mode, EncryptedUserName = cluster.EncryptedUserName, EncryptedPassword = cluster.EncryptedPassword, BackupRestoreMaxDop = cluster.BackupRestoreMaxDop,
+                    Id = cluster.Id, Name = cluster.Name, Mode = cluster.Mode, EncryptedUserName = cluster.EncryptedUserName, EncryptedUserNameKeyId = cluster.EncryptedUserNameKeyId, EncryptedPassword = cluster.EncryptedPassword, EncryptedPasswordKeyId = cluster.EncryptedPasswordKeyId, BackupRestoreMaxDop = cluster.BackupRestoreMaxDop,
                     IsDeleted = cluster.IsDeleted, CreatedAt = cluster.CreatedAt, UpdatedAt = cluster.UpdatedAt, DeletedAt = cluster.DeletedAt,
                     AccessNodes = cluster.AccessNodes.Select(n => new ClickHouseAccessNodeEntity { Id = n.Id, Host = n.Host, Port = n.Port, UseTls = n.UseTls }).ToList()
                 });
             }
-            db.BackupTargets.AddRange(envelope.Data.BackupTargets.Select(x => new BackupTargetEntity { Id = x.Id, Name = x.Name, Type = x.Type, Endpoint = x.S3.Endpoint, Region = x.S3.Region, Bucket = x.S3.Bucket, PathPrefix = x.S3.PathPrefix, ForcePathStyle = x.S3.ForcePathStyle, EncryptedAccessKey = x.EncryptedAccessKey, EncryptedSecretKey = x.EncryptedSecretKey, IsDeleted = x.IsDeleted, CreatedAt = x.CreatedAt, UpdatedAt = x.UpdatedAt, DeletedAt = x.DeletedAt }));
+            db.BackupTargets.AddRange(envelope.Data.BackupTargets.Select(x => new BackupTargetEntity { Id = x.Id, Name = x.Name, Type = x.Type, Endpoint = x.S3.Endpoint, Region = x.S3.Region, Bucket = x.S3.Bucket, PathPrefix = x.S3.PathPrefix, ForcePathStyle = x.S3.ForcePathStyle, EncryptedAccessKey = x.EncryptedAccessKey, EncryptedAccessKeyKeyId = x.EncryptedAccessKeyKeyId, EncryptedSecretKey = x.EncryptedSecretKey, EncryptedSecretKeyKeyId = x.EncryptedSecretKeyKeyId, IsDeleted = x.IsDeleted, CreatedAt = x.CreatedAt, UpdatedAt = x.UpdatedAt, DeletedAt = x.DeletedAt }));
             db.BackupPolicies.AddRange(envelope.Data.BackupPolicies.Select(x => new BackupPolicyEntity
             {
                 Id = x.Id,

@@ -112,25 +112,27 @@ public sealed class ChoboFoundationTests
     }
 
     [Fact]
-    public async Task Local_init_uses_environment_variables_for_first_time_initialization()
+    public async Task First_startup_uses_configured_values_and_writes_initial_token_to_stdout()
     {
         var dataDir = NewTestDataDirectory();
-        using var env = new EnvironmentVariableScope(new Dictionary<string, string?>
+        using var writer = new StringWriter();
+        var previous = Console.Out;
+        Console.SetOut(writer);
+
+        try
         {
-            ["CHOBO_DATA_DIRECTORY"] = dataDir,
-            ["CHOBO_INIT_ADMIN_USER"] = "env-admin",
-            ["CHOBO_INIT_ACCESS_TOKEN"] = Token
-        });
+            await using var factory = CreateFactory(dataDir, adminUser: "env-admin", accessToken: Token);
+            var client = AuthenticatedClient(factory);
+            var users = await client.GetFromJsonAsync<List<UserDto>>("/api/v1/users", JsonOptions);
 
-        await LocalCommands.InitializeAsync([]);
-
-        var options = new DbContextOptionsBuilder<ChoboDbContext>()
-            .UseSqlite($"Data Source={Path.Combine(dataDir, "chobo.db")}")
-            .Options;
-        await using var db = new ChoboDbContext(options);
-        Assert.True(await db.Users.AnyAsync(x => x.UserName == "env-admin"));
-        Assert.True(await db.AccessTokens.AnyAsync());
-        Assert.True(await db.AuditEntries.AnyAsync(x => x.Action == "initialize" && x.ActorName == "system"));
+            Assert.Contains(users!, x => x.UserName == "env-admin" && x.IsActive);
+            Assert.Contains(Token, writer.ToString());
+            Assert.True(File.Exists(Path.Combine(dataDir, "_initialized")));
+        }
+        finally
+        {
+            Console.SetOut(previous);
+        }
     }
 
     [Fact]
@@ -204,7 +206,8 @@ public sealed class ChoboFoundationTests
     [Fact]
     public async Task Cluster_credentials_are_encrypted_and_hidden_from_api()
     {
-        await using var factory = CreateFactory();
+        var dataDir = NewTestDataDirectory();
+        await using var factory = CreateFactory(dataDir);
         var client = AuthenticatedClient(factory);
         var created = await Post<ClusterDto>(client, "/api/v1/clusters", new UpsertClusterRequest(
             "prod",
@@ -224,6 +227,56 @@ public sealed class ChoboFoundationTests
         Assert.NotEqual("secret", stored.EncryptedPassword);
         Assert.NotNull(stored.EncryptedPassword);
         Assert.Contains('.', stored.EncryptedPassword);
+        Assert.NotNull(stored.EncryptedPasswordKeyId);
+
+        var export = await client.GetFromJsonAsync<ExportEnvelope>("/api/v1/config/export", JsonOptions);
+        var exported = Assert.Single(export!.Data.Clusters, x => x.Id == created.Id);
+        Assert.Equal(stored.EncryptedPasswordKeyId, exported.EncryptedPasswordKeyId);
+        var keyFile = Directory.EnumerateFiles(Path.Combine(dataDir, "secrets", "aes-keys")).Single();
+        Assert.DoesNotContain(await File.ReadAllTextAsync(keyFile), JsonSerializer.Serialize(export, JsonOptions));
+    }
+
+    [Fact]
+    public async Task Aes_key_repository_creates_guid_named_keys_and_credential_protector_uses_key_ids()
+    {
+        var dataDir = NewTestDataDirectory();
+        var services = new ServiceCollection()
+            .AddSingleton(Options.Create(new ChoboStorageOptions { DataDirectory = dataDir }))
+            .AddSingleton(Options.Create(new ChoboSecurityOptions()))
+            .AddSingleton<IAesKeyRepository, FileAesKeyRepository>()
+            .AddSingleton<ICredentialProtector, CredentialProtector>()
+            .BuildServiceProvider();
+
+        var repository = services.GetRequiredService<IAesKeyRepository>();
+        var key = await repository.CreateNewAsync();
+        var keyPath = Path.Combine(dataDir, "secrets", "aes-keys", key.KeyId.ToString());
+
+        Assert.True(File.Exists(keyPath));
+        Assert.Equal(32, (await repository.GetKeyByIdAsync(key.KeyId))!.KeyBytes.Length);
+
+        var protector = services.GetRequiredService<ICredentialProtector>();
+        var secret = await protector.EncryptAsync("credential");
+
+        Assert.NotNull(secret);
+        Assert.Equal("credential", await protector.DecryptAsync(secret!.Ciphertext, secret.KeyId));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => protector.DecryptAsync(secret.Ciphertext, Guid.NewGuid()));
+    }
+
+    [Fact]
+    public async Task Startup_fails_when_initialized_marker_exists_but_database_is_missing()
+    {
+        var dataDir = NewTestDataDirectory();
+        Directory.CreateDirectory(dataDir);
+        await File.WriteAllTextAsync(Path.Combine(dataDir, "_initialized"), "initialized");
+
+        await using var factory = CreateFactory(dataDir);
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            using var client = AuthenticatedClient(factory);
+            await client.GetAsync("/api/v1/users");
+        });
+
+        Assert.Contains("marked initialized", exception.Message);
     }
 
     [Fact]

@@ -11,6 +11,7 @@ public sealed class TargetCommands : CliSubject
         Verb("add-s3", "Add an S3 backup target.", AddS3Async);
         Verb("update-s3", "Update an S3 backup target.", UpdateS3Async);
         Verb("remove", "Soft-delete a backup target.", RemoveAsync);
+        Verb("test-connection", "Test a backup target connection.", TestConnectionAsync);
     }
 
     public override string Name => "targets";
@@ -34,6 +35,9 @@ public sealed class TargetCommands : CliSubject
 
     private static Task<object?> RemoveAsync(CommandContext context) =>
         CommandHelpers.WithClient(context, client => client.DeleteAsync($"targets/{context.Command.Options.Required("--id")}"));
+
+    private static Task<object?> TestConnectionAsync(CommandContext context) =>
+        CommandHelpers.WithClient(context, client => client.PostAsync($"targets/{context.Command.Options.Required("--id")}/test-connection", new { }));
 
     private static UpsertS3TargetRequest S3Request(OptionBag options)
     {

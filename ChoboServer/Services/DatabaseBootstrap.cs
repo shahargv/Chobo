@@ -48,7 +48,23 @@ public static class DatabaseBootstrap
         await InitializeAsync(services, user, token);
     }
 
-    public static async Task InitializeAsync(IServiceProvider services, string adminUser, string accessToken)
+    public static async Task BootstrapFirstStartupAsync(IServiceProvider services)
+    {
+        var options = services.GetRequiredService<IOptions<ChoboInitOptions>>().Value;
+        var storage = services.GetRequiredService<IOptions<ChoboStorageOptions>>().Value;
+        var adminUser = string.IsNullOrWhiteSpace(options.AdminUser) ? "admin" : options.AdminUser;
+        var token = options.AccessToken ?? TokenService.GenerateToken();
+
+        if (await InitializeAsync(services, adminUser, token))
+        {
+            Console.WriteLine(token);
+            var dataDirectory = ChoboPaths.GetDataDirectory(storage.DataDirectory);
+            Directory.CreateDirectory(dataDirectory);
+            await File.WriteAllTextAsync(Path.Combine(dataDirectory, "_initialized"), DateTimeOffset.UtcNow.ToString("O"));
+        }
+    }
+
+    public static async Task<bool> InitializeAsync(IServiceProvider services, string adminUser, string accessToken)
     {
         var db = services.GetRequiredService<ChoboDbContext>();
         var logger = services.GetService<Serilog.ILogger>()?.ForContext(typeof(DatabaseBootstrap));
@@ -57,7 +73,7 @@ public static class DatabaseBootstrap
         if (await db.Users.AnyAsync())
         {
             logger?.Information("Skipping initial admin creation because users already exist.");
-            return;
+            return false;
         }
 
         var user = new UserEntity { UserName = adminUser };
@@ -76,5 +92,6 @@ public static class DatabaseBootstrap
         });
         await db.SaveChangesAsync();
         logger?.Information("Initialized Chobo admin user {AdminUser} ({UserId}) and initial access token.", adminUser, user.Id);
+        return true;
     }
 }
