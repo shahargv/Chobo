@@ -13,7 +13,9 @@ public sealed class BackupTargetEntity
     public string? PathPrefix { get; set; }
     public bool ForcePathStyle { get; set; }
     public string? EncryptedAccessKey { get; set; }
+    public Guid? EncryptedAccessKeyKeyId { get; set; }
     public string? EncryptedSecretKey { get; set; }
+    public Guid? EncryptedSecretKeyKeyId { get; set; }
     public bool IsDeleted { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? UpdatedAt { get; set; }

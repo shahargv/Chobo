@@ -8,7 +8,8 @@ namespace ChoboServer.Application;
 public sealed class TargetApplicationService(
     ITargetRepository targets,
     IUnitOfWork unitOfWork,
-    CredentialProtector protector,
+    ICredentialProtector protector,
+    IBackupStorageOperations storageOperations,
     AuditService audit)
 {
     public async Task<IReadOnlyList<BackupTargetDto>> ListAsync() =>
@@ -17,6 +18,8 @@ public sealed class TargetApplicationService(
     public async Task<BackupTargetDto> AddS3Async(UpsertS3TargetRequest request)
     {
         Validate(request);
+        var accessKey = await protector.EncryptAsync(request.AccessKey);
+        var secretKey = await protector.EncryptAsync(request.SecretKey);
         var target = new BackupTargetEntity
         {
             Name = request.Name.Trim(),
@@ -25,8 +28,10 @@ public sealed class TargetApplicationService(
             Bucket = request.Bucket,
             PathPrefix = request.PathPrefix,
             ForcePathStyle = request.ForcePathStyle,
-            EncryptedAccessKey = protector.Protect(request.AccessKey),
-            EncryptedSecretKey = protector.Protect(request.SecretKey)
+            EncryptedAccessKey = accessKey?.Ciphertext,
+            EncryptedAccessKeyKeyId = accessKey?.KeyId,
+            EncryptedSecretKey = secretKey?.Ciphertext,
+            EncryptedSecretKeyKeyId = secretKey?.KeyId
         };
 
         await targets.AddAsync(target);
@@ -56,11 +61,15 @@ public sealed class TargetApplicationService(
         target.UpdatedAt = DateTimeOffset.UtcNow;
         if (request.AccessKey is not null)
         {
-            target.EncryptedAccessKey = protector.Protect(request.AccessKey);
+            var accessKey = await protector.EncryptAsync(request.AccessKey);
+            target.EncryptedAccessKey = accessKey?.Ciphertext;
+            target.EncryptedAccessKeyKeyId = accessKey?.KeyId;
         }
         if (request.SecretKey is not null)
         {
-            target.EncryptedSecretKey = protector.Protect(request.SecretKey);
+            var secretKey = await protector.EncryptAsync(request.SecretKey);
+            target.EncryptedSecretKey = secretKey?.Ciphertext;
+            target.EncryptedSecretKeyKeyId = secretKey?.KeyId;
         }
 
         await unitOfWork.SaveChangesAsync();
@@ -84,6 +93,17 @@ public sealed class TargetApplicationService(
 
         await audit.RecordAsync("delete", AuditEntityType.BackupTarget, id.ToString(), AuditDetails.Deactivation(previous, ToDto(target)));
         return true;
+    }
+
+    public async Task<StorageConnectionTestResult?> TestConnectionAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var target = await targets.FindActiveAsync(id);
+        if (target is null)
+        {
+            return null;
+        }
+
+        return await storageOperations.TestConnectionAsync(target, cancellationToken);
     }
 
     private static void Validate(UpsertS3TargetRequest request)

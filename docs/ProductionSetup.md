@@ -54,22 +54,16 @@ The server and CLI Dockerfiles build from source inside Docker.
 
 ## Initialize Server State
 
-ChoboServer creates and upgrades its SQLite database on startup. You can initialize the first admin user and token in either of two ways.
+ChoboServer creates and upgrades its SQLite database on startup. On first startup, when `chobo.db` and `_initialized` are both absent from the data directory, it creates the first admin user and access token automatically.
 
-Option 1: provide init settings on first server startup:
+Provide init settings on first server startup when you need deterministic credentials:
 
 ```powershell
 $env:CHOBO_INIT_ADMIN_USER = "admin"
 $env:CHOBO_INIT_ACCESS_TOKEN = "<long-random-token>"
 ```
 
-Option 2: run the local init command before starting the server:
-
-```powershell
-.\ChoboServer.exe init --data-directory C:\ProgramData\Chobo --encryption-key-base64 <base64-key> --admin-user admin
-```
-
-When `--access-token` or `CHOBO_INIT_ACCESS_TOKEN` is omitted, the init command generates a token and prints it once. Store that value securely.
+When `CHOBO_INIT_ACCESS_TOKEN` is omitted, ChoboServer generates a token and prints it once directly to stdout during first startup. Store that value securely.
 
 ## Run ChoboServer
 

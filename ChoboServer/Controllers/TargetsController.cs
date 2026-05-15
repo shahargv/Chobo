@@ -34,4 +34,11 @@ public sealed class TargetsController(TargetApplicationService targets) : Contro
     {
         return await targets.RemoveAsync(id) ? NoContent() : NotFound();
     }
+
+    [HttpPost("{id:guid}/test-connection")]
+    public async Task<ActionResult<StorageConnectionTestResult>> TestConnection(Guid id, CancellationToken cancellationToken)
+    {
+        var result = await targets.TestConnectionAsync(id, cancellationToken);
+        return result is null ? NotFound() : result;
+    }
 }
