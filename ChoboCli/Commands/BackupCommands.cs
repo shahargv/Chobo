@@ -29,7 +29,8 @@ public sealed class BackupCommand : CliSubject
             Guid.Parse(required["--target-id"]),
             CommandHelpers.PolicySelectorFromOption(context.Command.Options),
             backupType,
-            policyId);
+            policyId,
+            context.Command.Options.Has("--schema-only"));
         return CommandHelpers.WithClient(context, client => client.PostAsync("backups/manual", request));
     }
 }

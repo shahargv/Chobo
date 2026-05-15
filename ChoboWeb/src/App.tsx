@@ -602,7 +602,8 @@ function Policies() {
       targetId: policy.targetId,
       selector: policy.selector,
       backupType: "Full",
-      policyId: policy.id
+      policyId: policy.id,
+      schemaOnly: false
     }),
     onSuccess: () => {
       showToast({ kind: "success", text: "Backup queued." });

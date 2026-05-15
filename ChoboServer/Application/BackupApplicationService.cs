@@ -40,6 +40,10 @@ public sealed class BackupApplicationService(
         {
             throw new ArgumentException("Manual incremental backups require PolicyId.");
         }
+        if (request.SchemaOnly && request.BackupType == BackupType.Incremental)
+        {
+            throw new ArgumentException("Schema-only backups must be full backups.");
+        }
 
         if (clusterId == Guid.Empty)
         {
@@ -80,8 +84,8 @@ public sealed class BackupApplicationService(
 
         db.Backups.Add(backup);
         await db.SaveChangesAsync(cancellationToken);
-        _logger.Information("Manual backup {BackupId} created by {ActorName} for cluster {ClusterId} target {TargetId} type {BackupType}.", backup.Id, actor.ActorName, clusterId, targetId, backup.BackupType);
-        await audit.RecordAsync("created", AuditEntityType.Backup, backup.Id.ToString(), new { backup.TriggerType, backup.BackupType, backup.SourceClusterId, backup.TargetId, backup.PolicyId });
+        _logger.Information("Manual backup {BackupId} created by {ActorName} for cluster {ClusterId} target {TargetId} type {BackupType} schemaOnly={SchemaOnly}.", backup.Id, actor.ActorName, clusterId, targetId, backup.BackupType, request.SchemaOnly);
+        await audit.RecordAsync("created", AuditEntityType.Backup, backup.Id.ToString(), new { backup.TriggerType, backup.BackupType, backup.SourceClusterId, backup.TargetId, backup.PolicyId, request.SchemaOnly });
         await queues.QueueBackupAsync(backup.Id, cancellationToken);
         _logger.Information("Manual backup {BackupId} queued.", backup.Id);
         await audit.RecordAsync("queued", AuditEntityType.Backup, backup.Id.ToString(), new { reason = "manual" });

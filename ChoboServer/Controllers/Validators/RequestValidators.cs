@@ -225,6 +225,9 @@ public sealed class ManualBackupRequestValidator : AbstractValidator<ManualBacku
         RuleFor(x => x.TargetId).NotEmpty();
         RuleFor(x => x.Selector).NotNull().SetValidator(new PolicySelectorValidator());
         RuleFor(x => x.BackupType).IsInEnum();
+        RuleFor(x => x)
+            .Must(x => !x.SchemaOnly || x.BackupType == BackupType.Full)
+            .WithMessage("Schema-only backups must be full backups.");
     }
 }
 

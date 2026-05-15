@@ -221,9 +221,13 @@ public sealed class BackupRunnerService(
 
     private async Task PrepareTablesAsync(BackupEntity backup, CancellationToken cancellationToken)
     {
+        var manualRequest = backup.Policy is null
+            ? JsonSerializer.Deserialize<ManualBackupRequest>(backup.ManualRequestJson ?? "", JsonOptions)
+            : null;
         var selector = backup.Policy is not null
             ? JsonSerializer.Deserialize<PolicySelector>(backup.Policy.SelectorJson, JsonOptions) ?? PolicySelector.Empty
-            : JsonSerializer.Deserialize<ManualBackupRequest>(backup.ManualRequestJson ?? "", JsonOptions)?.Selector ?? PolicySelector.Empty;
+            : manualRequest?.Selector ?? PolicySelector.Empty;
+        var schemaOnly = manualRequest?.SchemaOnly ?? false;
 
         var topology = await clickHouse.GetTopologyAsync(backup.SourceCluster!, cancellationToken);
         var representatives = SelectShardRepresentatives(topology);
@@ -255,7 +259,7 @@ public sealed class BackupRunnerService(
                 _logger.Information("Stored schema definition {SchemaDefinitionId} for {Database}.{Table} hash {SchemaHash}.", schema.Id, table.Database, table.Table, table.SchemaHash);
             }
 
-            var dataBackedUp = IsMergeTreeDataEngine(table.Engine);
+            var dataBackedUp = !schemaOnly && IsMergeTreeDataEngine(table.Engine);
             var parentTable = backup.BackupType == BackupType.Incremental && backup.PolicyId is not null && dataBackedUp
                 ? await FindParentFullTableAsync(backup.PolicyId.Value, table.Database, table.Table, cancellationToken)
                 : null;
