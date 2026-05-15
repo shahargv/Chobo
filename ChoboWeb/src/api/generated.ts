@@ -41,6 +41,7 @@ export interface ClusterDto { id: string; name: string; mode: ClusterMode; acces
 export interface UpsertClusterRequest { name: string; mode: ClusterMode; accessNodes: UpsertAccessNodeRequest[]; userName?: string | null; password?: string | null; backupRestoreMaxDop?: number | null; clickHouseClusterName?: string | null; }
 export interface UpdateClusterCredentialsRequest { userName?: string | null; password?: string | null; }
 export interface ClusterConnectionTestResult { clusterId: string; succeeded: boolean; message: string; }
+export interface ClickHouseClusterNamesDto { clusterId: string; names: string[]; }
 
 export interface S3TargetSettingsDto { endpoint: string; region: string; bucket: string; pathPrefix?: string | null; forcePathStyle: boolean; }
 export interface BackupTargetDto { id: string; name: string; type: BackupTargetType; s3: S3TargetSettingsDto; isDeleted: boolean; createdAt: string; updatedAt?: string | null; }
@@ -57,6 +58,8 @@ export interface PolicyInventoryTable { database: string; table: string; }
 export interface PolicyInventory { tables: PolicyInventoryTable[]; }
 export interface PolicyEvaluationRequest { inventory: PolicyInventory; }
 export interface PolicyEvaluationDto { policyId: string; policyName: string; sourceClusterId: string; selectorJsonVersion: number; selector: PolicySelector; tables: PolicyInventoryTable[]; }
+export interface PolicySimulationRequest { sourceClusterId: string; selector: PolicySelector; }
+export interface PolicySimulationDto { sourceClusterId: string; selector: PolicySelector; inventory: PolicyInventoryTable[]; tables: PolicyInventoryTable[]; }
 
 export interface BackupScheduleDto { id: string; name: string; policyId: string; backupType: BackupType; cronExpression: string; timeZoneId: string; isEnabled: boolean; missedRunGracePeriod?: string | null; description?: string | null; isDeleted: boolean; createdAt: string; updatedAt?: string | null; }
 export interface UpsertScheduleRequest { name: string; policyId: string; backupType: BackupType; cronExpression: string; timeZoneId: string; isEnabled: boolean; missedRunGracePeriod?: string | null; description?: string | null; }
@@ -90,4 +93,80 @@ export interface CreateAccessTokenRequest { name: string; }
 export interface CreateAccessTokenResponse { tokenId: string; userId: string; name: string; accessToken: string; }
 
 export interface ExportEnvelope { exportVersion: number; schemaVersion: number; generatedAt: string; productVersion: string; data: JsonValue; }
-export const openApiSchemaNames = [] as const;
+export const openApiSchemaNames = [
+  "AccessNodeDto",
+  "AccessTokenDto",
+  "AccessTokenExport",
+  "ApplicationLogEntryDto",
+  "AuditEntryDto",
+  "BackupDto",
+  "BackupMetadataRecoveryItem",
+  "BackupMetadataRecoveryResult",
+  "BackupPolicyDto",
+  "BackupPolicyExport",
+  "BackupRetentionDto",
+  "BackupRunStatus",
+  "BackupScheduleDto",
+  "BackupScheduleExport",
+  "BackupTableDto",
+  "BackupTableShardDto",
+  "BackupTableStatus",
+  "BackupTargetDto",
+  "BackupTargetExport",
+  "BackupTargetType",
+  "BackupTriggerType",
+  "BackupType",
+  "ClearApplicationLogsRequest",
+  "ClearAuditEntriesRequest",
+  "ClickHouseClusterNamesDto",
+  "ClusterConnectionTestResult",
+  "ClusterDto",
+  "ClusterExport",
+  "ClusterMode",
+  "CreateAccessTokenRequest",
+  "CreateAccessTokenResponse",
+  "CreateUserRequest",
+  "CreateUserResponse",
+  "DashboardDto",
+  "DashboardFutureScheduleDto",
+  "DashboardRunningBackupDto",
+  "DashboardScheduleDto",
+  "ExportEnvelope",
+  "ExportPayload",
+  "FailedBackupRetentionMode",
+  "InitiateRestoreRequest",
+  "ManualBackupRequest",
+  "PolicyEvaluationDto",
+  "PolicyEvaluationRequest",
+  "PolicyInventory",
+  "PolicyInventoryTable",
+  "PolicyMatchKind",
+  "PolicySelector",
+  "PolicySelectorAction",
+  "PolicySelectorRule",
+  "PolicySimulationDto",
+  "PolicySimulationRequest",
+  "RecoverBackupMetadataFromPathRequest",
+  "RecoverBackupMetadataScanRequest",
+  "RestoreDto",
+  "RestoreLayout",
+  "RestoreRunStatus",
+  "RestoreTableDto",
+  "RestoreTableShardDto",
+  "RestoreTableStatus",
+  "S3TargetSettingsDto",
+  "SeedMissingBackupOperationRequest",
+  "SelectorPattern",
+  "ServerVersionDto",
+  "StorageConnectionTestResult",
+  "UpdateClusterCredentialsRequest",
+  "UpsertAccessNodeRequest",
+  "UpsertClusterRequest",
+  "UpsertPolicyRequest",
+  "UpsertS3TargetRequest",
+  "UpsertScheduleRequest",
+  "UserDto",
+  "UserExport",
+  "ValidateScheduleCronRequest",
+  "ValidateScheduleCronResponse"
+] as const;

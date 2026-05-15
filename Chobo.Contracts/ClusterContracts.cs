@@ -9,3 +9,5 @@ public sealed record ClusterDto(Guid Id, string Name, ClusterMode Mode, IReadOnl
 public sealed record UpsertClusterRequest(string Name, ClusterMode Mode, IReadOnlyList<UpsertAccessNodeRequest> AccessNodes, string? UserName, string? Password, int? BackupRestoreMaxDop = null, string? ClickHouseClusterName = null);
 
 public sealed record UpsertAccessNodeRequest(string Host, int Port = 9000, bool UseTls = false);
+
+public sealed record ClickHouseClusterNamesDto(Guid ClusterId, IReadOnlyList<string> Names);

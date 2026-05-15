@@ -429,6 +429,31 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Policy_service_lists_inventory_and_simulates_selector_against_clickhouse_tables()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        fixture.ClickHouse.Inventory.AddRange([
+            Table("sales", "orders", "MergeTree"),
+            Table("sales", "orders_archive", "MergeTree"),
+            Table("logs", "events", "MergeTree")
+        ]);
+        var service = fixture.Services.GetRequiredService<PolicyApplicationService>();
+        var selector = new PolicySelector(1, [
+            new PolicySelectorRule(PolicySelectorAction.Include, new SelectorPattern(PolicyMatchKind.Exact, "sales"), new SelectorPattern(PolicyMatchKind.Wildcard, "orders*")),
+            new PolicySelectorRule(PolicySelectorAction.Exclude, new SelectorPattern(PolicyMatchKind.All, "*"), new SelectorPattern(PolicyMatchKind.Exact, "orders_archive"))
+        ]);
+
+        var inventory = await service.ListInventoryAsync(fixture.SourceClusterId);
+        var simulation = await service.SimulateAsync(new PolicySimulationRequest(fixture.SourceClusterId, selector));
+
+        Assert.NotNull(inventory);
+        Assert.Equal(3, inventory!.Tables.Count);
+        Assert.NotNull(simulation);
+        Assert.Equal(3, simulation!.Inventory.Count);
+        Assert.Equal([new PolicyInventoryTable("sales", "orders")], simulation.Tables);
+    }
+
+    [Fact]
     public async Task Scheduler_enqueues_due_cron_schedule()
     {
         await using var fixture = await TestFixture.CreateAsync();
@@ -1197,6 +1222,9 @@ public sealed class BackupRestoreExecutionTests
             return Task.FromResult<IReadOnlyList<ClickHouseTableInfo>>(Inventory.ToList());
         }
 
+        public Task<IReadOnlyList<string>> GetClusterNamesAsync(ClickHouseClusterEntity cluster, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<string>>(["test_cluster"]);
+
         public Task<ClickHouseTableInfo?> GetTableAsync(ClickHouseClusterEntity cluster, string database, string table, CancellationToken cancellationToken) =>
             Task.FromResult<ClickHouseTableInfo?>(null);
 
@@ -1390,8 +1418,12 @@ public sealed class BackupRestoreExecutionTests
                 .AddSingleton<ITestHookCoordinator, TestHookCoordinator>()
                 .AddScoped<DashboardApplicationService>()
                 .AddScoped<BackupApplicationService>()
+                .AddScoped<IClusterRepository, ClusterRepository>()
+                .AddScoped<ITargetRepository, TargetRepository>()
+                .AddScoped<IPolicyRepository, PolicyRepository>()
                 .AddScoped<IScheduleRepository, ScheduleRepository>()
                 .AddScoped<IUnitOfWork, EfUnitOfWork>()
+                .AddScoped<PolicyApplicationService>()
                 .AddScoped<ScheduleApplicationService>()
                 .AddScoped<IBackupStorageManifestService, BackupStorageManifestService>()
                 .AddScoped<RestoreApplicationService>()

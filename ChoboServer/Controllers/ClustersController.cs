@@ -11,6 +11,17 @@ public sealed class ClustersController(ClusterApplicationService clusters) : Con
     [HttpGet]
     public Task<IReadOnlyList<ClusterDto>> List() => clusters.ListAsync();
 
+    [HttpGet("{id:guid}/clickhouse-cluster-names")]
+    public async Task<ActionResult<ClickHouseClusterNamesDto>> ListClickHouseClusterNames(Guid id, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await clusters.ListClickHouseClusterNamesAsync(id, cancellationToken);
+            return result is null ? NotFound() : result;
+        }
+        catch (InvalidOperationException ex) { return BadRequest(new ErrorResponse(ex.Message)); }
+    }
+
     [HttpPost]
     public async Task<ActionResult<ClusterDto>> Add(UpsertClusterRequest request)
     {

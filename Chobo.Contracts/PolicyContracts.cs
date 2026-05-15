@@ -79,3 +79,7 @@ public sealed record PolicyInventoryTable(string Database, string Table);
 public sealed record PolicyEvaluationRequest(PolicyInventory Inventory);
 
 public sealed record PolicyEvaluationDto(Guid PolicyId, string PolicyName, Guid SourceClusterId, int SelectorJsonVersion, PolicySelector Selector, IReadOnlyList<PolicyInventoryTable> Tables);
+
+public sealed record PolicySimulationRequest(Guid SourceClusterId, PolicySelector Selector);
+
+public sealed record PolicySimulationDto(Guid SourceClusterId, PolicySelector Selector, IReadOnlyList<PolicyInventoryTable> Inventory, IReadOnlyList<PolicyInventoryTable> Tables);

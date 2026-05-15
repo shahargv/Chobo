@@ -8,6 +8,7 @@ import type {
   BackupRunStatus,
   BackupScheduleDto,
   BackupTargetDto,
+  ClickHouseClusterNamesDto,
   ClusterConnectionTestResult,
   ClusterDto,
   CreateAccessTokenRequest,
@@ -20,6 +21,9 @@ import type {
   ManualBackupRequest,
   PolicyEvaluationDto,
   PolicyEvaluationRequest,
+  PolicyInventory,
+  PolicySimulationDto,
+  PolicySimulationRequest,
   RecoverBackupMetadataFromPathRequest,
   RecoverBackupMetadataScanRequest,
   RestoreDto,
@@ -68,6 +72,7 @@ export class ChoboApiClient {
   updateClusterCredentials(id: string, request: UpdateClusterCredentialsRequest) { return this.post<ClusterDto>(`clusters/${id}/credentials`, request); }
   removeCluster(id: string) { return this.deleteVoid(`clusters/${id}`); }
   testCluster(id: string) { return this.post<ClusterConnectionTestResult>(`clusters/${id}/test-connection`, {}); }
+  clickHouseClusterNames(id: string) { return this.get<ClickHouseClusterNamesDto>(`clusters/${id}/clickhouse-cluster-names`); }
 
   targets() { return this.get<BackupTargetDto[]>("targets"); }
   addTarget(request: UpsertS3TargetRequest) { return this.post<BackupTargetDto>("targets/s3", request); }
@@ -80,6 +85,8 @@ export class ChoboApiClient {
   updatePolicy(id: string, request: UpsertPolicyRequest) { return this.put<BackupPolicyDto>(`policies/${id}`, request); }
   removePolicy(id: string) { return this.deleteVoid(`policies/${id}`); }
   evaluatePolicy(id: string, request: PolicyEvaluationRequest) { return this.post<PolicyEvaluationDto>(`policies/${id}/evaluate`, request); }
+  policyInventory(sourceClusterId: string) { return this.get<PolicyInventory>(`policies/inventory?sourceClusterId=${encodeURIComponent(sourceClusterId)}`); }
+  simulatePolicy(request: PolicySimulationRequest) { return this.post<PolicySimulationDto>("policies/simulate", request); }
 
   schedules() { return this.get<BackupScheduleDto[]>("schedules"); }
   addSchedule(request: UpsertScheduleRequest) { return this.post<BackupScheduleDto>("schedules", request); }

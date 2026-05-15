@@ -15,6 +15,17 @@ public sealed class ClusterApplicationService(
     public async Task<IReadOnlyList<ClusterDto>> ListAsync() =>
         (await clusters.ListActiveAsync()).Select(ToDto).ToList();
 
+    public async Task<ClickHouseClusterNamesDto?> ListClickHouseClusterNamesAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var cluster = await clusters.FindActiveAsync(id);
+        if (cluster is null)
+        {
+            return null;
+        }
+
+        return new ClickHouseClusterNamesDto(id, await clickHouse.GetClusterNamesAsync(cluster, cancellationToken));
+    }
+
     public async Task<ClusterDto> AddAsync(UpsertClusterRequest request)
     {
         Validate(request);

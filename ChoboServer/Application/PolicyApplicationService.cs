@@ -12,6 +12,7 @@ public sealed class PolicyApplicationService(
     IPolicyRepository policies,
     IClusterRepository clusters,
     ITargetRepository targets,
+    IClickHouseAdapter clickHouse,
     IUnitOfWork unitOfWork,
     IAuditService audit,
     PolicySelectorEvaluationService selectorEvaluation)
@@ -91,6 +92,30 @@ public sealed class PolicyApplicationService(
             policy.SelectorJsonVersion,
             selector,
             selectedTables);
+    }
+
+    public async Task<PolicyInventory?> ListInventoryAsync(Guid sourceClusterId, CancellationToken cancellationToken = default)
+    {
+        var cluster = await clusters.FindActiveAsync(sourceClusterId);
+        if (cluster is null)
+        {
+            return null;
+        }
+
+        var inventory = await clickHouse.GetTablesAsync(cluster, cancellationToken);
+        return new PolicyInventory(inventory.Select(x => new PolicyInventoryTable(x.Database, x.Table)).ToList());
+    }
+
+    public async Task<PolicySimulationDto?> SimulateAsync(PolicySimulationRequest request, CancellationToken cancellationToken = default)
+    {
+        var inventory = await ListInventoryAsync(request.SourceClusterId, cancellationToken);
+        if (inventory is null)
+        {
+            return null;
+        }
+
+        var selectedTables = selectorEvaluation.Evaluate(request.Selector, inventory);
+        return new PolicySimulationDto(request.SourceClusterId, request.Selector, inventory.Tables, selectedTables);
     }
 
     public async Task<bool> RemoveAsync(Guid id)

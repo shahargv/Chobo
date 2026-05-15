@@ -167,6 +167,15 @@ public sealed class PolicyEvaluationRequestValidator : AbstractValidator<PolicyE
     }
 }
 
+public sealed class PolicySimulationRequestValidator : AbstractValidator<PolicySimulationRequest>
+{
+    public PolicySimulationRequestValidator()
+    {
+        RuleFor(x => x.SourceClusterId).NotEmpty();
+        RuleFor(x => x.Selector).NotNull().SetValidator(new PolicySelectorValidator());
+    }
+}
+
 public sealed class PolicyInventoryValidator : AbstractValidator<PolicyInventory>
 {
     public PolicyInventoryValidator()
