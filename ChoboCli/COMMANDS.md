@@ -67,7 +67,7 @@ S3 credentials are write-only.
 ChoboCli policies list
 ChoboCli policies add --name all --source-cluster-id <cluster-id> --target-id <target-id>
 ChoboCli policies add --name filtered --source-cluster-id <cluster-id> --target-id <target-id> --selector-file .\policy-selector.json
-ChoboCli policies update --id <policy-id> --name filtered --source-cluster-id <cluster-id> --target-id <target-id> --selector-file .\policy-selector.json
+ChoboCli policies update --id <policy-id> --name filtered --source-cluster-id <cluster-id> --target-id <target-id> --selector-file .\policy-selector.json --full-retention-minutes 43200 --incremental-retention-minutes 10080 --min-backups-to-keep 7 --min-full-backups-to-keep 2
 ChoboCli policies evaluate --id <policy-id> --inventory-file .\inventory.json
 ChoboCli policies remove --id <policy-id>
 ```
@@ -163,6 +163,7 @@ The same server surface also exposes flat general metrics at `/api/v1/metrics`, 
 
 ```powershell
 ChoboCli backup manual --cluster-id <cluster-id> --target-id <target-id> --selector-file .\policy-selector.json
+ChoboCli backup manual --policy-id <policy-id> --backup-type Incremental
 ChoboCli backups list --policy-id <policy-id>
 ChoboCli backups list --cluster-name source --table-name orders
 ChoboCli backups show --id <backup-id>

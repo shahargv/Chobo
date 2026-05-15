@@ -7,6 +7,10 @@ public sealed class BackupTableShardEntity
     public Guid Id { get; set; } = Guid.NewGuid();
     public Guid BackupTableId { get; set; }
     public BackupTableEntity? BackupTable { get; set; }
+    public BackupType EffectiveBackupType { get; set; } = BackupType.Full;
+    public Guid? ParentFullBackupId { get; set; }
+    public Guid? ParentFullBackupTableShardId { get; set; }
+    public BackupTableShardEntity? ParentFullBackupTableShard { get; set; }
     public int SourceShardNumber { get; set; }
     public string? SourceShardName { get; set; }
     public int ReplicaNumber { get; set; }

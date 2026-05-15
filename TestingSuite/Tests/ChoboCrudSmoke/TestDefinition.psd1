@@ -223,12 +223,14 @@
         @{
             Name = 'update-policy'
             Type = 'Cli'
-            Args = @('policies', 'update', '--id', '{policy.id}', '--name', 'crud-policy-new', '--source-cluster-id', '{cluster.id}', '--target-id', '{target.id}', '--retention-minutes', '120', '--min-backups-to-keep', '2')
+            Args = @('policies', 'update', '--id', '{policy.id}', '--name', 'crud-policy-new', '--source-cluster-id', '{cluster.id}', '--target-id', '{target.id}', '--full-retention-minutes', '120', '--incremental-retention-minutes', '60', '--min-backups-to-keep', '2', '--min-full-backups-to-keep', '1')
             ExpectJson = @(
                 @{ Path = 'id'; Equals = '{policy.id}' }
                 @{ Path = 'name'; Equals = 'crud-policy-new' }
-                @{ Path = 'retention.retentionMinutes'; Equals = '120' }
-                @{ Path = 'retention.minBackupsToKeep'; Equals = '2' }
+                @{ Path = 'retention.fullRetentionMinutes'; Equals = 120 }
+                @{ Path = 'retention.incrementalRetentionMinutes'; Equals = 60 }
+                @{ Path = 'retention.minBackupsToKeep'; Equals = 2 }
+                @{ Path = 'retention.minFullBackupsToKeep'; Equals = 1 }
             )
         }
         @{

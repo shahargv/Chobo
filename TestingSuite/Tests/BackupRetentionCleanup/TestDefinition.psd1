@@ -51,11 +51,13 @@
         @{
             Name = 'add-retention-policy'
             Type = 'Cli'
-            Args = @('policies', 'add', '--name', 'retention', '--source-cluster-id', '{sourceCluster.id}', '--target-id', '{target.id}', '--selector-file', '/suite/Tests/BackupRetentionCleanup/selector-all.json', '--retention-minutes', '1', '--min-backups-to-keep', '1', '--failed-backup-retention-mode', 'KeepAndExcludeFromMinBackupsToKeep')
+            Args = @('policies', 'add', '--name', 'retention', '--source-cluster-id', '{sourceCluster.id}', '--target-id', '{target.id}', '--selector-file', '/suite/Tests/BackupRetentionCleanup/selector-all.json', '--full-retention-minutes', '1', '--incremental-retention-minutes', '1', '--min-backups-to-keep', '1', '--min-full-backups-to-keep', '1', '--failed-backup-retention-mode', 'KeepAndExcludeFromMinBackupsToKeep')
             SaveJsonAs = 'retentionPolicy'
             ExpectJson = @(
-                @{ Path = 'retention.retentionMinutes'; Equals = 1 }
+                @{ Path = 'retention.fullRetentionMinutes'; Equals = 1 }
+                @{ Path = 'retention.incrementalRetentionMinutes'; Equals = 1 }
                 @{ Path = 'retention.minBackupsToKeep'; Equals = 1 }
+                @{ Path = 'retention.minFullBackupsToKeep'; Equals = 1 }
             )
         }
         @{

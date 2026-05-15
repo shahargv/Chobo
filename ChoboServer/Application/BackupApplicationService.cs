@@ -20,42 +20,68 @@ public sealed class BackupApplicationService(
 
     public async Task<BackupDto> ManualAsync(ManualBackupRequest request, CancellationToken cancellationToken = default)
     {
-        if (request.ClusterId == Guid.Empty)
+        BackupPolicyEntity? policy = null;
+        var clusterId = request.ClusterId;
+        var targetId = request.TargetId;
+        var selector = request.Selector;
+        if (request.PolicyId is { } policyId)
+        {
+            policy = await db.BackupPolicies.FirstOrDefaultAsync(x => x.Id == policyId && !x.IsDeleted, cancellationToken);
+            if (policy is null)
+            {
+                throw new ArgumentException("Policy was not found.");
+            }
+
+            clusterId = policy.SourceClusterId;
+            targetId = policy.TargetId;
+            selector = JsonSerializer.Deserialize<PolicySelector>(policy.SelectorJson, JsonOptions) ?? PolicySelector.Empty;
+        }
+        else if (request.BackupType == BackupType.Incremental)
+        {
+            throw new ArgumentException("Manual incremental backups require PolicyId.");
+        }
+
+        if (clusterId == Guid.Empty)
         {
             throw new ArgumentException("Cluster id is required.");
         }
-        if (request.TargetId == Guid.Empty)
+        if (targetId == Guid.Empty)
         {
             throw new ArgumentException("Target id is required.");
         }
-        if (request.Selector.Version != 1)
+        if (selector.Version != 1)
         {
             throw new ArgumentException("Only selector version 1 is supported.");
         }
-        if (!await db.ClickHouseClusters.AnyAsync(x => x.Id == request.ClusterId && !x.IsDeleted, cancellationToken))
+        if (!await db.ClickHouseClusters.AnyAsync(x => x.Id == clusterId && !x.IsDeleted, cancellationToken))
         {
             throw new ArgumentException("Cluster was not found.");
         }
-        if (!await db.BackupTargets.AnyAsync(x => x.Id == request.TargetId && !x.IsDeleted, cancellationToken))
+        if (!await db.BackupTargets.AnyAsync(x => x.Id == targetId && !x.IsDeleted, cancellationToken))
         {
             throw new ArgumentException("Target was not found.");
         }
 
+        var storedRequest = request.PolicyId is null
+            ? request
+            : request with { ClusterId = clusterId, TargetId = targetId, Selector = selector };
         var backup = new BackupEntity
         {
             TriggerType = BackupTriggerType.Manual,
             Status = BackupRunStatus.Queued,
-            SourceClusterId = request.ClusterId,
-            TargetId = request.TargetId,
-            ManualRequestJson = JsonSerializer.Serialize(request, JsonOptions),
+            BackupType = request.BackupType,
+            SourceClusterId = clusterId,
+            TargetId = targetId,
+            PolicyId = request.PolicyId,
+            ManualRequestJson = JsonSerializer.Serialize(storedRequest, JsonOptions),
             RequestedByUserId = actor.UserId,
             RequestedByName = actor.ActorName
         };
 
         db.Backups.Add(backup);
         await db.SaveChangesAsync(cancellationToken);
-        _logger.Information("Manual backup {BackupId} created by {ActorName} for cluster {ClusterId} target {TargetId}.", backup.Id, actor.ActorName, request.ClusterId, request.TargetId);
-        await audit.RecordAsync("created", AuditEntityType.Backup, backup.Id.ToString(), new { backup.TriggerType, backup.SourceClusterId, backup.TargetId });
+        _logger.Information("Manual backup {BackupId} created by {ActorName} for cluster {ClusterId} target {TargetId} type {BackupType}.", backup.Id, actor.ActorName, clusterId, targetId, backup.BackupType);
+        await audit.RecordAsync("created", AuditEntityType.Backup, backup.Id.ToString(), new { backup.TriggerType, backup.BackupType, backup.SourceClusterId, backup.TargetId, backup.PolicyId });
         await queues.QueueBackupAsync(backup.Id, cancellationToken);
         _logger.Information("Manual backup {BackupId} queued.", backup.Id);
         await audit.RecordAsync("queued", AuditEntityType.Backup, backup.Id.ToString(), new { reason = "manual" });
@@ -145,9 +171,30 @@ public sealed class BackupApplicationService(
         {
             throw new ArgumentException("Pinned backups require force delete.");
         }
+        var dependentBackupIds = await DependentBackupIdsAsync(id, cancellationToken);
+        if (dependentBackupIds.Count > 0 && !force && await HasPinnedBackupsAsync(dependentBackupIds, cancellationToken))
+        {
+            throw new ArgumentException("Pinned incremental backups depending on this full backup require force delete.");
+        }
         if (IsDeletedOrDeleteRequested(backup.Status))
         {
             return BackupRestoreMapping.ToDto(backup);
+        }
+
+        if (dependentBackupIds.Count > 0)
+        {
+            var deletedStatuses = DeletedStatuses;
+            var dependents = await db.Backups
+                .Where(x => dependentBackupIds.Contains(x.Id) && !deletedStatuses.Contains(x.Status))
+                .ToListAsync(cancellationToken);
+            foreach (var dependent in dependents)
+            {
+                dependent.Status = BackupRunStatus.ManualDeleteRequested;
+                dependent.DeletionReason = force ? "manual-parent-force" : "manual-parent";
+                dependent.DeletionRequestedAt ??= DateTimeOffset.UtcNow;
+                dependent.DeletionError = null;
+                await audit.RecordAsync("dependent-delete-requested", AuditEntityType.Backup, dependent.Id.ToString(), new { parentBackupId = id, force });
+            }
         }
 
         backup.Status = BackupRunStatus.ManualDeleteRequested;
@@ -164,6 +211,22 @@ public sealed class BackupApplicationService(
             .Include(x => x.Tables).ThenInclude(x => x.Shards)
             .FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
 
+    private async Task<IReadOnlyList<Guid>> DependentBackupIdsAsync(Guid fullBackupId, CancellationToken cancellationToken)
+    {
+        var tableDependents = await db.BackupTables
+            .Where(x => x.ParentFullBackupTable != null && x.ParentFullBackupTable.BackupId == fullBackupId)
+            .Select(x => x.BackupId)
+            .ToListAsync(cancellationToken);
+        var shardDependents = await db.BackupTableShards
+            .Where(x => x.ParentFullBackupTableShard != null && x.ParentFullBackupTableShard.BackupTable!.BackupId == fullBackupId)
+            .Select(x => x.BackupTable!.BackupId)
+            .ToListAsync(cancellationToken);
+        return tableDependents.Concat(shardDependents).Distinct().ToList();
+    }
+
+    private async Task<bool> HasPinnedBackupsAsync(IReadOnlyList<Guid> backupIds, CancellationToken cancellationToken) =>
+        await db.Backups.AnyAsync(x => backupIds.Contains(x.Id) && x.IsPinned, cancellationToken);
+
     private static bool IsDeletedOrDeleteRequested(BackupRunStatus status) =>
         status is BackupRunStatus.ManualDeleteRequested or
             BackupRunStatus.ManualDeleted or
@@ -171,6 +234,16 @@ public sealed class BackupApplicationService(
             BackupRunStatus.FailedBackupDeletedByGarbageCollector or
             BackupRunStatus.BackupExpiredDeleteStarted or
             BackupRunStatus.BackupExpiredDeleted;
+
+    private static readonly BackupRunStatus[] DeletedStatuses =
+    [
+        BackupRunStatus.ManualDeleteRequested,
+        BackupRunStatus.ManualDeleted,
+        BackupRunStatus.FailedBackupDeleteRequested,
+        BackupRunStatus.FailedBackupDeletedByGarbageCollector,
+        BackupRunStatus.BackupExpiredDeleteStarted,
+        BackupRunStatus.BackupExpiredDeleted
+    ];
 
     private static JsonSerializerOptions CreateJsonOptions()
     {

@@ -92,13 +92,13 @@ ChoboCli policies add --name nightly-prod --source-cluster-id <cluster-id> --tar
 With lifecycle retention:
 
 ```powershell
-ChoboCli policies add --name nightly-prod --source-cluster-id <cluster-id> --target-id <target-id> --selector-file .\policy-selector.json --retention-minutes 10080 --min-backups-to-keep 7
+ChoboCli policies add --name nightly-prod --source-cluster-id <cluster-id> --target-id <target-id> --selector-file .\policy-selector.json --full-retention-minutes 43200 --incremental-retention-minutes 10080 --min-backups-to-keep 7 --min-full-backups-to-keep 2
 ```
 
 With failed-backup garbage collection:
 
 ```powershell
-ChoboCli policies add --name nightly-prod --source-cluster-id <cluster-id> --target-id <target-id> --selector-file .\policy-selector.json --retention-minutes 10080 --min-backups-to-keep 7 --failed-backup-retention-mode DeleteByGarbageCollectorAfterFailure
+ChoboCli policies add --name nightly-prod --source-cluster-id <cluster-id> --target-id <target-id> --selector-file .\policy-selector.json --full-retention-minutes 43200 --incremental-retention-minutes 10080 --min-backups-to-keep 7 --min-full-backups-to-keep 2 --failed-backup-retention-mode DeleteByGarbageCollectorAfterFailure
 ```
 
 Evaluate a selector against a known inventory:
@@ -123,7 +123,7 @@ Every six hours:
 ChoboCli schedules add --name six-hour-prod --policy-id <policy-id> --backup-type Full --cron "0 0 */6 * * ?" --timezone UTC
 ```
 
-Only full backups are currently supported by execution. Keep `--backup-type Full`.
+Use `--backup-type Full` for periodic base backups and `--backup-type Incremental` for cumulative incrementals based on the latest successful full backup for the policy.
 
 Manage schedules:
 
@@ -139,6 +139,7 @@ ChoboCli schedules remove --id <schedule-id>
 
 ```powershell
 ChoboCli backup manual --cluster-id <cluster-id> --target-id <target-id> --selector-file .\policy-selector.json
+ChoboCli backup manual --policy-id <policy-id> --backup-type Incremental
 ```
 
 The command returns a run record immediately. Wait for completion:
@@ -176,7 +177,8 @@ Chobo does not use ClickHouse `BACKUP ... ON CLUSTER`.
 Backup object paths use this logical structure:
 
 ```text
-backups/<database>/<table>/<policy-or-manual>/<backup-type>/<timestamp>/<backup-id>
+backups/full/<policy-or-manual>/<database>/<table>/<timestamp>/<backup-id>
+backups/incremental/<policy>/<database>/<table>/parent-full-<full-backup-id>/<timestamp>/<backup-id>
 ```
 
 Sharded tables add:

@@ -31,8 +31,10 @@ public sealed class PolicyApplicationService(
             TargetId = request.TargetId,
             SelectorJsonVersion = request.Selector.Version,
             SelectorJson = JsonSerializer.Serialize(request.Selector, JsonOptions),
-            RetentionMinutes = request.Retention?.RetentionMinutes,
+            FullRetentionMinutes = request.Retention?.FullRetentionMinutes,
+            IncrementalRetentionMinutes = request.Retention?.IncrementalRetentionMinutes,
             MinBackupsToKeep = request.Retention?.MinBackupsToKeep ?? 0,
+            MinFullBackupsToKeep = request.Retention?.MinFullBackupsToKeep ?? 0,
             FailedBackupRetentionMode = request.FailedBackupRetentionMode
         };
 
@@ -59,8 +61,10 @@ public sealed class PolicyApplicationService(
         policy.TargetId = request.TargetId;
         policy.SelectorJsonVersion = request.Selector.Version;
         policy.SelectorJson = JsonSerializer.Serialize(request.Selector, JsonOptions);
-        policy.RetentionMinutes = request.Retention?.RetentionMinutes;
+        policy.FullRetentionMinutes = request.Retention?.FullRetentionMinutes;
+        policy.IncrementalRetentionMinutes = request.Retention?.IncrementalRetentionMinutes;
         policy.MinBackupsToKeep = request.Retention?.MinBackupsToKeep ?? 0;
+        policy.MinFullBackupsToKeep = request.Retention?.MinFullBackupsToKeep ?? 0;
         policy.FailedBackupRetentionMode = request.FailedBackupRetentionMode;
         policy.UpdatedAt = DateTimeOffset.UtcNow;
         await unitOfWork.SaveChangesAsync();
@@ -134,13 +138,21 @@ public sealed class PolicyApplicationService(
         }
         if (request.Retention is not null)
         {
-            if (request.Retention.RetentionMinutes <= 0)
+            if (request.Retention.FullRetentionMinutes is not null and <= 0)
             {
-                throw new ArgumentException("Retention minutes must be greater than zero.");
+                throw new ArgumentException("Full retention minutes must be greater than zero.");
+            }
+            if (request.Retention.IncrementalRetentionMinutes is not null and <= 0)
+            {
+                throw new ArgumentException("Incremental retention minutes must be greater than zero.");
             }
             if (request.Retention.MinBackupsToKeep < 0)
             {
                 throw new ArgumentException("MinBackupsToKeep must be zero or greater.");
+            }
+            if (request.Retention.MinFullBackupsToKeep < 0)
+            {
+                throw new ArgumentException("MinFullBackupsToKeep must be zero or greater.");
             }
         }
         foreach (var rule in request.Selector.Rules)
@@ -161,7 +173,9 @@ public sealed class PolicyApplicationService(
             x.TargetId,
             x.SelectorJsonVersion,
             Deserialize(x.SelectorJson),
-            x.RetentionMinutes is null ? null : new BackupRetentionDto(x.RetentionMinutes.Value, x.MinBackupsToKeep),
+            x.FullRetentionMinutes is null && x.IncrementalRetentionMinutes is null
+                ? null
+                : new BackupRetentionDto(x.FullRetentionMinutes, x.IncrementalRetentionMinutes, x.MinBackupsToKeep, x.MinFullBackupsToKeep),
             x.FailedBackupRetentionMode,
             x.IsDeleted,
             x.CreatedAt,

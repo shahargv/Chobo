@@ -84,6 +84,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ActorContext>();
         services.AddScoped<TokenService>();
         services.AddScoped<AuditService>();
+        services.AddScoped<SchemaUpgradeService>();
+        services.AddScoped<DatabaseBootstrap>();
         services.AddSingleton<IAesKeyRepository, FileAesKeyRepository>();
         services.AddScoped<ICredentialProtector, CredentialProtector>();
         services.AddScoped<ExportImportService>();
@@ -128,8 +130,9 @@ public static class ServiceCollectionExtensions
     {
         using var scope = services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
-        await DatabaseBootstrap.EnsureDatabaseObjectsAsync(db);
-        await DatabaseBootstrap.EnsureSchemaStateAsync(db);
+        var bootstrap = scope.ServiceProvider.GetRequiredService<DatabaseBootstrap>();
+        await bootstrap.EnsureDatabaseObjectsAsync();
+        await bootstrap.EnsureSchemaStateAsync();
         await DatabasePerformanceMaintenance.EnsureAsync(db);
 
         var storage = scope.ServiceProvider.GetRequiredService<IOptions<ChoboStorageOptions>>().Value;
@@ -143,7 +146,7 @@ public static class ServiceCollectionExtensions
 
         if (firstStartup || (!File.Exists(markerPath) && !hasUsers))
         {
-            await DatabaseBootstrap.BootstrapFirstStartupAsync(scope.ServiceProvider);
+            await bootstrap.BootstrapFirstStartupAsync();
         }
     }
 }

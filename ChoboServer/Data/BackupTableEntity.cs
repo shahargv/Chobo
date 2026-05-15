@@ -7,6 +7,10 @@ public sealed class BackupTableEntity
     public Guid Id { get; set; } = Guid.NewGuid();
     public Guid BackupId { get; set; }
     public BackupEntity? Backup { get; set; }
+    public BackupType EffectiveBackupType { get; set; } = BackupType.Full;
+    public Guid? ParentFullBackupId { get; set; }
+    public Guid? ParentFullBackupTableId { get; set; }
+    public BackupTableEntity? ParentFullBackupTable { get; set; }
     public string Database { get; set; } = "";
     public string Table { get; set; } = "";
     public string Engine { get; set; } = "";
