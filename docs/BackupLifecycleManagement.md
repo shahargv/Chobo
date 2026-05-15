@@ -9,12 +9,16 @@ Lifecycle actions are audited. Deletion removes backup objects from the configur
 Retention is configured on a backup policy:
 
 ```powershell
-ChoboCli policies add --name nightly-prod --source-cluster-id <cluster-id> --target-id <target-id> --selector-file .\policy-selector.json --retention-minutes 10080 --min-backups-to-keep 7
+ChoboCli policies add --name nightly-prod --source-cluster-id <cluster-id> --target-id <target-id> --selector-file .\policy-selector.json --full-retention-minutes 43200 --incremental-retention-minutes 10080 --min-backups-to-keep 7 --min-full-backups-to-keep 2
 ```
 
-`--retention-minutes` sets the age threshold. Chobo compares it to each successful backup's `completedAt` timestamp, falling back to `createdAt` when needed.
+`--full-retention-minutes` and `--incremental-retention-minutes` set separate age thresholds. Chobo compares them to each successful backup's `completedAt` timestamp, falling back to `createdAt` when needed.
 
 `--min-backups-to-keep` keeps the newest successful backups for the policy even if they are older than the retention threshold.
+
+`--min-full-backups-to-keep` keeps the newest full backups for the policy so incremental backups retain usable parents.
+
+Full backups with dependent incrementals are not deleted until those incrementals are deleted. Pinned incrementals block non-force deletion of their parent full backup.
 
 Only `Succeeded` backups are expired by policy retention. Failed and partially succeeded backups are handled separately by failed-backup retention mode.
 

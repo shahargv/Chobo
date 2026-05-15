@@ -88,8 +88,8 @@
                 @{ Path = 'manualRequestJson'; Contains = 'rules' }
                 @{ Path = 'tables[1].clickHouseOperationId'; NotEmpty = $true }
                 @{ Path = 'tables[1].clickHouseStatus'; Equals = 'BACKUP_CREATED' }
-                @{ Path = 'tables[1].s3Path'; Contains = 'backups/backup_core_source/line_items/manual/full/' }
-                @{ Path = 'tables[4].s3Path'; Contains = 'backups/backup_core_source/orders/manual/full/' }
+                @{ Path = 'tables[1].s3Path'; Contains = 'backups/full/manual/backup_core_source/line_items/' }
+                @{ Path = 'tables[4].s3Path'; Contains = 'backups/full/manual/backup_core_source/orders/' }
                 @{ Path = 'tables'; ContainsObject = @{ table = 'log_events'; dataBackedUp = $false; status = 'Succeeded' } }
                 @{ Path = 'tables'; ContainsObject = @{ table = 'join_lookup'; dataBackedUp = $false; status = 'Succeeded' } }
                 @{ Path = 'tables'; ContainsObject = @{ table = 'merge_orders'; dataBackedUp = $false; status = 'Succeeded' } }
@@ -102,7 +102,7 @@
             ExpectJson = @(
                 @{ Path = 'id'; Equals = '{backup.id}' }
                 @{ Path = 'tables[1].clickHouseOperationId'; NotEmpty = $true }
-                @{ Path = 'tables[1].s3Path'; Contains = '/manual/full/' }
+                @{ Path = 'tables[1].s3Path'; Contains = 'backups/full/manual/' }
             )
         }
         @{

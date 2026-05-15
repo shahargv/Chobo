@@ -22,7 +22,6 @@ public sealed class BackupSchedulerDispatcherBackgroundService(
         "scheduled-backup-missed",
         "schedule-skip-active",
         "schedule-skip-active-policy",
-        "schedule-skip-unsupported",
         "schedule-skip-missing-policy"
     ];
 
@@ -147,11 +146,6 @@ public sealed class BackupSchedulerDispatcherBackgroundService(
                 continue;
             }
 
-            if (schedule.BackupType != BackupType.Full)
-            {
-                await audit.RecordAsync("schedule-skip-unsupported", AuditEntityType.BackupSchedule, schedule.Id.ToString(), new { schedule.BackupType, plannedRunAt = latestOccurrence });
-                continue;
-            }
             if (schedule.Policy is null)
             {
                 await audit.RecordAsync("schedule-skip-missing-policy", AuditEntityType.BackupSchedule, schedule.Id.ToString(), new { plannedRunAt = latestOccurrence });

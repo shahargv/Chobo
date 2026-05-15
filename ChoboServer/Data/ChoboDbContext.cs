@@ -55,14 +55,17 @@ public sealed class ChoboDbContext(DbContextOptions<ChoboDbContext> options) : D
         modelBuilder.Entity<BackupEntity>().HasIndex(x => x.SourceClusterId);
         modelBuilder.Entity<BackupEntity>().HasIndex(x => x.TargetId);
         modelBuilder.Entity<BackupEntity>().HasIndex(x => x.CreatedAt);
+        modelBuilder.Entity<BackupEntity>().HasIndex(x => new { x.PolicyId, x.BackupType, x.Status, x.CompletedAt });
         modelBuilder.Entity<BackupEntity>().HasIndex(x => x.IsPinned);
         modelBuilder.Entity<BackupEntity>().HasIndex(x => x.DeletionRequestedAt);
         modelBuilder.Entity<BackupTableEntity>().HasIndex(x => x.BackupId);
         modelBuilder.Entity<BackupTableEntity>().HasIndex(x => new { x.Database, x.Table });
         modelBuilder.Entity<BackupTableEntity>().HasIndex(x => x.Status);
+        modelBuilder.Entity<BackupTableEntity>().HasIndex(x => x.ParentFullBackupTableId);
         modelBuilder.Entity<BackupTableShardEntity>().HasIndex(x => x.BackupTableId);
         modelBuilder.Entity<BackupTableShardEntity>().HasIndex(x => new { x.BackupTableId, x.SourceShardNumber });
         modelBuilder.Entity<BackupTableShardEntity>().HasIndex(x => x.Status);
+        modelBuilder.Entity<BackupTableShardEntity>().HasIndex(x => x.ParentFullBackupTableShardId);
         modelBuilder.Entity<RestoreEntity>().HasIndex(x => x.Status);
         modelBuilder.Entity<RestoreEntity>().HasIndex(x => x.BackupId);
         modelBuilder.Entity<RestoreEntity>().HasIndex(x => x.TargetClusterId);
@@ -81,7 +84,9 @@ public sealed class ChoboDbContext(DbContextOptions<ChoboDbContext> options) : D
         modelBuilder.Entity<BackupEntity>().HasOne(x => x.Schedule).WithMany().HasForeignKey(x => x.ScheduleId);
         modelBuilder.Entity<BackupEntity>().HasMany(x => x.Tables).WithOne(x => x.Backup).HasForeignKey(x => x.BackupId).OnDelete(DeleteBehavior.Cascade);
         modelBuilder.Entity<BackupTableEntity>().HasOne(x => x.SchemaDefinition).WithMany().HasForeignKey(x => x.SchemaDefinitionId);
+        modelBuilder.Entity<BackupTableEntity>().HasOne(x => x.ParentFullBackupTable).WithMany().HasForeignKey(x => x.ParentFullBackupTableId);
         modelBuilder.Entity<BackupTableEntity>().HasMany(x => x.Shards).WithOne(x => x.BackupTable).HasForeignKey(x => x.BackupTableId).OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<BackupTableShardEntity>().HasOne(x => x.ParentFullBackupTableShard).WithMany().HasForeignKey(x => x.ParentFullBackupTableShardId);
         modelBuilder.Entity<RestoreEntity>().HasOne(x => x.Backup).WithMany().HasForeignKey(x => x.BackupId);
         modelBuilder.Entity<RestoreEntity>().HasOne(x => x.TargetCluster).WithMany().HasForeignKey(x => x.TargetClusterId);
         modelBuilder.Entity<RestoreEntity>().HasMany(x => x.Tables).WithOne(x => x.Restore).HasForeignKey(x => x.RestoreId).OnDelete(DeleteBehavior.Cascade);

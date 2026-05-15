@@ -9,6 +9,7 @@ using ChoboServer;
 using ChoboServer.BackgroundServices;
 using ChoboServer.Data;
 using ChoboServer.Options;
+using ChoboServer.Repositories;
 using ChoboServer.Services;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -395,6 +396,21 @@ public sealed class ChoboFoundationTests
 
         var users = await client.GetFromJsonAsync<List<UserDto>>("/api/v1/users", JsonOptions);
         Assert.Contains(users!, x => x.UserName == "operator");
+    }
+
+    [Fact]
+    public void Backup_retention_contract_reads_legacy_retention_minutes()
+    {
+        var retention = JsonSerializer.Deserialize<BackupRetentionDto>(
+            """{"retentionMinutes":60,"minBackupsToKeep":2}""",
+            JsonOptions);
+
+        Assert.NotNull(retention);
+        Assert.Equal(60, retention!.FullRetentionMinutes);
+        Assert.Equal(60, retention.IncrementalRetentionMinutes);
+        Assert.Equal(2, retention.MinBackupsToKeep);
+        Assert.Equal(0, retention.MinFullBackupsToKeep);
+        Assert.DoesNotContain("retentionMinutes", JsonSerializer.Serialize(retention, JsonOptions));
     }
 
     [Fact]

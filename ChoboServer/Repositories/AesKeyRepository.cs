@@ -2,7 +2,7 @@ using System.Security.Cryptography;
 using ChoboServer.Options;
 using Microsoft.Extensions.Options;
 
-namespace ChoboServer.Services;
+namespace ChoboServer.Repositories;
 
 public sealed record AesKeyMaterial(Guid KeyId, byte[] KeyBytes);
 
