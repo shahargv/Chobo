@@ -41,19 +41,19 @@ public sealed class DataRetentionBackgroundService(
 
         if (retention.LogsBefore is not null)
         {
-            var logs = scope.ServiceProvider.GetRequiredService<ApplicationLogStore>();
+            var logs = scope.ServiceProvider.GetRequiredService<IApplicationLogStore>();
             logsDeleted = await logs.DeleteBeforeAsync(retention.LogsBefore.Value, cancellationToken);
         }
 
         if (retention.AuditsBefore is not null)
         {
-            var audits = scope.ServiceProvider.GetRequiredService<AuditStore>();
+            var audits = scope.ServiceProvider.GetRequiredService<IAuditStore>();
             auditsDeleted = await audits.DeleteBeforeAsync(retention.AuditsBefore.Value, cancellationToken);
         }
 
         if (retention.LogsBefore is not null || retention.AuditsBefore is not null)
         {
-            var audit = scope.ServiceProvider.GetRequiredService<AuditService>();
+            var audit = scope.ServiceProvider.GetRequiredService<IAuditService>();
             await audit.RecordAsync("retention-purge", AuditEntityType.DataRetention, null, new
             {
                 retention.LogsBefore,

@@ -8,7 +8,7 @@ namespace ChoboServer.Application;
 public sealed class ScheduleApplicationService(
     IScheduleRepository schedules,
     IUnitOfWork unitOfWork,
-    AuditService audit)
+    IAuditService audit)
 {
     public async Task<IReadOnlyList<BackupScheduleDto>> ListAsync() =>
         (await schedules.ListActiveAsync()).Select(ToDto).ToList();

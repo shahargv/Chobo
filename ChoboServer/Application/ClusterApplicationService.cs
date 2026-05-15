@@ -10,7 +10,7 @@ public sealed class ClusterApplicationService(
     IUnitOfWork unitOfWork,
     ICredentialProtector protector,
     IClickHouseAdapter clickHouse,
-    AuditService audit)
+    IAuditService audit)
 {
     public async Task<IReadOnlyList<ClusterDto>> ListAsync() =>
         (await clusters.ListActiveAsync()).Select(ToDto).ToList();

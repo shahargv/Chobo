@@ -16,7 +16,7 @@ public sealed class BackupRunnerService(
     IClickHouseAdapter clickHouse,
     PolicySelectorEvaluationService selectorEvaluation,
     IOptions<ChoboBackupRestoreOptions> options,
-    AuditService audit,
+    IAuditService audit,
     Serilog.ILogger logger)
 {
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
@@ -279,9 +279,9 @@ public sealed class BackupRunnerService(
         using var scope = scopeFactory.CreateScope();
         var scopedDb = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
         var scopedClickHouse = scope.ServiceProvider.GetRequiredService<IClickHouseAdapter>();
-        var scopedAudit = scope.ServiceProvider.GetRequiredService<AuditService>();
+        var scopedAudit = scope.ServiceProvider.GetRequiredService<IAuditService>();
         var scopedOptions = scope.ServiceProvider.GetRequiredService<IOptions<ChoboBackupRestoreOptions>>();
-        var scopedTestHooks = scope.ServiceProvider.GetRequiredService<TestHookCoordinator>();
+        var scopedTestHooks = scope.ServiceProvider.GetRequiredService<ITestHookCoordinator>();
 
         var backup = await scopedDb.Backups
             .Include(x => x.SourceCluster).ThenInclude(x => x!.AccessNodes)

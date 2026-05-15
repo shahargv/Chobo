@@ -11,7 +11,7 @@ public sealed class RestoreRunnerService(
     IServiceScopeFactory scopeFactory,
     ChoboDbContext db,
     IOptions<ChoboBackupRestoreOptions> options,
-    AuditService audit,
+    IAuditService audit,
     Serilog.ILogger logger)
 {
     private readonly Serilog.ILogger _logger = logger.ForContext<RestoreRunnerService>();
@@ -85,9 +85,9 @@ public sealed class RestoreRunnerService(
         using var scope = scopeFactory.CreateScope();
         var scopedDb = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
         var scopedClickHouse = scope.ServiceProvider.GetRequiredService<IClickHouseAdapter>();
-        var scopedAudit = scope.ServiceProvider.GetRequiredService<AuditService>();
+        var scopedAudit = scope.ServiceProvider.GetRequiredService<IAuditService>();
         var scopedOptions = scope.ServiceProvider.GetRequiredService<IOptions<ChoboBackupRestoreOptions>>();
-        var scopedTestHooks = scope.ServiceProvider.GetRequiredService<TestHookCoordinator>();
+        var scopedTestHooks = scope.ServiceProvider.GetRequiredService<ITestHookCoordinator>();
 
         var restore = await scopedDb.Restores
             .Include(x => x.TargetCluster).ThenInclude(x => x!.AccessNodes)

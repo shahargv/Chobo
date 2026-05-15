@@ -6,7 +6,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace ChoboServer.Controllers;
 
 [ApiController]
-public sealed class AuditController(AuditStore audits, AuditService audit) : ControllerBase
+public sealed class AuditController(IAuditStore audits, IAuditService audit) : ControllerBase
 {
     [HttpGet(ChoboApi.ApiPrefix + "/audit")]
     public Task<IReadOnlyList<AuditEntryDto>> List([FromQuery] DateTimeOffset? startTime, [FromQuery] DateTimeOffset? endTime, [FromQuery] int? last) =>

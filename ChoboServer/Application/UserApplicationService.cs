@@ -8,8 +8,8 @@ namespace ChoboServer.Application;
 public sealed class UserApplicationService(
     IUserRepository users,
     IUnitOfWork unitOfWork,
-    TokenService tokens,
-    AuditService audit)
+    ITokenService tokens,
+    IAuditService audit)
 {
     public async Task<IReadOnlyList<UserDto>> ListAsync() =>
         (await users.ListAsync()).Select(ToDto).ToList();

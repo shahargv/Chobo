@@ -7,7 +7,13 @@ using Microsoft.EntityFrameworkCore;
 
 namespace ChoboServer.Repositories;
 
-public sealed class ApplicationLogStore(ChoboDbContext db)
+public interface IApplicationLogStore
+{
+    Task<IReadOnlyList<ApplicationLogEntryDto>> QueryAsync(DateTimeOffset? startTime, DateTimeOffset? endTime, int? last);
+    Task<int> DeleteBeforeAsync(DateTimeOffset before, CancellationToken cancellationToken = default);
+}
+
+public sealed class ApplicationLogStore(ChoboDbContext db) : IApplicationLogStore
 {
     public async Task<IReadOnlyList<ApplicationLogEntryDto>> QueryAsync(DateTimeOffset? startTime, DateTimeOffset? endTime, int? last)
     {

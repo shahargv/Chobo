@@ -2,7 +2,12 @@ using ChoboServer.Data;
 
 namespace ChoboServer.Services;
 
-public sealed class AuditService(ChoboDbContext db, ActorContext actor)
+public interface IAuditService
+{
+    Task RecordAsync(string action, AuditEntityType entityType, string? entityId, object? details = null);
+}
+
+public sealed class AuditService(ChoboDbContext db, IActorContext actor) : IAuditService
 {
     public async Task RecordAsync(string action, AuditEntityType entityType, string? entityId, object? details = null)
     {

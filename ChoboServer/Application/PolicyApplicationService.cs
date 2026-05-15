@@ -13,7 +13,7 @@ public sealed class PolicyApplicationService(
     IClusterRepository clusters,
     ITargetRepository targets,
     IUnitOfWork unitOfWork,
-    AuditService audit,
+    IAuditService audit,
     PolicySelectorEvaluationService selectorEvaluation)
 {
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();

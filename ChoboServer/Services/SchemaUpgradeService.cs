@@ -3,7 +3,12 @@ using ChoboServer.Data;
 
 namespace ChoboServer.Services;
 
-public sealed class SchemaUpgradeService(ChoboDbContext db)
+public interface ISchemaUpgradeService
+{
+    Task UpgradeAsync(SchemaStateEntity schema, CancellationToken cancellationToken = default);
+}
+
+public sealed class SchemaUpgradeService(ChoboDbContext db) : ISchemaUpgradeService
 {
     public async Task UpgradeAsync(SchemaStateEntity schema, CancellationToken cancellationToken = default)
     {

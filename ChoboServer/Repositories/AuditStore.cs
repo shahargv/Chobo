@@ -6,7 +6,13 @@ using Microsoft.EntityFrameworkCore;
 
 namespace ChoboServer.Repositories;
 
-public sealed class AuditStore(ChoboDbContext db)
+public interface IAuditStore
+{
+    Task<IReadOnlyList<AuditEntryDto>> QueryAsync(DateTimeOffset? startTime, DateTimeOffset? endTime, int? last);
+    Task<int> DeleteBeforeAsync(DateTimeOffset before, CancellationToken cancellationToken = default);
+}
+
+public sealed class AuditStore(ChoboDbContext db) : IAuditStore
 {
     public async Task<IReadOnlyList<AuditEntryDto>> QueryAsync(DateTimeOffset? startTime, DateTimeOffset? endTime, int? last)
     {

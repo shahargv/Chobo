@@ -8,7 +8,7 @@ namespace ChoboServer.Application;
 public sealed class BackupCleanupService(
     ChoboDbContext db,
     IBackupStorageOperations storageOperations,
-    AuditService audit,
+    IAuditService audit,
     Serilog.ILogger logger)
 {
     private readonly Serilog.ILogger _logger = logger.ForContext<BackupCleanupService>();
