@@ -133,6 +133,7 @@ function New-ChoboComposePlan {
     $clusters = [ordered]@{}
     $hasStorage = $false
     $hasChoboServer = $false
+    $choboServerEnvironment = [ordered]@{}
 
     foreach ($resource in $Resources) {
         $name = $resource.Name
@@ -180,6 +181,12 @@ function New-ChoboComposePlan {
             }
             'ChoboServer' {
                 $hasChoboServer = $true
+                if ($resource.Environment) {
+                    $environment = ConvertTo-ChoboResourceHashtable -Resource $resource.Environment
+                    foreach ($entry in $environment.GetEnumerator()) {
+                        $choboServerEnvironment[$entry.Key] = $entry.Value
+                    }
+                }
             }
             default {
                 throw "Unsupported resource type '$type'."
@@ -192,6 +199,7 @@ function New-ChoboComposePlan {
         Clusters = @($clusters.Values)
         HasStorage = $hasStorage
         HasChoboServer = $hasChoboServer
+        ChoboServerEnvironment = $choboServerEnvironment
     }
 }
 
@@ -465,6 +473,10 @@ function New-ChoboComposeEnvironment {
         $lines.Add('      Chobo__RetentionManagement__MaxDop: "2"')
         $lines.Add('      Chobo__BackupsGarbageCollector__Interval: "00:00:01"')
         $lines.Add('      Chobo__BackupsGarbageCollector__MaxDop: "2"')
+        foreach ($entry in $plan.ChoboServerEnvironment.GetEnumerator()) {
+            $escapedValue = ([string]$entry.Value).Replace('"', '\"')
+            $lines.Add("      $($entry.Key): `"$escapedValue`"")
+        }
         $lines.Add('    networks:')
         $lines.Add('      - chobo-tests')
         $lines.Add('')

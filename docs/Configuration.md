@@ -160,6 +160,37 @@ ChoboCli logs clear --before 2026-05-01T00:00:00Z
 ChoboCli audit clear --before 2026-05-01T00:00:00Z
 ```
 
+## SQLite Self-Backup Settings
+
+```json
+{
+  "Chobo": {
+    "SqliteSelfBackup": {
+      "Enabled": false,
+      "Directory": null,
+      "BackupInterval": "1.00:00:00",
+      "PollInterval": "00:05:00"
+    }
+  }
+}
+```
+
+- `Enabled`: turns automatic local SQLite backups on or off.
+- `Directory`: destination directory for timestamped `chobo-*.db` backups. When null, Chobo uses `sqlite-backups` under `Chobo:DataDirectory`.
+- `BackupInterval`: minimum time between successful self-backups.
+- `PollInterval`: how often the background service checks whether a new self-backup is due.
+
+The service records its latest attempt, latest successful backup path, and latest error in SQLite. Successful and failed self-backup attempts are audited with the `system` actor.
+
+Environment aliases:
+
+```text
+CHOBO_SQLITE_SELF_BACKUP_ENABLED
+CHOBO_SQLITE_SELF_BACKUP_DIRECTORY
+CHOBO_SQLITE_SELF_BACKUP_INTERVAL
+CHOBO_SQLITE_SELF_BACKUP_POLL_INTERVAL
+```
+
 ## Serilog
 
 Default production logging writes to console and rolling files:
@@ -219,6 +250,12 @@ ChoboCli logs show --last 500
       "Interval": "01:00:00",
       "LogsBefore": null,
       "AuditsBefore": null
+    },
+    "SqliteSelfBackup": {
+      "Enabled": true,
+      "Directory": "/var/lib/chobo/sqlite-backups",
+      "BackupInterval": "1.00:00:00",
+      "PollInterval": "00:05:00"
     }
   }
 }
