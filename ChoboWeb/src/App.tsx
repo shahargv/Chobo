@@ -726,38 +726,54 @@ function ScheduleEditor({ draft, timezone, onChange }: { draft: ScheduleDraft; t
 function Clusters() {
   const { api, showToast } = useApi();
   const clusters = useQuery({ queryKey: ["clusters"], queryFn: () => api.clusters() });
+  const [editing, setEditing] = useState<ClusterDto | null>(null);
   const [draft, setDraft] = useState<UpsertClusterRequest>({ name: "", mode: "SingleInstance", accessNodes: [{ host: "localhost", port: 9000, useTls: false }], userName: null, password: null });
+  const reset = () => {
+    setEditing(null);
+    setDraft({ name: "", mode: "SingleInstance", accessNodes: [{ host: "localhost", port: 9000, useTls: false }], userName: null, password: null });
+  };
   const save = useMutation({
-    mutationFn: () => api.addCluster(draft),
-    onSuccess: () => { showToast({ kind: "success", text: "Cluster saved." }); clusters.refetch(); },
+    mutationFn: () => editing ? api.updateCluster(editing.id, draft) : api.addCluster(draft),
+    onSuccess: () => { showToast({ kind: "success", text: "Cluster saved." }); clusters.refetch(); reset(); },
     onError: (error) => showToast({ kind: "error", text: String(error) })
   });
   return (
-    <CrudPage title="Clusters" onSave={() => save.mutate()} form={<>
+    <CrudPage title="Clusters" formTitle={editing ? "Edit cluster" : "Create cluster"} saveLabel={editing ? "Update cluster" : "Save cluster"} onCancel={editing ? reset : undefined} onSave={() => save.mutate()} form={<>
       <Input label="Name" value={draft.name} onChange={(value) => setDraft({ ...draft, name: value })} />
       <Select label="Mode" value={draft.mode} onChange={(value) => setDraft({ ...draft, mode: value as UpsertClusterRequest["mode"] })} options={[["SingleInstance", "Single instance"], ["Cluster", "Cluster"]]} />
-      <Input label="Host" value={draft.accessNodes[0]?.host ?? ""} onChange={(value) => setDraft({ ...draft, accessNodes: [{ ...(draft.accessNodes[0] ?? { port: 9000, useTls: false }), host: value }] })} />
-      <Input label="Port" type="number" value={`${draft.accessNodes[0]?.port ?? 9000}`} onChange={(value) => setDraft({ ...draft, accessNodes: [{ ...(draft.accessNodes[0] ?? { host: "localhost", useTls: false }), port: Number(value) }] })} />
+      <Input label="Nodes" value={formatNodes(draft.accessNodes)} onChange={(value) => setDraft({ ...draft, accessNodes: parseNodes(value, draft.accessNodes.some((node) => node.useTls)) })} />
+      <Input label="Max DOP" type="number" value={draft.backupRestoreMaxDop?.toString() ?? ""} onChange={(value) => setDraft({ ...draft, backupRestoreMaxDop: value ? Number(value) : null })} />
+      <Input label="ClickHouse cluster name" value={draft.clickHouseClusterName ?? ""} onChange={(value) => setDraft({ ...draft, clickHouseClusterName: value || null })} />
+      <label className="checkbox-row"><input type="checkbox" checked={draft.accessNodes.some((node) => node.useTls)} onChange={(event) => setDraft({ ...draft, accessNodes: draft.accessNodes.map((node) => ({ ...node, useTls: event.target.checked })) })} /> Use TLS</label>
       <Input label="Username" value={draft.userName ?? ""} onChange={(value) => setDraft({ ...draft, userName: value || null })} />
       <Input label="Password" type="password" value={draft.password ?? ""} onChange={(value) => setDraft({ ...draft, password: value || null })} />
-    </>} table={<DataTable headers={["Name", "Mode", "Nodes", "Max DOP", "Actions"]}>{(clusters.data ?? []).map((cluster) => <tr key={cluster.id}><td>{cluster.name}</td><td>{cluster.mode}</td><td>{cluster.accessNodes.map((node) => `${node.host}:${node.port}`).join(", ")}</td><td>{cluster.backupRestoreMaxDop ?? "default"}</td><td><button className="ghost" onClick={() => api.testCluster(cluster.id).then((x) => showToast({ kind: x.succeeded ? "success" : "error", text: x.message }))}>Test</button></td></tr>)}</DataTable>} />
+    </>} table={<DataTable headers={["Name", "Mode", "Nodes", "Max DOP", "Actions"]}>{(clusters.data ?? []).map((cluster) => <tr key={cluster.id}><td>{cluster.name}</td><td>{cluster.mode}</td><td>{cluster.accessNodes.map((node) => `${node.host}:${node.port}`).join(", ")}</td><td>{cluster.backupRestoreMaxDop ?? "default"}</td><td className="actions"><button className="ghost" onClick={() => {
+      setEditing(cluster);
+      setDraft({ name: cluster.name, mode: cluster.mode, accessNodes: cluster.accessNodes.map((node) => ({ host: node.host, port: node.port, useTls: node.useTls })), userName: null, password: null, backupRestoreMaxDop: cluster.backupRestoreMaxDop, clickHouseClusterName: cluster.clickHouseClusterName });
+    }}>Edit</button><button className="ghost" onClick={() => api.testCluster(cluster.id).then((x) => showToast({ kind: x.succeeded ? "success" : "error", text: x.message }))}>Test</button></td></tr>)}</DataTable>} />
   );
 }
 
 function Targets() {
   const { api, showToast } = useApi();
   const targets = useQuery({ queryKey: ["targets"], queryFn: () => api.targets() });
+  const [editing, setEditing] = useState<BackupTargetDto | null>(null);
   const [draft, setDraft] = useState<UpsertS3TargetRequest>({ name: "", endpoint: "http://localhost:9000", region: "us-east-1", bucket: "", pathPrefix: null, forcePathStyle: true, accessKey: null, secretKey: null });
+  const reset = () => {
+    setEditing(null);
+    setDraft({ name: "", endpoint: "http://localhost:9000", region: "us-east-1", bucket: "", pathPrefix: null, forcePathStyle: true, accessKey: null, secretKey: null });
+  };
   const save = useMutation({
-    mutationFn: () => api.addTarget(draft),
-    onSuccess: () => { showToast({ kind: "success", text: "Target saved." }); targets.refetch(); },
+    mutationFn: () => editing ? api.updateTarget(editing.id, draft) : api.addTarget(draft),
+    onSuccess: () => { showToast({ kind: "success", text: "Target saved." }); targets.refetch(); reset(); },
     onError: (error) => showToast({ kind: "error", text: String(error) })
   });
-  return <CrudPage title="Targets" onSave={() => save.mutate()} form={<>
+  return <CrudPage title="Targets" formTitle={editing ? "Edit target" : "Create target"} saveLabel={editing ? "Update target" : "Save target"} onCancel={editing ? reset : undefined} onSave={() => save.mutate()} form={<>
     <Input label="Name" value={draft.name} onChange={(value) => setDraft({ ...draft, name: value })} />
     <Input label="Endpoint" value={draft.endpoint} onChange={(value) => setDraft({ ...draft, endpoint: value })} />
     <Input label="Bucket" value={draft.bucket} onChange={(value) => setDraft({ ...draft, bucket: value })} />
     <Input label="Region" value={draft.region} onChange={(value) => setDraft({ ...draft, region: value })} />
+    <Input label="Path prefix" value={draft.pathPrefix ?? ""} onChange={(value) => setDraft({ ...draft, pathPrefix: value || null })} />
     <div className="field-wide">
       <span className="field-label">S3 addressing style</span>
       <div className="segmented">
@@ -772,7 +788,10 @@ function Targets() {
     </div>
     <Input label="Access key" value={draft.accessKey ?? ""} onChange={(value) => setDraft({ ...draft, accessKey: value || null })} />
     <Input label="Secret key" type="password" value={draft.secretKey ?? ""} onChange={(value) => setDraft({ ...draft, secretKey: value || null })} />
-  </>} table={<DataTable headers={["Name", "Endpoint", "Bucket", "Addressing", "Prefix", "Actions"]}>{(targets.data ?? []).map((target) => <tr key={target.id}><td>{target.name}</td><td>{target.s3.endpoint}</td><td>{target.s3.bucket}</td><td>{target.s3.forcePathStyle ? "Path style" : "Virtual-host style"}</td><td>{target.s3.pathPrefix ?? ""}</td><td><button className="ghost" onClick={() => api.testTarget(target.id).then((x) => showToast({ kind: x.succeeded ? "success" : "error", text: x.message }))}>Test</button></td></tr>)}</DataTable>} />;
+  </>} table={<DataTable headers={["Name", "Endpoint", "Bucket", "Addressing", "Prefix", "Actions"]}>{(targets.data ?? []).map((target) => <tr key={target.id}><td>{target.name}</td><td>{target.s3.endpoint}</td><td>{target.s3.bucket}</td><td>{target.s3.forcePathStyle ? "Path style" : "Virtual-host style"}</td><td>{target.s3.pathPrefix ?? ""}</td><td className="actions"><button className="ghost" onClick={() => {
+    setEditing(target);
+    setDraft({ name: target.name, endpoint: target.s3.endpoint, region: target.s3.region, bucket: target.s3.bucket, pathPrefix: target.s3.pathPrefix, forcePathStyle: target.s3.forcePathStyle, accessKey: null, secretKey: null });
+  }}>Edit</button><button className="ghost" onClick={() => api.testTarget(target.id).then((x) => showToast({ kind: x.succeeded ? "success" : "error", text: x.message }))}>Test</button></td></tr>)}</DataTable>} />;
 }
 
 function UsersPage() {
@@ -867,8 +886,8 @@ function EntriesPage({ title, last, setLast, onClear, headers, rows }: { title: 
   </Page>;
 }
 
-function CrudPage({ title, form, table, onSave }: { title: string; form: ReactNode; table: ReactNode; onSave: () => void }) {
-  return <Page title={title}><section className="panel form-panel"><div className="form-grid">{form}</div><button className="primary" onClick={onSave}><Save size={16} /> Save</button></section><section className="panel">{table}</section></Page>;
+function CrudPage({ title, formTitle, saveLabel = "Save", form, table, onSave, onCancel }: { title: string; formTitle?: string; saveLabel?: string; form: ReactNode; table: ReactNode; onSave: () => void; onCancel?: () => void }) {
+  return <Page title={title}><section className="panel form-panel">{formTitle && <h2>{formTitle}</h2>}<div className="form-grid">{form}</div><div className="actions"><button className="primary" onClick={onSave}><Save size={16} /> {saveLabel}</button>{onCancel && <button className="ghost" onClick={onCancel}>Cancel</button>}</div></section><section className="panel">{table}</section></Page>;
 }
 
 function Page({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
@@ -917,6 +936,23 @@ function move<T>(items: T[], from: number, to: number) {
 
 function nameOf(items: Array<{ id: string; name: string }> | undefined, id: string) {
   return items?.find((item) => item.id === id)?.name ?? id;
+}
+
+function formatNodes(nodes: UpsertClusterRequest["accessNodes"]) {
+  return nodes.map((node) => `${node.host}:${node.port}`).join(", ");
+}
+
+function parseNodes(value: string, useTls: boolean): UpsertClusterRequest["accessNodes"] {
+  const nodes = value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => {
+      const [host, port] = item.split(":");
+      return { host, port: Number(port) || 9000, useTls };
+    });
+
+  return nodes.length > 0 ? nodes : [{ host: "", port: 9000, useTls }];
 }
 
 function presetLabel(value: string) {
