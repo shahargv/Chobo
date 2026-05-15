@@ -13,9 +13,9 @@ namespace ChoboServer.Controllers;
 [Route(ChoboApi.ApiPrefix + "/test-hooks")]
 public sealed class TestHooksController(
     ChoboDbContext db,
-    BackupRestoreQueues queues,
+    IBackupRestoreQueues queues,
     IOptions<ChoboTestHooksOptions> options,
-    TestHookCoordinator testHooks) : ControllerBase
+    ITestHookCoordinator testHooks) : ControllerBase
 {
     [HttpPost("seed-missing-backup-operation")]
     public async Task<ActionResult<BackupDto>> SeedMissingBackupOperation(SeedMissingBackupOperationRequest request, CancellationToken cancellationToken)

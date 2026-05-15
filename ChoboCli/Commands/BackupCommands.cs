@@ -15,15 +15,22 @@ public sealed class BackupCommand : CliSubject
 
     private static Task<object?> ManualAsync(CommandContext context)
     {
-        var required = context.Command.Options.Require("--cluster-id", "--target-id");
+        var policyId = context.Command.Options.Optional("--policy-id") is { } policy ? Guid.Parse(policy) : (Guid?)null;
+        var backupType = context.Command.Options.Enum("--backup-type", BackupType.Full);
+        var required = policyId is null
+            ? context.Command.Options.Require("--cluster-id", "--target-id")
+            : new Dictionary<string, string>
+            {
+                ["--cluster-id"] = context.Command.Options.Optional("--cluster-id") ?? Guid.Empty.ToString(),
+                ["--target-id"] = context.Command.Options.Optional("--target-id") ?? Guid.Empty.ToString()
+            };
         var request = new ManualBackupRequest(
             Guid.Parse(required["--cluster-id"]),
             Guid.Parse(required["--target-id"]),
-            CommandHelpers.PolicySelectorFromOption(context.Command.Options));
-        return CommandHelpers.WithClient(context, client => client.PostAsync("backups/manual", new ManualBackupRequest(
-            request.ClusterId,
-            request.TargetId,
-            request.Selector)));
+            CommandHelpers.PolicySelectorFromOption(context.Command.Options),
+            backupType,
+            policyId);
+        return CommandHelpers.WithClient(context, client => client.PostAsync("backups/manual", request));
     }
 }
 

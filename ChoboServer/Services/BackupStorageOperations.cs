@@ -144,7 +144,10 @@ public sealed class S3BackupStorageOperations(ICredentialProtector protector, Se
                 Prefix = prefix,
                 ContinuationToken = continuationToken
             }, cancellationToken);
-            keys.AddRange(response.S3Objects.Select(x => x.Key).Where(x => x.StartsWith(prefix, StringComparison.Ordinal)));
+            keys.AddRange((response.S3Objects ?? Enumerable.Empty<S3Object>())
+                .Select(x => x.Key)
+                .Where(x => !string.IsNullOrEmpty(x) && x.StartsWith(prefix, StringComparison.Ordinal))
+                .Select(x => x!));
             continuationToken = response.IsTruncated == true ? response.NextContinuationToken : null;
         } while (!string.IsNullOrEmpty(continuationToken));
 

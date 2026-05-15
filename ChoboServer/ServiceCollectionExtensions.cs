@@ -82,18 +82,21 @@ public static class ServiceCollectionExtensions
             }.ToString());
         });
         services.AddScoped<ActorContext>();
-        services.AddScoped<TokenService>();
-        services.AddScoped<AuditService>();
+        services.AddScoped<IActorContext>(serviceProvider => serviceProvider.GetRequiredService<ActorContext>());
+        services.AddScoped<ITokenService, TokenService>();
+        services.AddScoped<IAuditService, AuditService>();
+        services.AddScoped<ISchemaUpgradeService, SchemaUpgradeService>();
+        services.AddScoped<IDatabaseBootstrap, DatabaseBootstrap>();
         services.AddSingleton<IAesKeyRepository, FileAesKeyRepository>();
         services.AddScoped<ICredentialProtector, CredentialProtector>();
-        services.AddScoped<ExportImportService>();
+        services.AddScoped<IExportImportService, ExportImportService>();
         services.AddScoped<ClickHouseAdapter>();
         services.AddScoped<IClickHouseAdapter>(serviceProvider => serviceProvider.GetRequiredService<ClickHouseAdapter>());
         services.AddScoped<S3BackupStorageOperations>();
         services.AddScoped<IBackupStorageOperations, BackupStorageOperations>();
-        services.AddScoped<ApplicationLogStore>();
-        services.AddScoped<AuditStore>();
-        services.AddSingleton<TestHookCoordinator>();
+        services.AddScoped<IApplicationLogStore, ApplicationLogStore>();
+        services.AddScoped<IAuditStore, AuditStore>();
+        services.AddSingleton<ITestHookCoordinator, TestHookCoordinator>();
         services.AddScoped<IUnitOfWork, EfUnitOfWork>();
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddScoped<IClusterRepository, ClusterRepository>();
@@ -113,7 +116,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<RestoreRunnerService>();
         services.AddScoped<BackupCleanupService>();
         services.AddSingleton(TimeProvider.System);
-        services.AddSingleton<BackupRestoreQueues>();
+        services.AddSingleton<IBackupRestoreQueues, BackupRestoreQueues>();
         services.AddHostedService<BackupRestoreResumeBackgroundService>();
         services.AddHostedService<BackupExecutorBackgroundService>();
         services.AddHostedService<RestoreExecutorBackgroundService>();
@@ -128,8 +131,9 @@ public static class ServiceCollectionExtensions
     {
         using var scope = services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
-        await DatabaseBootstrap.EnsureDatabaseObjectsAsync(db);
-        await DatabaseBootstrap.EnsureSchemaStateAsync(db);
+        var bootstrap = scope.ServiceProvider.GetRequiredService<IDatabaseBootstrap>();
+        await bootstrap.EnsureDatabaseObjectsAsync();
+        await bootstrap.EnsureSchemaStateAsync();
         await DatabasePerformanceMaintenance.EnsureAsync(db);
 
         var storage = scope.ServiceProvider.GetRequiredService<IOptions<ChoboStorageOptions>>().Value;
@@ -143,7 +147,7 @@ public static class ServiceCollectionExtensions
 
         if (firstStartup || (!File.Exists(markerPath) && !hasUsers))
         {
-            await DatabaseBootstrap.BootstrapFirstStartupAsync(scope.ServiceProvider);
+            await bootstrap.BootstrapFirstStartupAsync();
         }
     }
 }

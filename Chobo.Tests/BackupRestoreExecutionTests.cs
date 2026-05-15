@@ -9,6 +9,8 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using System.Text.Encodings.Web;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Chobo.Tests;
 
@@ -30,7 +32,7 @@ public sealed class BackupRestoreExecutionTests
         Assert.Equal(2, paths.Count);
         Assert.All(paths, path =>
         {
-            Assert.StartsWith("backups/analytics/orders/manual/full/", path);
+            Assert.StartsWith("backups/full/manual/analytics/orders/", path);
             Assert.Matches(@"/[0-9]{8}T[0-9]{9}Z/[0-9a-f]{32}$", path);
         });
         Assert.NotEqual(paths[0], paths[1]);
@@ -73,6 +75,90 @@ public sealed class BackupRestoreExecutionTests
         var shard = Assert.Single(table.Shards);
         Assert.Equal(BackupTableStatus.Succeeded, shard.Status);
         Assert.Contains("replicated_orders", fixture.ClickHouse.BackupStartTables);
+    }
+
+    [Fact]
+    public async Task Incremental_backup_uses_parent_full_table_and_falls_back_to_full_for_new_table()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var policy = await fixture.SeedPolicyAsync();
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+        var full = new BackupEntity
+        {
+            TriggerType = BackupTriggerType.Manual,
+            Status = BackupRunStatus.Queued,
+            BackupType = BackupType.Full,
+            SourceClusterId = fixture.SourceClusterId,
+            TargetId = fixture.TargetId,
+            PolicyId = policy.Id
+        };
+        fixture.Db.Backups.Add(full);
+        await fixture.Db.SaveChangesAsync();
+        await fixture.RunBackupAsync(full.Id);
+
+        fixture.ClickHouse.Inventory.Add(Table("sales", "new_orders", "MergeTree"));
+        var incremental = new BackupEntity
+        {
+            TriggerType = BackupTriggerType.Manual,
+            Status = BackupRunStatus.Queued,
+            BackupType = BackupType.Incremental,
+            SourceClusterId = fixture.SourceClusterId,
+            TargetId = fixture.TargetId,
+            PolicyId = policy.Id
+        };
+        fixture.Db.Backups.Add(incremental);
+        await fixture.Db.SaveChangesAsync();
+        await fixture.RunBackupAsync(incremental.Id);
+
+        fixture.Db.ChangeTracker.Clear();
+        var tables = await fixture.Db.BackupTables.Include(x => x.Shards).Where(x => x.BackupId == incremental.Id).OrderBy(x => x.Table).ToListAsync();
+        var newTable = Assert.Single(tables, x => x.Table == "new_orders");
+        var existingTable = Assert.Single(tables, x => x.Table == "orders");
+        Assert.Equal(BackupType.Full, newTable.EffectiveBackupType);
+        Assert.StartsWith("backups/full/", newTable.S3Path);
+        Assert.Equal(BackupType.Incremental, existingTable.EffectiveBackupType);
+        Assert.NotNull(existingTable.ParentFullBackupTableId);
+        Assert.Contains($"parent-full-{full.Id:N}", existingTable.S3Path);
+        Assert.Equal(BackupType.Incremental, Assert.Single(existingTable.Shards).EffectiveBackupType);
+        Assert.Contains(fixture.Db.BackupTableShards.Single(x => x.Id == existingTable.Shards[0].ParentFullBackupTableShardId).S3Path, fixture.ClickHouse.BackupBasePaths);
+    }
+
+    [Fact]
+    public async Task Incremental_sharded_backup_selects_parent_per_shard_and_falls_back_when_one_shard_has_no_parent()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        fixture.ClickHouse.Topology.Clear();
+        fixture.ClickHouse.Topology.AddRange([
+            new ClickHouseShardReplicaInfo(1, "shard-1", 1, "source-s1", 9000, false, 0),
+            new ClickHouseShardReplicaInfo(2, "shard-2", 1, "source-s2", 9000, false, 0)
+        ]);
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+        var policy = await fixture.SeedPolicyAsync();
+        var full = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, DateTimeOffset.UtcNow.AddMinutes(-10), shardCount: 1, tableName: "orders");
+
+        var incremental = new BackupEntity
+        {
+            TriggerType = BackupTriggerType.Manual,
+            Status = BackupRunStatus.Queued,
+            BackupType = BackupType.Incremental,
+            SourceClusterId = fixture.SourceClusterId,
+            TargetId = fixture.TargetId,
+            PolicyId = policy.Id
+        };
+        fixture.Db.Backups.Add(incremental);
+        await fixture.Db.SaveChangesAsync();
+        await fixture.RunBackupAsync(incremental.Id);
+
+        fixture.Db.ChangeTracker.Clear();
+        var table = await fixture.Db.BackupTables.Include(x => x.Shards).SingleAsync(x => x.BackupId == incremental.Id);
+        var shardOne = Assert.Single(table.Shards, x => x.SourceShardNumber == 1);
+        var shardTwo = Assert.Single(table.Shards, x => x.SourceShardNumber == 2);
+        Assert.Equal(BackupType.Incremental, shardOne.EffectiveBackupType);
+        Assert.NotNull(shardOne.ParentFullBackupTableShardId);
+        Assert.Contains($"parent-full-{full.Id:N}", shardOne.S3Path);
+        Assert.Equal(BackupType.Full, shardTwo.EffectiveBackupType);
+        Assert.Null(shardTwo.ParentFullBackupTableShardId);
+        Assert.StartsWith("backups/full/", shardTwo.S3Path);
     }
 
     [Fact]
@@ -472,6 +558,153 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Retention_keeps_full_parent_while_dependent_incremental_is_retained()
+    {
+        var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now));
+        var policy = await fixture.SeedPolicyAsync(retentionMinutes: null);
+        policy.FullRetentionMinutes = 1;
+        policy.IncrementalRetentionMinutes = 120;
+        await fixture.Db.SaveChangesAsync();
+        var full = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, now.AddHours(-2), tableName: "orders");
+        var incremental = await fixture.SeedDependentIncrementalAsync(policy.Id, full, now.AddMinutes(-10));
+
+        await fixture.Services.GetRequiredService<RetentionManagementBackgroundService>().RunOnceAsync();
+
+        fixture.Db.ChangeTracker.Clear();
+        Assert.Equal(BackupRunStatus.Succeeded, (await fixture.Db.Backups.SingleAsync(x => x.Id == full.Id)).Status);
+        Assert.Equal(BackupRunStatus.Succeeded, (await fixture.Db.Backups.SingleAsync(x => x.Id == incremental.Id)).Status);
+    }
+
+    [Fact]
+    public async Task Retention_keeps_incremental_run_that_owns_full_fallback_table_while_dependent_incremental_is_retained()
+    {
+        var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now));
+        var policy = await fixture.SeedPolicyAsync(retentionMinutes: null);
+        policy.FullRetentionMinutes = 1;
+        policy.IncrementalRetentionMinutes = 120;
+        await fixture.Db.SaveChangesAsync();
+
+        var originalFull = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, now.AddHours(-3), tableName: "orders");
+        var fallbackRun = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Succeeded, "backup-op", true),
+            new SeedBackupTable("sales", "new_orders", BackupTableStatus.Succeeded, "backup-op", true)
+        ]);
+        fallbackRun.PolicyId = policy.Id;
+        fallbackRun.Status = BackupRunStatus.Succeeded;
+        fallbackRun.BackupType = BackupType.Incremental;
+        fallbackRun.CompletedAt = now.AddHours(-2);
+        fallbackRun.CreatedAt = now.AddHours(-2).AddMinutes(-1);
+        var originalFullTable = await fixture.Db.BackupTables.Include(x => x.Shards).SingleAsync(x => x.BackupId == originalFull.Id);
+        foreach (var table in fallbackRun.Tables)
+        {
+            if (table.Table == "orders")
+            {
+                table.EffectiveBackupType = BackupType.Incremental;
+                table.ParentFullBackupId = originalFull.Id;
+                table.ParentFullBackupTableId = originalFullTable.Id;
+                foreach (var shard in table.Shards)
+                {
+                    shard.EffectiveBackupType = BackupType.Incremental;
+                    shard.ParentFullBackupId = originalFull.Id;
+                    shard.ParentFullBackupTableShardId = originalFullTable.Shards.Single().Id;
+                }
+            }
+            else
+            {
+                table.EffectiveBackupType = BackupType.Full;
+                foreach (var shard in table.Shards)
+                {
+                    shard.EffectiveBackupType = BackupType.Full;
+                }
+            }
+        }
+        await fixture.Db.SaveChangesAsync();
+
+        var fallbackFullTable = fallbackRun.Tables.Single(x => x.Table == "new_orders");
+        var laterIncremental = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, now.AddMinutes(-10), backupType: BackupType.Incremental, tableName: "new_orders");
+        var laterTable = laterIncremental.Tables.Single();
+        laterTable.EffectiveBackupType = BackupType.Incremental;
+        laterTable.ParentFullBackupId = fallbackRun.Id;
+        laterTable.ParentFullBackupTableId = fallbackFullTable.Id;
+        laterTable.Shards.Single().EffectiveBackupType = BackupType.Incremental;
+        laterTable.Shards.Single().ParentFullBackupId = fallbackRun.Id;
+        laterTable.Shards.Single().ParentFullBackupTableShardId = fallbackFullTable.Shards.Single().Id;
+        await fixture.Db.SaveChangesAsync();
+
+        await fixture.Services.GetRequiredService<RetentionManagementBackgroundService>().RunOnceAsync();
+
+        fixture.Db.ChangeTracker.Clear();
+        Assert.Equal(BackupRunStatus.Succeeded, (await fixture.Db.Backups.SingleAsync(x => x.Id == fallbackRun.Id)).Status);
+        Assert.Equal(BackupRunStatus.Succeeded, (await fixture.Db.Backups.SingleAsync(x => x.Id == laterIncremental.Id)).Status);
+    }
+
+    [Fact]
+    public async Task Retention_deletes_expired_incremental_before_full_parent()
+    {
+        var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now));
+        var policy = await fixture.SeedPolicyAsync(retentionMinutes: null);
+        policy.FullRetentionMinutes = 1;
+        policy.IncrementalRetentionMinutes = 1;
+        await fixture.Db.SaveChangesAsync();
+        var full = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, now.AddHours(-3), tableName: "orders");
+        var incremental = await fixture.SeedDependentIncrementalAsync(policy.Id, full, now.AddHours(-2));
+
+        await fixture.Services.GetRequiredService<RetentionManagementBackgroundService>().RunOnceAsync();
+        fixture.Db.ChangeTracker.Clear();
+        Assert.Equal(BackupRunStatus.Succeeded, (await fixture.Db.Backups.SingleAsync(x => x.Id == full.Id)).Status);
+        Assert.Equal(BackupRunStatus.BackupExpiredDeleted, (await fixture.Db.Backups.SingleAsync(x => x.Id == incremental.Id)).Status);
+
+        await fixture.Services.GetRequiredService<RetentionManagementBackgroundService>().RunOnceAsync();
+        fixture.Db.ChangeTracker.Clear();
+        Assert.Equal(BackupRunStatus.BackupExpiredDeleted, (await fixture.Db.Backups.SingleAsync(x => x.Id == full.Id)).Status);
+    }
+
+    [Fact]
+    public async Task Retention_minimums_protect_mixed_backups_and_full_backups_independently()
+    {
+        var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now));
+        var policy = await fixture.SeedPolicyAsync(retentionMinutes: null);
+        policy.FullRetentionMinutes = 1;
+        policy.IncrementalRetentionMinutes = 1;
+        policy.MinBackupsToKeep = 1;
+        policy.MinFullBackupsToKeep = 1;
+        await fixture.Db.SaveChangesAsync();
+        var oldFull = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, now.AddHours(-4));
+        var protectedFull = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, now.AddHours(-3));
+        var oldIncremental = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, now.AddHours(-2), backupType: BackupType.Incremental);
+        var protectedNewest = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, now.AddHours(-1), backupType: BackupType.Incremental);
+
+        await fixture.Services.GetRequiredService<RetentionManagementBackgroundService>().RunOnceAsync();
+
+        fixture.Db.ChangeTracker.Clear();
+        Assert.Equal(BackupRunStatus.BackupExpiredDeleted, (await fixture.Db.Backups.SingleAsync(x => x.Id == oldFull.Id)).Status);
+        Assert.Equal(BackupRunStatus.Succeeded, (await fixture.Db.Backups.SingleAsync(x => x.Id == protectedFull.Id)).Status);
+        Assert.Equal(BackupRunStatus.BackupExpiredDeleted, (await fixture.Db.Backups.SingleAsync(x => x.Id == oldIncremental.Id)).Status);
+        Assert.Equal(BackupRunStatus.Succeeded, (await fixture.Db.Backups.SingleAsync(x => x.Id == protectedNewest.Id)).Status);
+    }
+
+    [Fact]
+    public async Task Manual_delete_of_full_parent_is_blocked_by_pinned_incremental_unless_forced()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var policy = await fixture.SeedPolicyAsync();
+        var full = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, DateTimeOffset.UtcNow.AddHours(-2), tableName: "orders");
+        var incremental = await fixture.SeedDependentIncrementalAsync(policy.Id, full, DateTimeOffset.UtcNow.AddHours(-1), isPinned: true);
+
+        var service = fixture.Services.GetRequiredService<BackupApplicationService>();
+        await Assert.ThrowsAsync<ArgumentException>(() => service.RequestDeleteAsync(full.Id));
+
+        await service.RequestDeleteAsync(full.Id, force: true);
+        fixture.Db.ChangeTracker.Clear();
+        Assert.Equal(BackupRunStatus.ManualDeleteRequested, (await fixture.Db.Backups.SingleAsync(x => x.Id == full.Id)).Status);
+        Assert.Equal(BackupRunStatus.ManualDeleteRequested, (await fixture.Db.Backups.SingleAsync(x => x.Id == incremental.Id)).Status);
+    }
+
+    [Fact]
     public async Task Cleanup_retries_after_failed_attempt_and_completes_after_restart()
     {
         var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
@@ -514,6 +747,58 @@ public sealed class BackupRestoreExecutionTests
         Assert.Equal(BackupRunStatus.FailedBackupDeletedByGarbageCollector, (await fixture.Db.Backups.SingleAsync(x => x.Id == failed.Id)).Status);
         Assert.Equal(BackupRunStatus.FailedBackupDeletedByGarbageCollector, (await fixture.Db.Backups.SingleAsync(x => x.Id == partial.Id)).Status);
         Assert.Equal(BackupRunStatus.Failed, (await fixture.Db.Backups.SingleAsync(x => x.Id == kept.Id)).Status);
+    }
+
+    [Fact]
+    public async Task Garbage_collector_deletes_failed_incremental_without_deleting_parent_full()
+    {
+        var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now));
+        var policy = await fixture.SeedPolicyAsync(failedMode: FailedBackupRetentionMode.DeleteByGarbageCollectorAfterFailure);
+        var full = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, now.AddHours(-2), tableName: "orders");
+        var incremental = await fixture.SeedDependentIncrementalAsync(policy.Id, full, now.AddHours(-1));
+        incremental.Status = BackupRunStatus.Failed;
+        await fixture.Db.SaveChangesAsync();
+
+        await fixture.Services.GetRequiredService<BackupsGarbageCollectorBackgroundService>().RunOnceAsync();
+
+        fixture.Db.ChangeTracker.Clear();
+        Assert.Equal(BackupRunStatus.Succeeded, (await fixture.Db.Backups.SingleAsync(x => x.Id == full.Id)).Status);
+        Assert.Equal(BackupRunStatus.FailedBackupDeletedByGarbageCollector, (await fixture.Db.Backups.SingleAsync(x => x.Id == incremental.Id)).Status);
+    }
+
+    [Fact]
+    public async Task Garbage_collector_deletes_failed_full_parent_and_dependent_incrementals()
+    {
+        var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now));
+        var policy = await fixture.SeedPolicyAsync(failedMode: FailedBackupRetentionMode.DeleteByGarbageCollectorAfterFailure);
+        var full = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, now.AddHours(-2), tableName: "orders");
+        var incremental = await fixture.SeedDependentIncrementalAsync(policy.Id, full, now.AddHours(-1));
+        full.Status = BackupRunStatus.Failed;
+        await fixture.Db.SaveChangesAsync();
+
+        await fixture.Services.GetRequiredService<BackupsGarbageCollectorBackgroundService>().RunOnceAsync();
+
+        fixture.Db.ChangeTracker.Clear();
+        Assert.Equal(BackupRunStatus.FailedBackupDeletedByGarbageCollector, (await fixture.Db.Backups.SingleAsync(x => x.Id == full.Id)).Status);
+        Assert.Equal(BackupRunStatus.FailedBackupDeletedByGarbageCollector, (await fixture.Db.Backups.SingleAsync(x => x.Id == incremental.Id)).Status);
+    }
+
+    [Fact]
+    public async Task Garbage_collector_deletes_orphaned_incremental_after_parent_deletion()
+    {
+        var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now));
+        var policy = await fixture.SeedPolicyAsync();
+        var full = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.ManualDeleted, now.AddHours(-2), tableName: "orders");
+        var incremental = await fixture.SeedDependentIncrementalAsync(policy.Id, full, now.AddHours(-1));
+
+        await fixture.Services.GetRequiredService<BackupsGarbageCollectorBackgroundService>().RunOnceAsync();
+
+        fixture.Db.ChangeTracker.Clear();
+        Assert.Equal(BackupRunStatus.FailedBackupDeletedByGarbageCollector, (await fixture.Db.Backups.SingleAsync(x => x.Id == incremental.Id)).Status);
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "orphaned-incremental-garbage-collection-requested" && x.EntityId == incremental.Id.ToString()));
     }
 
     [Fact]
@@ -585,6 +870,10 @@ public sealed class BackupRestoreExecutionTests
         Assert.Equal(BackupRunStatus.Failed, backup.Status);
         Assert.Contains("Source ClickHouse instance is not reachable", backup.FailureReason);
         Assert.NotNull(backup.CompletedAt);
+        var backupDto = BackupRestoreMappingAccessor.ToDto(backup);
+        Assert.Equal(backup.CompletedAt, backupDto.EndedAt);
+        var backupJson = SerializeRunDto(backupDto);
+        AssertRunJsonUsesEndedAt(backupJson);
         var audit = await fixture.Db.AuditEntries.SingleAsync(x => x.Action == "failed" && x.EntityType == "backup" && x.EntityId == backupId.ToString());
         Assert.Contains("Source ClickHouse instance is not reachable", audit.Details);
     }
@@ -664,6 +953,11 @@ public sealed class BackupRestoreExecutionTests
         fixture.Db.ChangeTracker.Clear();
         var completed = await fixture.Db.Restores.Include(x => x.Tables).SingleAsync(x => x.Id == restore.Id);
         Assert.Equal(RestoreRunStatus.Failed, completed.Status);
+        Assert.NotNull(completed.CompletedAt);
+        var restoreDto = BackupRestoreMappingAccessor.ToDto(completed);
+        Assert.Equal(completed.CompletedAt, restoreDto.EndedAt);
+        var restoreJson = SerializeRunDto(restoreDto);
+        AssertRunJsonUsesEndedAt(restoreJson);
         Assert.Contains("Destination ClickHouse instance is not reachable", completed.FailureReason);
         Assert.Contains("sales.orders", completed.FailureReason);
         var audit = await fixture.Db.AuditEntries.SingleAsync(x => x.Action == "failed" && x.EntityType == "restore" && x.EntityId == restore.Id.ToString());
@@ -717,6 +1011,25 @@ public sealed class BackupRestoreExecutionTests
     private static ClickHouseTableInfo Table(string database, string table, string engine, string columnsJson = "[]", string? schemaHash = null) =>
         new(database, table, engine, $"CREATE TABLE {database}.{table} (id UInt64) ENGINE = {engine} ORDER BY id", columnsJson, schemaHash ?? $"{database}.{table}.{engine}.{columnsJson}");
 
+    private static string SerializeRunDto<T>(T dto)
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            WriteIndented = true
+        };
+        options.Converters.Add(new JsonStringEnumConverter());
+        return JsonSerializer.Serialize(dto, options);
+    }
+
+    private static void AssertRunJsonUsesEndedAt(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        Assert.True(document.RootElement.TryGetProperty("endedAt", out var endedAt));
+        Assert.NotEqual(JsonValueKind.Null, endedAt.ValueKind);
+        Assert.False(document.RootElement.TryGetProperty("completedAt", out _));
+    }
+
     private sealed record SeedBackupTable(string Database, string Table, BackupTableStatus Status, string? OperationId, bool DataBackedUp);
 
     private sealed record SeedRestoreTable(string SourceDatabase, string SourceTable, RestoreTableStatus Status, string? OperationId);
@@ -729,6 +1042,7 @@ public sealed class BackupRestoreExecutionTests
         public List<ClickHouseShardReplicaInfo> Topology { get; } = [new(1, "single", 1, "source", 9000, false, 0)];
         public Dictionary<string, string> KnownOperations { get; } = new(StringComparer.Ordinal);
         public List<string> BackupStartTables { get; } = [];
+        public List<string?> BackupBasePaths { get; } = [];
         public List<string> RestoreStartTables { get; } = [];
         public int MaxConcurrentBackupStarts { get; private set; }
         public TimeSpan StartDelay { get; set; }
@@ -784,19 +1098,20 @@ public sealed class BackupRestoreExecutionTests
         public Task<IReadOnlyList<ClickHouseShardReplicaInfo>> GetTopologyAsync(ClickHouseClusterEntity cluster, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<ClickHouseShardReplicaInfo>>(Topology.ToList());
 
-        public async Task<ClickHouseOperationResult> StartBackupAsync(ClickHouseClusterEntity cluster, BackupTargetEntity target, BackupTableEntity table, CancellationToken cancellationToken)
+        public async Task<ClickHouseOperationResult> StartBackupAsync(ClickHouseClusterEntity cluster, BackupTargetEntity target, BackupTableEntity table, string? baseBackupPath, CancellationToken cancellationToken)
         {
             var shard = new BackupTableShardEntity { SourceShardNumber = 1, S3Path = table.S3Path };
-            return await StartBackupShardAsync(new ClickHouseNodeEndpoint("source", 9000, false), cluster, target, table, shard, cancellationToken);
+            return await StartBackupShardAsync(new ClickHouseNodeEndpoint("source", 9000, false), cluster, target, table, shard, baseBackupPath, cancellationToken);
         }
 
-        public async Task<ClickHouseOperationResult> StartBackupShardAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, BackupTargetEntity target, BackupTableEntity table, BackupTableShardEntity shard, CancellationToken cancellationToken)
+        public async Task<ClickHouseOperationResult> StartBackupShardAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, BackupTargetEntity target, BackupTableEntity table, BackupTableShardEntity shard, string? baseBackupPath, CancellationToken cancellationToken)
         {
             lock (_lock)
             {
                 _activeBackupStarts++;
                 MaxConcurrentBackupStarts = Math.Max(MaxConcurrentBackupStarts, _activeBackupStarts);
                 BackupStartTables.Add(table.Table);
+                BackupBasePaths.Add(baseBackupPath);
             }
 
             if (StartDelay > TimeSpan.Zero)
@@ -934,16 +1249,17 @@ public sealed class BackupRestoreExecutionTests
                 .AddScoped<IBackupStorageOperations>(provider => provider.GetRequiredService<FakeBackupStorageOperations>())
                 .AddScoped<PolicySelectorEvaluationService>()
                 .AddScoped<ActorContext>()
-                .AddScoped<AuditService>()
+                .AddScoped<IActorContext>(provider => provider.GetRequiredService<ActorContext>())
+                .AddScoped<IAuditService, AuditService>()
                 .AddSingleton(Options.Create(new ChoboTestHooksOptions()))
-                .AddSingleton<TestHookCoordinator>()
+                .AddSingleton<ITestHookCoordinator, TestHookCoordinator>()
                 .AddScoped<DashboardApplicationService>()
                 .AddScoped<BackupApplicationService>()
                 .AddScoped<RestoreApplicationService>()
                 .AddScoped<BackupRunnerService>()
                 .AddScoped<RestoreRunnerService>()
                 .AddScoped<BackupCleanupService>()
-                .AddSingleton<BackupRestoreQueues>()
+                .AddSingleton<IBackupRestoreQueues, BackupRestoreQueues>()
                 .AddSingleton(Options.Create(options ?? new ChoboBackupRestoreOptions { MaxDop = 3, PollInterval = TimeSpan.FromMilliseconds(1), SchedulerInterval = TimeSpan.FromSeconds(1) }))
                 .AddSingleton(Options.Create(new RetentionManagementOptions { Interval = TimeSpan.FromSeconds(1), MaxDop = 2 }))
                 .AddSingleton(Options.Create(new BackupsGarbageCollectorOptions { Interval = TimeSpan.FromSeconds(1), MaxDop = 2 }))
@@ -1140,7 +1456,8 @@ public sealed class BackupRestoreExecutionTests
             FailedBackupRetentionMode failedMode = FailedBackupRetentionMode.KeepAndExcludeFromMinBackupsToKeep)
         {
             var policy = NewPolicy(name);
-            policy.RetentionMinutes = retentionMinutes;
+            policy.FullRetentionMinutes = retentionMinutes;
+            policy.IncrementalRetentionMinutes = retentionMinutes;
             policy.MinBackupsToKeep = minBackupsToKeep;
             policy.FailedBackupRetentionMode = failedMode;
             Db.BackupPolicies.Add(policy);
@@ -1148,19 +1465,50 @@ public sealed class BackupRestoreExecutionTests
             return policy;
         }
 
-        public async Task<BackupEntity> SeedPolicyBackupAsync(Guid? policyId, BackupRunStatus status, DateTimeOffset completedAt, bool isPinned = false)
+        public async Task<BackupEntity> SeedPolicyBackupAsync(Guid? policyId, BackupRunStatus status, DateTimeOffset completedAt, bool isPinned = false, BackupType backupType = BackupType.Full, int shardCount = 1, string? tableName = null)
         {
             var backup = await SeedBackupWithTablesAsync([
-                new SeedBackupTable("sales", $"orders_{Guid.NewGuid():N}", BackupTableStatus.Succeeded, "backup-op", true)
-            ]);
+                new SeedBackupTable("sales", tableName ?? $"orders_{Guid.NewGuid():N}", BackupTableStatus.Succeeded, "backup-op", true)
+            ], shardCount);
             backup.PolicyId = policyId;
             backup.Status = status;
+            backup.BackupType = backupType;
             backup.CompletedAt = completedAt;
             backup.CreatedAt = completedAt.AddMinutes(-1);
             backup.IsPinned = isPinned;
             backup.PinnedAt = isPinned ? completedAt.AddMinutes(1) : null;
+            foreach (var table in backup.Tables)
+            {
+                table.EffectiveBackupType = backupType;
+                foreach (var shard in table.Shards)
+                {
+                    shard.EffectiveBackupType = backupType;
+                }
+            }
             await Db.SaveChangesAsync();
             return backup;
+        }
+
+        public async Task<BackupEntity> SeedDependentIncrementalAsync(Guid policyId, BackupEntity parentFullBackup, DateTimeOffset completedAt, bool isPinned = false)
+        {
+            var parent = await Db.Backups
+                .Include(x => x.Tables).ThenInclude(x => x.Shards)
+                .SingleAsync(x => x.Id == parentFullBackup.Id);
+            var parentTable = parent.Tables.Single();
+            var incremental = await SeedPolicyBackupAsync(policyId, BackupRunStatus.Succeeded, completedAt, isPinned, BackupType.Incremental, parentTable.Shards.Count, parentTable.Table);
+            var incrementalTable = incremental.Tables.Single();
+            incrementalTable.EffectiveBackupType = BackupType.Incremental;
+            incrementalTable.ParentFullBackupId = parent.Id;
+            incrementalTable.ParentFullBackupTableId = parentTable.Id;
+            for (var i = 0; i < incrementalTable.Shards.Count; i++)
+            {
+                incrementalTable.Shards[i].EffectiveBackupType = BackupType.Incremental;
+                incrementalTable.Shards[i].ParentFullBackupId = parent.Id;
+                incrementalTable.Shards[i].ParentFullBackupTableShardId = parentTable.Shards.OrderBy(x => x.SourceShardNumber).ElementAt(i).Id;
+            }
+
+            await Db.SaveChangesAsync();
+            return incremental;
         }
 
         private BackupPolicyEntity NewPolicy(string name) =>
@@ -1200,6 +1548,7 @@ public sealed class BackupRestoreExecutionTests
                 backup.Id,
                 backup.TriggerType,
                 backup.Status,
+                backup.BackupType,
                 backup.SourceClusterId,
                 backup.TargetId,
                 backup.PolicyId,
@@ -1225,6 +1574,9 @@ public sealed class BackupRestoreExecutionTests
                 backup.Tables.Select(table => new BackupTableDto(
                     table.Id,
                     table.BackupId,
+                    table.EffectiveBackupType,
+                    table.ParentFullBackupId,
+                    table.ParentFullBackupTableId,
                     table.Database,
                     table.Table,
                     table.Engine,
@@ -1240,6 +1592,9 @@ public sealed class BackupRestoreExecutionTests
                     table.Shards.Select(shard => new BackupTableShardDto(
                         shard.Id,
                         shard.BackupTableId,
+                        shard.EffectiveBackupType,
+                        shard.ParentFullBackupId,
+                        shard.ParentFullBackupTableShardId,
                         shard.SourceShardNumber,
                         shard.SourceShardName,
                         shard.ReplicaNumber,
@@ -1250,6 +1605,62 @@ public sealed class BackupRestoreExecutionTests
                         shard.Status,
                         shard.ClickHouseOperationId,
                         shard.ClickHouseStatus,
+                        shard.StartedAt,
+                        shard.CompletedAt,
+                        shard.Error)).ToList())).ToList());
+
+        public static RestoreDto ToDto(RestoreEntity restore) =>
+            new(
+                restore.Id,
+                restore.BackupId,
+                restore.TargetClusterId,
+                restore.Status,
+                restore.Append,
+                restore.AllowSchemaMismatch,
+                restore.Layout,
+                restore.SourceShard,
+                restore.TargetShard,
+                restore.RequestedByUserId,
+                restore.RequestedByName,
+                restore.RequestJson,
+                restore.CreatedAt,
+                restore.StartedAt,
+                restore.CompletedAt,
+                restore.Error,
+                restore.FailureReason,
+                restore.Tables.Select(table => new RestoreTableDto(
+                    table.Id,
+                    table.RestoreId,
+                    table.BackupTableId,
+                    table.SourceDatabase,
+                    table.SourceTable,
+                    table.TargetDatabase,
+                    table.TargetTable,
+                    table.Status,
+                    table.ClickHouseOperationId,
+                    table.ClickHouseStatus,
+                    table.Warning,
+                    table.StartedAt,
+                    table.CompletedAt,
+                    table.Error,
+                    table.Shards.Select(shard => new RestoreTableShardDto(
+                        shard.Id,
+                        shard.RestoreTableId,
+                        shard.BackupTableShardId,
+                        shard.SourceShardNumber,
+                        shard.TargetShardNumber,
+                        shard.TargetShardName,
+                        shard.TargetReplicaNumber,
+                        shard.TargetHost,
+                        shard.TargetPort,
+                        shard.TargetUseTls,
+                        shard.LayoutRole,
+                        shard.RestoreDatabase,
+                        shard.RestoreTableName,
+                        shard.Status,
+                        shard.ClickHouseOperationId,
+                        shard.ClickHouseStatus,
+                        shard.Warning,
                         shard.StartedAt,
                         shard.CompletedAt,
                         shard.Error)).ToList())).ToList());

@@ -12,8 +12,10 @@ public sealed class BackupPolicyEntity
     public BackupTargetEntity? Target { get; set; }
     public int SelectorJsonVersion { get; set; } = 1;
     public string SelectorJson { get; set; } = "";
-    public int? RetentionMinutes { get; set; }
+    public int? FullRetentionMinutes { get; set; }
+    public int? IncrementalRetentionMinutes { get; set; }
     public int MinBackupsToKeep { get; set; }
+    public int MinFullBackupsToKeep { get; set; }
     public FailedBackupRetentionMode FailedBackupRetentionMode { get; set; } = FailedBackupRetentionMode.KeepAndExcludeFromMinBackupsToKeep;
     public bool IsDeleted { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;

@@ -30,6 +30,7 @@ public sealed record BackupDto(
     Guid Id,
     BackupTriggerType TriggerType,
     BackupRunStatus Status,
+    BackupType BackupType,
     Guid SourceClusterId,
     Guid TargetId,
     Guid? PolicyId,
@@ -39,7 +40,7 @@ public sealed record BackupDto(
     string? ManualRequestJson,
     DateTimeOffset CreatedAt,
     DateTimeOffset? StartedAt,
-    DateTimeOffset? CompletedAt,
+    DateTimeOffset? EndedAt,
     string? Error,
     string? FailureReason,
     bool IsPinned,
@@ -57,6 +58,9 @@ public sealed record BackupDto(
 public sealed record BackupTableDto(
     Guid Id,
     Guid BackupId,
+    BackupType EffectiveBackupType,
+    Guid? ParentFullBackupId,
+    Guid? ParentFullBackupTableId,
     string Database,
     string Table,
     string Engine,
@@ -74,6 +78,9 @@ public sealed record BackupTableDto(
 public sealed record BackupTableShardDto(
     Guid Id,
     Guid BackupTableId,
+    BackupType EffectiveBackupType,
+    Guid? ParentFullBackupId,
+    Guid? ParentFullBackupTableShardId,
     int SourceShardNumber,
     string? SourceShardName,
     int ReplicaNumber,
@@ -88,7 +95,12 @@ public sealed record BackupTableShardDto(
     DateTimeOffset? CompletedAt,
     string? Error);
 
-public sealed record ManualBackupRequest(Guid ClusterId, Guid TargetId, PolicySelector Selector);
+public sealed record ManualBackupRequest(
+    Guid ClusterId,
+    Guid TargetId,
+    PolicySelector Selector,
+    BackupType BackupType = BackupType.Full,
+    Guid? PolicyId = null);
 
 public sealed record BackupListRequest(Guid? PolicyId, string? ClusterName, string? TableName, BackupRunStatus? Status);
 
@@ -107,7 +119,7 @@ public sealed record RestoreDto(
     string RequestJson,
     DateTimeOffset CreatedAt,
     DateTimeOffset? StartedAt,
-    DateTimeOffset? CompletedAt,
+    DateTimeOffset? EndedAt,
     string? Error,
     string? FailureReason,
     IReadOnlyList<RestoreTableDto> Tables);

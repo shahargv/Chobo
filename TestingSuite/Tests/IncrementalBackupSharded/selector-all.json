@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "action": "include",
+      "database": { "kind": "exact", "value": "incremental_sharded_source" },
+      "table": { "kind": "all", "value": "*" }
+    }
+  ]
+}

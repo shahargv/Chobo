@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Chobo.Contracts;
 
 public enum PolicyMatchKind { All, Exact, Wildcard }
@@ -10,7 +12,29 @@ public enum FailedBackupRetentionMode
     DeleteByGarbageCollectorAfterFailure
 }
 
-public sealed record BackupRetentionDto(int RetentionMinutes, int MinBackupsToKeep);
+public sealed record BackupRetentionDto(
+    int? FullRetentionMinutes,
+    int? IncrementalRetentionMinutes,
+    int MinBackupsToKeep,
+    int MinFullBackupsToKeep)
+{
+    [JsonPropertyName("retentionMinutes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? LegacyRetentionMinutes
+    {
+        get => null;
+        init
+        {
+            if (value is not { } retentionMinutes)
+            {
+                return;
+            }
+
+            FullRetentionMinutes ??= retentionMinutes;
+            IncrementalRetentionMinutes ??= retentionMinutes;
+        }
+    }
+}
 
 public sealed record BackupPolicyDto(
     Guid Id,

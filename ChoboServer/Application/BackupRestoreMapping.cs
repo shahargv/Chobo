@@ -10,6 +10,7 @@ internal static class BackupRestoreMapping
             x.Id,
             x.TriggerType,
             x.Status,
+            x.BackupType,
             x.SourceClusterId,
             x.TargetId,
             x.PolicyId,
@@ -38,6 +39,9 @@ internal static class BackupRestoreMapping
         new(
             x.Id,
             x.BackupId,
+            x.EffectiveBackupType,
+            x.ParentFullBackupId,
+            x.ParentFullBackupTableId,
             x.Database,
             x.Table,
             x.Engine,
@@ -56,6 +60,9 @@ internal static class BackupRestoreMapping
         new(
             x.Id,
             x.BackupTableId,
+            x.EffectiveBackupType,
+            x.ParentFullBackupId,
+            x.ParentFullBackupTableShardId,
             x.SourceShardNumber,
             x.SourceShardName,
             x.ReplicaNumber,
