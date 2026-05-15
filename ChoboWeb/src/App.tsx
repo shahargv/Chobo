@@ -1,5 +1,5 @@
-import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
-import { NavLink, Route, Routes, useNavigate } from "react-router-dom";
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
@@ -62,7 +62,7 @@ const navItems = [
   { to: "/policies", label: "Policies", icon: Settings2 },
   { to: "/schedules", label: "Schedules", icon: CalendarClock },
   { to: "/clusters", label: "Clusters", icon: Server },
-  { to: "/targets", label: "Targets", icon: HardDrive },
+  { to: "/targets", label: "Backup Storage", icon: HardDrive },
   { to: "/users", label: "Users", icon: Users },
   { to: "/logs", label: "Logs", icon: FileClock },
   { to: "/audit", label: "Audit", icon: History },
@@ -300,16 +300,16 @@ function buildOnboardingSteps(input: OnboardingInput): OnboardingStep[] {
     },
     {
       number: 2,
-      title: "Configure backup targets",
-      body: "Create an S3-compatible storage target for backup files.",
+      title: "Configure backup storage",
+      body: "Create S3-compatible storage for backup files.",
       to: "/targets",
-      action: "Add target",
+      action: "Add storage",
       done: input.targetCount > 0
     },
     {
       number: 3,
       title: "Configure a policy",
-      body: "Choose the source cluster, storage target, selector rules, and retention.",
+      body: "Choose the source cluster, backup storage, selector rules, and retention.",
       to: "/policies",
       action: "Create policy",
       done: input.policyCount > 0
@@ -376,7 +376,7 @@ function OnboardingComplete() {
         <ShieldCheck size={20} />
         <div>
           <strong>Onboarding complete</strong>
-          <span>Clusters, targets, policy, schedule, first backup, and restore practice are all present.</span>
+          <span>Clusters, backup storage, policy, schedule, first backup, and restore practice are all present.</span>
         </div>
       </div>
     </section>
@@ -498,11 +498,13 @@ function Restores() {
 
 function Policies() {
   const { api, showToast } = useApi();
+  const navigate = useNavigate();
   const policies = useQuery({ queryKey: ["policies"], queryFn: () => api.policies() });
   const clusters = useQuery({ queryKey: ["clusters"], queryFn: () => api.clusters() });
   const targets = useQuery({ queryKey: ["targets"], queryFn: () => api.targets() });
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<BackupPolicyDto | null>(null);
+  const [createdPolicy, setCreatedPolicy] = useState<BackupPolicyDto | null>(null);
   const defaultPolicyDraft = (): UpsertPolicyRequest => ({ name: "", sourceClusterId: "", targetId: "", selector: emptySelector, retention: { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 }, failedBackupRetentionMode: "KeepAndExcludeFromMinBackupsToKeep" });
   const [draft, setDraft] = useState<UpsertPolicyRequest>(() => defaultPolicyDraft());
   const policyErrors = validatePolicyDraft(draft);
@@ -519,21 +521,38 @@ function Policies() {
   };
   const save = useMutation({
     mutationFn: () => editing ? api.updatePolicy(editing.id, draft) : api.addPolicy(draft),
-    onSuccess: () => {
+    onSuccess: (policy) => {
       showToast({ kind: "success", text: "Policy saved." });
       policies.refetch();
+      setCreatedPolicy(editing ? null : policy);
       reset();
+    },
+    onError: (error) => showToast({ kind: "error", text: String(error) })
+  });
+  const executePolicy = useMutation({
+    mutationFn: (policy: BackupPolicyDto) => api.manualBackup({
+      clusterId: policy.sourceClusterId,
+      targetId: policy.targetId,
+      selector: policy.selector,
+      backupType: "Full",
+      policyId: policy.id
+    }),
+    onSuccess: () => {
+      showToast({ kind: "success", text: "Backup queued." });
+      setCreatedPolicy(null);
+      navigate("/backups");
     },
     onError: (error) => showToast({ kind: "error", text: String(error) })
   });
   return (
     <Page title="Policies" action={<button className="primary" onClick={() => {
       setEditing(null);
+      setCreatedPolicy(null);
       setDraft({ ...defaultPolicyDraft(), sourceClusterId: clusters.data?.[0]?.id ?? "", targetId: targets.data?.[0]?.id ?? "" });
       setShowForm(true);
     }}><Save size={16} /> Add policy</button>}>
       <section className="panel">
-        <DataTable headers={["Name", "Source", "Target", "Rules", "Retention", "Actions"]}>
+        <DataTable headers={["Name", "Source", "Backup Storage", "Rules", "Retention", "Actions"]}>
           {(policies.data ?? []).map((policy) => (
             <tr key={policy.id}>
               <td>{policy.name}</td>
@@ -541,21 +560,35 @@ function Policies() {
               <td>{nameOf(targets.data, policy.targetId)}</td>
               <td>{policy.selector.rules.length}</td>
               <td>{policy.retention ? `${policy.retention.minBackupsToKeep} backups` : "default"}</td>
-              <td><button className="ghost" onClick={() => {
+              <td className="actions"><button className="ghost" onClick={() => {
                 setEditing(policy);
+                setCreatedPolicy(null);
                 setDraft({ name: policy.name, sourceClusterId: policy.sourceClusterId, targetId: policy.targetId, selector: policy.selector, retention: policy.retention ?? { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 }, failedBackupRetentionMode: policy.failedBackupRetentionMode });
                 setShowForm(true);
-              }}>Edit</button></td>
+              }}>Edit</button><button className="ghost" disabled={executePolicy.isPending} onClick={() => executePolicy.mutate(policy)}><Play size={14} /> Execute now</button></td>
             </tr>
           ))}
         </DataTable>
       </section>
+      {createdPolicy && <section className="panel followup-panel">
+        <div className="section-head">
+          <div>
+            <h2>Policy created</h2>
+            <p>Do you want to schedule this policy or run the first backup now?</p>
+          </div>
+          <button className="ghost" onClick={() => setCreatedPolicy(null)}>Dismiss</button>
+        </div>
+        <div className="actions">
+          <button className="primary" onClick={() => navigate("/schedules", { state: { policyId: createdPolicy.id } })}><CalendarClock size={16} /> Add schedule</button>
+          <button className="secondary" disabled={executePolicy.isPending} onClick={() => executePolicy.mutate(createdPolicy)}><Play size={16} /> Execute backup now</button>
+        </div>
+      </section>}
       {showForm && <section className="panel form-panel">
         <div className="section-head"><h2>{editing ? "Edit policy" : "Create policy"}</h2><button className="ghost" onClick={reset}>Cancel</button></div>
         <div className="form-grid">
           <Input label="Name" value={draft.name} onChange={(value) => setDraft({ ...draft, name: value })} />
           <Select label="Source cluster" value={draft.sourceClusterId} onChange={(value) => setDraft({ ...draft, sourceClusterId: value })} options={(clusters.data ?? []).map((cluster) => [cluster.id, cluster.name])} />
-          <Select label="Target" value={draft.targetId} onChange={(value) => setDraft({ ...draft, targetId: value })} options={(targets.data ?? []).map((target) => [target.id, target.name])} />
+          <Select label="Backup storage" value={draft.targetId} onChange={(value) => setDraft({ ...draft, targetId: value })} options={(targets.data ?? []).map((target) => [target.id, target.name])} />
           <Select label="Failed backups" value={draft.failedBackupRetentionMode} onChange={(value) => setDraft({ ...draft, failedBackupRetentionMode: value as FailedBackupRetentionMode })} options={[["KeepAndExcludeFromMinBackupsToKeep", "Keep"], ["DeleteByGarbageCollectorAfterFailure", "Garbage collect failed backups"]]} />
         </div>
         <SelectorBuilder selector={draft.selector} hasSource={draft.sourceClusterId.length > 0} inventory={simulation.data?.inventory ?? []} selected={simulation.data?.tables ?? []} isLoading={simulation.isFetching} error={simulation.error ? String(simulation.error) : null} onChange={(selector) => setDraft({ ...draft, selector })} />
@@ -640,12 +673,19 @@ function RetentionEditor({ value, onChange }: { value: NonNullable<UpsertPolicyR
 
 function Schedules() {
   const { api, showToast } = useApi();
+  const location = useLocation();
   const schedules = useQuery({ queryKey: ["schedules"], queryFn: () => api.schedules() });
   const policies = useQuery({ queryKey: ["policies"], queryFn: () => api.policies() });
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<BackupScheduleDto | null>(null);
   const [scheduleDraft, setScheduleDraft] = useState<ScheduleDraft>(defaultScheduleDraft);
   const [draft, setDraft] = useState<UpsertScheduleRequest>({ name: "", policyId: "", backupType: "Full", cronExpression: buildCron(defaultScheduleDraft), timeZoneId: "UTC", isEnabled: true, missedRunGracePeriod: null, description: null });
+  useEffect(() => {
+    const state = location.state as { policyId?: string } | null;
+    if (!state?.policyId) return;
+    setShowForm(true);
+    setDraft((current) => ({ ...current, policyId: state.policyId ?? current.policyId }));
+  }, [location.state]);
   const reset = () => {
     setShowForm(false);
     setEditing(null);
@@ -807,10 +847,10 @@ function Targets() {
   };
   const save = useMutation({
     mutationFn: () => editing ? api.updateTarget(editing.id, modifyCredentials ? draft : { ...draft, accessKey: null, secretKey: null }) : api.addTarget(draft),
-    onSuccess: () => { showToast({ kind: "success", text: "Target saved." }); targets.refetch(); reset(); },
+    onSuccess: () => { showToast({ kind: "success", text: "Backup storage saved." }); targets.refetch(); reset(); },
     onError: (error) => showToast({ kind: "error", text: String(error) })
   });
-  return <CrudPage title="Targets" showForm={showForm} onAdd={() => { reset(); setShowForm(true); }} formTitle={editing ? "Edit target" : "Create target"} saveLabel={editing ? "Update target" : "Save target"} onCancel={reset} onSave={() => save.mutate()} form={<>
+  return <CrudPage title="Backup Storage" showForm={showForm} onAdd={() => { reset(); setShowForm(true); }} formTitle={editing ? "Edit backup storage" : "Create backup storage"} saveLabel={editing ? "Update storage" : "Save storage"} onCancel={reset} onSave={() => save.mutate()} form={<>
     <Input label="Name" value={draft.name} onChange={(value) => setDraft({ ...draft, name: value })} />
     <Input label="Endpoint" value={draft.endpoint} onChange={(value) => setDraft({ ...draft, endpoint: value })} />
     <Input label="Bucket" value={draft.bucket} onChange={(value) => setDraft({ ...draft, bucket: value })} />
@@ -921,13 +961,22 @@ function ImportExport() {
 }
 
 function ManualBackupButton() {
-  return <button className="primary"><Play size={16} /> Manual backup</button>;
+  const navigate = useNavigate();
+  return <button className="primary" onClick={() => navigate("/policies")}><Play size={16} /> Manual backup</button>;
 }
 
 function EntriesPage({ title, last, setLast, onClear, headers, rows }: { title: string; last: number; setLast: (value: number) => void; onClear: (before: string) => void; headers: string[]; rows: string[][] }) {
+  const [filters, setFilters] = useState<string[]>(() => headers.map(() => ""));
+  const visibleRows = rows.filter((row) => filters.every((filter, index) => !filter.trim() || row[index]?.toLowerCase().includes(filter.trim().toLowerCase())));
   return <Page title={title} action={<Input label="Last" type="number" value={`${last}`} onChange={(value) => setLast(Number(value) || 100)} />}>
     <section className="panel">
-      <DataTable headers={headers}>{rows.map((row, index) => <tr key={index}>{row.map((cell, i) => <td key={i}>{cell}</td>)}</tr>)}</DataTable>
+      <div className="column-filters">
+        {headers.map((header, index) => (
+          <Input key={header} label={`${header} filter`} value={filters[index] ?? ""} onChange={(value) => setFilters(filters.map((filter, i) => i === index ? value : filter))} />
+        ))}
+      </div>
+      <DataTable headers={headers}>{visibleRows.map((row, index) => <tr key={index}>{row.map((cell, i) => <td key={i}>{cell}</td>)}</tr>)}</DataTable>
+      <span className="hint">{visibleRows.length} of {rows.length} row(s)</span>
       <button className="danger" onClick={() => onClear(new Date().toISOString())}>Clear before now</button>
     </section>
   </Page>;
@@ -989,7 +1038,7 @@ function validatePolicyDraft(draft: UpsertPolicyRequest) {
   const errors: string[] = [];
   if (!draft.name.trim()) errors.push("Policy name is required.");
   if (!draft.sourceClusterId) errors.push("Choose a source cluster.");
-  if (!draft.targetId) errors.push("Choose a backup target.");
+  if (!draft.targetId) errors.push("Choose backup storage.");
   if (draft.selector.rules.length === 0) errors.push("Add at least one selector rule.");
   return errors;
 }
