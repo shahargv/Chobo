@@ -1,5 +1,4 @@
 using ChoboServer;
-using ChoboServer.Data;
 using ChoboServer.Options;
 using ChoboServer.Services;
 using Serilog;
@@ -9,14 +8,10 @@ ChoboConfiguration.AddChoboConfigurationSources(builder.Configuration, args);
 var choboDataDirectory = GetChoboDataDirectory(builder.Configuration);
 var dbPath = Path.Combine(choboDataDirectory, "chobo.db");
 var initializedMarkerPath = Path.Combine(choboDataDirectory, "_initialized");
-var firstStartup = !File.Exists(dbPath) && !File.Exists(initializedMarkerPath);
-if (!File.Exists(dbPath) && File.Exists(initializedMarkerPath))
-{
-    throw new InvalidOperationException($"Chobo data directory is marked initialized but SQLite database is missing at {dbPath}.");
-}
+var missingDatabaseAfterInitialized = !File.Exists(dbPath) && File.Exists(initializedMarkerPath);
+var firstStartup = !File.Exists(dbPath);
 
 builder.Services.AddChoboServer(builder.Configuration);
-await EnsureDatabaseSchemaBeforeLoggingAsync(builder.Services);
 
 Log.Logger = new LoggerConfiguration()
     .ReadFrom.Configuration(builder.Configuration)
@@ -25,7 +20,11 @@ Log.Logger = new LoggerConfiguration()
 builder.Host.UseSerilog();
 
 var app = builder.Build();
-await app.Services.InitializeChoboDatabaseAsync(firstStartup);
+await app.Services.InitializeChoboDatabaseAsync(firstStartup, missingDatabaseAfterInitialized);
+if (missingDatabaseAfterInitialized)
+{
+    Log.Warning("Chobo SQLite database was missing at {DatabasePath} even though the data directory was already initialized. Started with a fresh SQLite database and fresh local encrypted credential state; use backup metadata recovery to rebuild backup metadata.", dbPath);
+}
 
 app.UseSwagger();
 app.UseSwaggerUI(options =>
@@ -37,17 +36,6 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok" })).AllowAnonymous();
 app.UseMiddleware<TokenAuthMiddleware>();
 app.MapControllers();
 app.Run();
-
-static async Task EnsureDatabaseSchemaBeforeLoggingAsync(IServiceCollection services)
-{
-    using var provider = services.BuildServiceProvider();
-    using var scope = provider.CreateScope();
-    var bootstrap = scope.ServiceProvider.GetRequiredService<IDatabaseBootstrap>();
-    await bootstrap.EnsureDatabaseObjectsAsync();
-    await bootstrap.EnsureSchemaStateAsync();
-    var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
-    await DatabasePerformanceMaintenance.EnsureAsync(db);
-}
 
 static string GetChoboDataDirectory(IConfiguration configuration)
 {

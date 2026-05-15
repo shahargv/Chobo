@@ -279,6 +279,36 @@ public sealed class ChoboFoundationTests
     }
 
     [Fact]
+    public async Task Cluster_credentials_can_be_updated_without_changing_topology()
+    {
+        await using var factory = CreateFactory();
+        var client = AuthenticatedClient(factory);
+        var created = await Post<ClusterDto>(client, "/api/v1/clusters", new UpsertClusterRequest(
+            "prod",
+            ClusterMode.Cluster,
+            [new UpsertAccessNodeRequest("clickhouse-1"), new UpsertAccessNodeRequest("clickhouse-2")],
+            null,
+            null,
+            2,
+            "prod_cluster"));
+
+        var updated = await Post<ClusterDto>(client, $"/api/v1/clusters/{created.Id}/credentials", new UpdateClusterCredentialsRequest("default", "new-secret"));
+
+        Assert.Equal(created.Id, updated.Id);
+        Assert.Equal(created.Name, updated.Name);
+        Assert.Equal(created.Mode, updated.Mode);
+        Assert.Equal(2, updated.AccessNodes.Count);
+        Assert.Equal("prod_cluster", updated.ClickHouseClusterName);
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+        var stored = await db.ClickHouseClusters.SingleAsync(x => x.Id == created.Id);
+        Assert.NotNull(stored.EncryptedPassword);
+        Assert.NotEqual("new-secret", stored.EncryptedPassword);
+        Assert.True(await db.AuditEntries.AnyAsync(x => x.Action == "update-credentials" && x.EntityType == "cluster" && x.EntityId == created.Id.ToString()));
+    }
+
+    [Fact]
     public async Task Aes_key_repository_creates_guid_named_keys_and_credential_protector_uses_key_ids()
     {
         var dataDir = NewTestDataDirectory();
@@ -305,20 +335,18 @@ public sealed class ChoboFoundationTests
     }
 
     [Fact]
-    public async Task Startup_fails_when_initialized_marker_exists_but_database_is_missing()
+    public async Task Startup_recovers_with_fresh_sqlite_when_initialized_marker_exists_but_database_is_missing()
     {
         var dataDir = NewTestDataDirectory();
         Directory.CreateDirectory(dataDir);
         await File.WriteAllTextAsync(Path.Combine(dataDir, "_initialized"), "initialized");
 
         await using var factory = CreateFactory(dataDir);
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-        {
-            using var client = AuthenticatedClient(factory);
-            await client.GetAsync("/api/v1/users");
-        });
+        using var client = AuthenticatedClient(factory);
+        var users = await client.GetFromJsonAsync<List<UserDto>>("/api/v1/users", JsonOptions);
 
-        Assert.Contains("marked initialized", exception.Message);
+        Assert.True(File.Exists(Path.Combine(dataDir, "chobo.db")));
+        Assert.Contains(users!, x => x.UserName == "admin" && x.IsActive);
     }
 
     [Fact]
