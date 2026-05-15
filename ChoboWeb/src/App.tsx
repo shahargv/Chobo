@@ -967,21 +967,57 @@ function ManualBackupButton() {
 
 function EntriesPage({ title, last, setLast, onClear, headers, rows }: { title: string; last: number; setLast: (value: number) => void; onClear: (before: string) => void; headers: string[]; rows: string[][] }) {
   const [filters, setFilters] = useState<string[]>(() => headers.map(() => ""));
+  const [selectedValues, setSelectedValues] = useState<string[][]>(() => headers.map(() => []));
   const [activeFilter, setActiveFilter] = useState<number | null>(null);
-  const visibleRows = rows.filter((row) => filters.every((filter, index) => !filter.trim() || row[index]?.toLowerCase().includes(filter.trim().toLowerCase())));
+  const columnOptions = useMemo(() => headers.map((_, index) => {
+    const counts = new Map<string, number>();
+    rows.forEach((row) => {
+      const value = row[index] ?? "";
+      if (!value) return;
+      counts.set(value, (counts.get(value) ?? 0) + 1);
+    });
+    return [...counts.entries()]
+      .filter(([, count]) => count > 1)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, 16);
+  }), [headers, rows]);
+  const visibleRows = rows.filter((row) => filters.every((filter, index) => {
+    const cell = row[index] ?? "";
+    const textMatches = !filter.trim() || cell.toLowerCase().includes(filter.trim().toLowerCase());
+    const selected = selectedValues[index] ?? [];
+    const valueMatches = selected.length === 0 || selected.includes(cell);
+    return textMatches && valueMatches;
+  }));
   return <Page title={title} action={<Input label="Last" type="number" value={`${last}`} onChange={(value) => setLast(Number(value) || 100)} />}>
     <section className="panel">
       <div className="table-wrap"><table><thead><tr>{headers.map((header, index) => (
         <th key={header}>
           <div className="filterable-header">
             <span>{header}</span>
-            <button className={`header-filter ${filters[index] ? "active" : ""}`} title={`Filter ${header}`} onClick={() => setActiveFilter(activeFilter === index ? null : index)}><ListFilter size={13} /></button>
+            <button className={`header-filter ${filters[index] || selectedValues[index]?.length ? "active" : ""}`} title={`Filter ${header}`} onClick={() => setActiveFilter(activeFilter === index ? null : index)}><ListFilter size={13} /></button>
             {activeFilter === index && <div className="filter-popover">
               <label>{header} contains<input autoFocus value={filters[index] ?? ""} onChange={(event) => setFilters(filters.map((filter, i) => i === index ? event.target.value : filter))} onKeyDown={(event) => {
                 if (event.key === "Escape") setActiveFilter(null);
               }} /></label>
+              {columnOptions[index].length > 0 && <div className="filter-option-list">
+                <span className="field-label">Values</span>
+                {columnOptions[index].map(([value, count]) => {
+                  const checked = selectedValues[index]?.includes(value) ?? false;
+                  return <label className="filter-option" key={value}>
+                    <input type="checkbox" checked={checked} onChange={(event) => setSelectedValues(selectedValues.map((values, i) => {
+                      if (i !== index) return values;
+                      return event.target.checked ? [...values, value] : values.filter((item) => item !== value);
+                    }))} />
+                    <span>{value}</span>
+                    <em>{count}</em>
+                  </label>;
+                })}
+              </div>}
               <div className="actions">
-                <button className="ghost" onClick={() => setFilters(filters.map((filter, i) => i === index ? "" : filter))}>Clear</button>
+                <button className="ghost" onClick={() => {
+                  setFilters(filters.map((filter, i) => i === index ? "" : filter));
+                  setSelectedValues(selectedValues.map((values, i) => i === index ? [] : values));
+                }}>Clear</button>
                 <button className="secondary" onClick={() => setActiveFilter(null)}>Apply</button>
               </div>
             </div>}
