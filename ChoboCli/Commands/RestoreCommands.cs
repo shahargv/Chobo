@@ -18,6 +18,7 @@ public sealed class RestoreCommand : CliSubject
     {
         var required = context.Command.Options.Require("--backup-id", "--target-cluster-id");
         var tableMappings = ParseTableMappings(context.Command.Options);
+        var sourceShards = ParseSourceShards(context.Command.Options.Optional("--source-shards"));
         var request = new InitiateRestoreRequest(
             Guid.Parse(required["--backup-id"]),
             Guid.Parse(required["--target-cluster-id"]),
@@ -31,9 +32,18 @@ public sealed class RestoreCommand : CliSubject
             context.Command.Options.Optional("--source-shard") is { } sourceShard ? int.Parse(sourceShard) : null,
             context.Command.Options.Optional("--target-shard") is { } targetShard ? int.Parse(targetShard) : null,
             tableMappings,
-            context.Command.Options.Has("--schema-only"));
+            context.Command.Options.Has("--schema-only"),
+            sourceShards);
         return CommandHelpers.WithClient(context, client => client.PostAsync("restores/initiate", request));
     }
+
+    private static IReadOnlyList<int>? ParseSourceShards(string? value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? null
+            : value
+                .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+                .Select(int.Parse)
+                .ToArray();
 
     private static IReadOnlyList<RestoreTableMappingRequest>? ParseTableMappings(OptionBag options)
     {

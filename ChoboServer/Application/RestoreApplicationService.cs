@@ -57,6 +57,22 @@ public sealed class RestoreApplicationService(
         {
             throw new ArgumentException("Shard numbers must be positive.");
         }
+        if (request.SourceShards is { Count: > 0 } sourceShards && sourceShards.Any(x => x <= 0))
+        {
+            throw new ArgumentException("Shard numbers must be positive.");
+        }
+        if (request.SourceShards is { Count: 0 })
+        {
+            throw new ArgumentException("SourceShards must not be empty when provided.");
+        }
+        if (request.SourceShard is not null && request.SourceShards is not null)
+        {
+            throw new ArgumentException("Use either SourceShard or SourceShards, not both.");
+        }
+        if (request.SourceShards is { Count: > 0 } requestedSourceShards && requestedSourceShards.Distinct().Count() != requestedSourceShards.Count)
+        {
+            throw new ArgumentException("SourceShards must not contain duplicates.");
+        }
         var layout = request.Layout ?? RestoreLayout.Preserve;
         if (selected.Count > 1 && request.Tables is null or { Count: 0 } && (!string.IsNullOrWhiteSpace(request.TargetDatabase) || !string.IsNullOrWhiteSpace(request.TargetTable)))
         {
@@ -72,7 +88,7 @@ public sealed class RestoreApplicationService(
             Append = request.Append,
             AllowSchemaMismatch = request.AllowSchemaMismatch,
             Layout = layout,
-            SourceShard = request.SourceShard,
+            SourceShard = request.SourceShard ?? (request.SourceShards?.Count == 1 ? request.SourceShards[0] : null),
             TargetShard = request.TargetShard,
             RequestJson = JsonSerializer.Serialize(request, JsonOptions),
             RequestedByUserId = actor.UserId,
@@ -82,7 +98,7 @@ public sealed class RestoreApplicationService(
         {
             var backupShards = table.Shards
                 .Where(x => x.Status == BackupTableStatus.Succeeded)
-                .Where(x => request.SourceShard is null || x.SourceShardNumber == request.SourceShard.Value)
+                .Where(x => MatchesRequestedSourceShard(x.SourceShardNumber, request))
                 .OrderBy(x => x.SourceShardNumber)
                 .ToList();
             if (table.DataBackedUp && !request.SchemaOnly && backupShards.Count == 0)
@@ -130,7 +146,7 @@ public sealed class RestoreApplicationService(
         db.Restores.Add(restore);
         await db.SaveChangesAsync(cancellationToken);
         _logger.Information("Restore {RestoreId} created by {ActorName} for backup {BackupId} into cluster {TargetClusterId} with {TableCount} table(s).", restore.Id, actor.ActorName, restore.BackupId, restore.TargetClusterId, restore.Tables.Count);
-        await audit.RecordAsync("created", AuditEntityType.Restore, restore.Id.ToString(), new { restore.BackupId, restore.TargetClusterId, tableCount = restore.Tables.Count, shardCount = restore.Tables.Sum(x => x.Shards.Count), layout, request.SourceShard, request.TargetShard, request.SchemaOnly });
+        await audit.RecordAsync("created", AuditEntityType.Restore, restore.Id.ToString(), new { restore.BackupId, restore.TargetClusterId, tableCount = restore.Tables.Count, shardCount = restore.Tables.Sum(x => x.Shards.Count), layout, request.SourceShard, request.SourceShards, request.TargetShard, request.SchemaOnly });
         await queues.QueueRestoreAsync(restore.Id, cancellationToken);
         _logger.Information("Restore {RestoreId} queued.", restore.Id);
         await audit.RecordAsync("queued", AuditEntityType.Restore, restore.Id.ToString(), new { reason = "user" });
@@ -180,6 +196,16 @@ public sealed class RestoreApplicationService(
             TargetDatabase = string.IsNullOrWhiteSpace(mapping.TargetDatabase) ? table.Database : mapping.TargetDatabase,
             TargetTable = string.IsNullOrWhiteSpace(mapping.TargetTable) ? table.Table : mapping.TargetTable
         };
+
+    private static bool MatchesRequestedSourceShard(int sourceShardNumber, InitiateRestoreRequest request)
+    {
+        if (request.SourceShards is { Count: > 0 })
+        {
+            return request.SourceShards.Contains(sourceShardNumber);
+        }
+
+        return request.SourceShard is null || sourceShardNumber == request.SourceShard.Value;
+    }
 
     private static IReadOnlyList<ClickHouseShardReplicaInfo> SelectShardRepresentatives(IReadOnlyList<ClickHouseShardReplicaInfo> topology) =>
         topology

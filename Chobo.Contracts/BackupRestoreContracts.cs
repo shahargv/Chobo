@@ -177,7 +177,8 @@ public sealed record InitiateRestoreRequest(
     int? SourceShard = null,
     int? TargetShard = null,
     IReadOnlyList<RestoreTableMappingRequest>? Tables = null,
-    bool SchemaOnly = false);
+    bool SchemaOnly = false,
+    IReadOnlyList<int>? SourceShards = null);
 
 public sealed record RestoreTableMappingRequest(
     Guid BackupTableId,

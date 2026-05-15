@@ -182,7 +182,7 @@ textarea { min-height: 220px; resize: vertical; font-family: ui-monospace, SFMon
 .checkbox-row input { width: 16px; min-height: 16px; }
 .row-checkbox { width: 16px; min-height: 16px; }
 
-.selector-builder, .schedule-editor, .retention-editor, .restore-mapping-editor { display: grid; gap: 12px; }
+.selector-builder, .schedule-editor, .retention-editor, .restore-mapping-editor, .restore-shards { display: grid; gap: 12px; }
 .field-wide { display: grid; gap: 6px; grid-column: span 2; }
 .segmented { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .rule-row {
@@ -213,6 +213,14 @@ pre, .token-box {
 }
 .preset-row, .day-picker { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .day-picker label { display: inline-flex; align-items: center; gap: 6px; }
+.restore-shard-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.shard-option {
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
 
 .summary-row { display: flex; gap: 10px; align-items: start; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-muted); }
 .summary-row.valid { border-color: rgba(20, 122, 82, .45); background: rgba(20, 122, 82, .06); }
