@@ -112,12 +112,15 @@ public sealed class RestoreApplicationService(
                 SourceDatabase = table.Database,
                 SourceTable = table.Table,
                 TargetDatabase = mapping?.TargetDatabase ?? request.TargetDatabase ?? table.Database,
-                TargetTable = mapping?.TargetTable ?? request.TargetTable ?? table.Table
+                TargetTable = mapping?.TargetTable ?? request.TargetTable ?? table.Table,
+                Append = mapping?.Append ?? request.Append,
+                AllowSchemaMismatch = mapping?.AllowSchemaMismatch ?? request.AllowSchemaMismatch,
+                SchemaOnly = mapping?.SchemaOnly ?? request.SchemaOnly
             };
-            if (table.DataBackedUp && !request.SchemaOnly)
+            if (table.DataBackedUp && !restoreTable.SchemaOnly)
             {
                 var shardPlans = PlanShardRestores(layout, backupShards, targetRepresentatives, request.TargetShard);
-                var useTemporaryRestoreTables = request.Append || shardPlans.Count > 1;
+                var useTemporaryRestoreTables = restoreTable.Append || shardPlans.Count > 1;
                 foreach (var plan in shardPlans)
                 {
                     var shard = new RestoreTableShardEntity
@@ -146,7 +149,7 @@ public sealed class RestoreApplicationService(
         db.Restores.Add(restore);
         await db.SaveChangesAsync(cancellationToken);
         _logger.Information("Restore {RestoreId} created by {ActorName} for backup {BackupId} into cluster {TargetClusterId} with {TableCount} table(s).", restore.Id, actor.ActorName, restore.BackupId, restore.TargetClusterId, restore.Tables.Count);
-        await audit.RecordAsync("created", AuditEntityType.Restore, restore.Id.ToString(), new { restore.BackupId, restore.TargetClusterId, tableCount = restore.Tables.Count, shardCount = restore.Tables.Sum(x => x.Shards.Count), layout, request.SourceShard, request.SourceShards, request.TargetShard, request.SchemaOnly });
+        await audit.RecordAsync("created", AuditEntityType.Restore, restore.Id.ToString(), new { restore.BackupId, restore.TargetClusterId, tableCount = restore.Tables.Count, shardCount = restore.Tables.Sum(x => x.Shards.Count), layout, request.SourceShard, request.SourceShards, request.TargetShard, request.SchemaOnly, tableOptions = restore.Tables.Select(x => new { x.SourceDatabase, x.SourceTable, x.TargetDatabase, x.TargetTable, x.Append, x.AllowSchemaMismatch, x.SchemaOnly }).ToList() });
         await queues.QueueRestoreAsync(restore.Id, cancellationToken);
         _logger.Information("Restore {RestoreId} queued.", restore.Id);
         await audit.RecordAsync("queued", AuditEntityType.Restore, restore.Id.ToString(), new { reason = "user" });

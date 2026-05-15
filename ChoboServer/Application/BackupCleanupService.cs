@@ -63,16 +63,9 @@ public sealed class BackupCleanupService(
     {
         foreach (var table in backup.Tables)
         {
-            var shardPaths = table.Shards.Select(x => x.S3Path).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.Ordinal).ToList();
-            if (shardPaths.Count == 0)
+            if (!string.IsNullOrWhiteSpace(table.S3Path))
             {
                 yield return table.S3Path;
-                continue;
-            }
-
-            foreach (var path in shardPaths)
-            {
-                yield return path;
             }
         }
     }

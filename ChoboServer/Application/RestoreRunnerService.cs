@@ -115,20 +115,20 @@ public sealed class RestoreRunnerService(
                 : new ClickHouseNodeEndpoint(orderedShards[0].TargetHost, orderedShards[0].TargetPort, orderedShards[0].TargetUseTls);
             await scopedClickHouse.ExecuteAsync(firstEndpoint, restore.TargetCluster!, $"CREATE DATABASE IF NOT EXISTS {ClickHouseSql.Identifier(table.TargetDatabase)}", cancellationToken);
             var existing = await scopedClickHouse.GetTableAsync(firstEndpoint, restore.TargetCluster!, table.TargetDatabase, table.TargetTable, cancellationToken);
-            if (!hasSubmittedOperations && existing is not null && !restore.Append)
+            if (!hasSubmittedOperations && existing is not null && !table.Append)
             {
                 throw new InvalidOperationException($"Target table {table.TargetDatabase}.{table.TargetTable} already exists.");
             }
             if (!hasSubmittedOperations && existing is not null && existing.SchemaHash != backupTable.SchemaDefinition!.SchemaHash)
             {
-                if (!restore.AllowSchemaMismatch)
+                if (!table.AllowSchemaMismatch)
                 {
                     throw new InvalidOperationException($"Target table {table.TargetDatabase}.{table.TargetTable} has a different schema.");
                 }
 
                 table.Warning = "Target schema differs from backup schema; continuing because allow schema mismatch was requested.";
             }
-            if (!hasSubmittedOperations && existing is null && restore.Append)
+            if (!hasSubmittedOperations && existing is null && table.Append)
             {
                 throw new InvalidOperationException($"Append restore requires target table {table.TargetDatabase}.{table.TargetTable} to already exist.");
             }

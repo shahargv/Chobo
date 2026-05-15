@@ -221,9 +221,10 @@ public sealed class ManualBackupRequestValidator : AbstractValidator<ManualBacku
 {
     public ManualBackupRequestValidator()
     {
-        RuleFor(x => x.ClusterId).NotEmpty();
-        RuleFor(x => x.TargetId).NotEmpty();
-        RuleFor(x => x.Selector).NotNull().SetValidator(new PolicySelectorValidator());
+        RuleFor(x => x.PolicyId).NotEmpty().When(x => x.PolicyId is not null);
+        RuleFor(x => x.ClusterId).NotEmpty().When(x => x.PolicyId is null);
+        RuleFor(x => x.TargetId).NotEmpty().When(x => x.PolicyId is null);
+        RuleFor(x => x.Selector).NotNull().SetValidator(new PolicySelectorValidator()).When(x => x.PolicyId is null);
         RuleFor(x => x.BackupType).IsInEnum();
         RuleFor(x => x)
             .Must(x => !x.SchemaOnly || x.BackupType == BackupType.Full)
@@ -273,6 +274,9 @@ public sealed class RestoreTableMappingRequestValidator : AbstractValidator<Rest
         RuleFor(x => x.BackupTableId).NotEmpty();
         RuleFor(x => x.TargetDatabase).MaximumLength(512).When(x => x.TargetDatabase is not null);
         RuleFor(x => x.TargetTable).MaximumLength(512).When(x => x.TargetTable is not null);
+        RuleFor(x => x)
+            .Must(x => x.SchemaOnly is not true || x.Append is not true)
+            .WithMessage("Schema-only table restores cannot append data.");
         RuleFor(x => x)
             .Must(x => string.IsNullOrWhiteSpace(x.TargetDatabase) == string.IsNullOrWhiteSpace(x.TargetTable))
             .WithMessage("TargetDatabase and TargetTable must be provided together for each table mapping.");

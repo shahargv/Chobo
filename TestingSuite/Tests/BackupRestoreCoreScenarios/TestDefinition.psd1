@@ -81,6 +81,7 @@
             Name = 'wait-backup'
             Type = 'Cli'
             Args = @('backups', 'wait', '--id', '{backup.id}', '--timeout-seconds', '30', '--poll-seconds', '1')
+            SaveJsonAs = 'backupDone'
             ExpectJson = @(
                 @{ Path = 'status'; Equals = 'Succeeded' }
                 @{ Path = 'startedAt'; NotEmpty = $true }
@@ -210,10 +211,12 @@
         @{
             Name = 'restore-append'
             Type = 'Cli'
-            Args = @('restore', 'initiate', '--backup-id', '{backup.id}', '--target-cluster-id', '{restoreCluster.id}', '--database', 'backup_core_source', '--table', 'orders', '--target-database', 'backup_core_restore', '--target-table', 'append_orders', '--append')
+            Args = @('restore', 'initiate', '--backup-id', '{backup.id}', '--target-cluster-id', '{restoreCluster.id}', '--table-mappings-json', '[{"backupTableId":"{backupDone.tables.4.id}","targetDatabase":"backup_core_restore","targetTable":"append_orders","schemaOnly":false,"append":true,"allowSchemaMismatch":false}]')
             SaveJsonAs = 'appendRestore'
             ExpectJson = @(
                 @{ Path = 'id'; NotEmpty = $true }
+                @{ Path = 'tables[0].append'; Equals = $true }
+                @{ Path = 'tables[0].schemaOnly'; Equals = $false }
             )
         }
         @{

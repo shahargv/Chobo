@@ -472,6 +472,9 @@ function Restores() {
       backupTableId: table.id,
       targetDatabase: table.database,
       targetTable: restoreTargetTableName(table.table),
+      append: false,
+      allowSchemaMismatch: false,
+      schemaOnly: !table.dataBackedUp,
       selected: false
     })));
     setSelectedSourceShards(getSourceShardOptions(selectedBackup).map((shard) => shard.value));
@@ -485,7 +488,10 @@ function Restores() {
       .map(({ selected: _, ...mapping }) => ({
         ...mapping,
         targetDatabase: mapping.targetDatabase || null,
-        targetTable: mapping.targetTable ? restoreTargetTableName(mapping.targetTable) : null
+        targetTable: mapping.targetTable ? restoreTargetTableName(mapping.targetTable) : null,
+        append: mapping.schemaOnly ? false : mapping.append ?? false,
+        allowSchemaMismatch: mapping.allowSchemaMismatch ?? false,
+        schemaOnly: mapping.schemaOnly ?? false
       }))
   });
   const restoreErrors = validateRestoreRequest(request, mappings, selectedSourceShards, sourceShardOptions.length);
@@ -505,9 +511,6 @@ function Restores() {
           <Select label="Backup" value={request.backupId} onChange={(value) => setRequest({ ...request, backupId: value })} options={(backups.data ?? []).map((b) => [b.id, `${b.backupType} · ${formatTime(b.createdAt)}`])} />
           <Select label="Target cluster" value={request.targetClusterId} onChange={(value) => setRequest({ ...request, targetClusterId: value })} options={(clusters.data ?? []).map((c) => [c.id, c.name])} />
           <Select label="Layout" value={request.layout ?? "Preserve"} onChange={(value) => setRequest({ ...request, layout: value as RestoreLayout })} options={[["Preserve", "Preserve"], ["Redistribute", "Redistribute"], ["SingleNode", "Single node"]]} />
-          <label className="checkbox-row"><input type="checkbox" checked={request.append} onChange={(event) => setRequest({ ...request, append: event.target.checked })} /> Append into existing table</label>
-          <label className="checkbox-row"><input type="checkbox" checked={request.allowSchemaMismatch} onChange={(event) => setRequest({ ...request, allowSchemaMismatch: event.target.checked })} /> Allow schema mismatch</label>
-          <label className="checkbox-row"><input type="checkbox" checked={request.schemaOnly} onChange={(event) => setRequest({ ...request, schemaOnly: event.target.checked })} /> Restore schema only</label>
         </div>
         <SourceShardsPicker shards={sourceShardOptions} selected={selectedSourceShards} onChange={setSelectedSourceShards} />
         <RestoreMappingsEditor backup={selectedBackup} mappings={mappings} onChange={setMappings} />
@@ -538,7 +541,7 @@ function RestoreMappingsEditor({ backup, mappings, onChange }: { backup: BackupD
   if (backup.tables.length === 0) return <Empty text="This backup does not contain restorable tables." />;
   const update = (id: string, patch: Partial<RestoreMappingDraft>) => onChange(mappings.map((mapping) => mapping.backupTableId === id ? { ...mapping, ...patch } : mapping));
   const mapped = (tableId: string, database: string, table: string) =>
-    mappings.find((item) => item.backupTableId === tableId) ?? { backupTableId: tableId, targetDatabase: database, targetTable: restoreTargetTableName(table), selected: false };
+    mappings.find((item) => item.backupTableId === tableId) ?? { backupTableId: tableId, targetDatabase: database, targetTable: restoreTargetTableName(table), append: false, allowSchemaMismatch: false, schemaOnly: false, selected: false };
   return (
     <div className="restore-mapping-editor">
       <div className="section-head">
@@ -551,7 +554,7 @@ function RestoreMappingsEditor({ backup, mappings, onChange }: { backup: BackupD
           <button type="button" className="ghost" onClick={() => onChange(mappings.map((mapping) => ({ ...mapping, selected: false })))}>Clear</button>
         </div>
       </div>
-      <DataTable headers={["Restore", "Source table", "Target database", "Target table", "Mode"]}>
+      <DataTable headers={["Restore", "Source table", "Target database", "Target table", "Mode", "Options"]}>
         {backup.tables.map((table) => {
           const mapping = mapped(table.id, table.database, table.table);
           return <tr key={table.id}>
@@ -559,7 +562,20 @@ function RestoreMappingsEditor({ backup, mappings, onChange }: { backup: BackupD
             <td>{table.database}.{table.table}</td>
             <td><input value={mapping.targetDatabase ?? ""} disabled={!mapping.selected} onChange={(event) => update(table.id, { targetDatabase: event.target.value })} /></td>
             <td><input value={mapping.targetTable ?? ""} disabled={!mapping.selected} onChange={(event) => update(table.id, { targetTable: event.target.value })} /></td>
-            <td>{table.dataBackedUp ? "Schema + data" : "Schema only"}</td>
+            <td>
+              {table.dataBackedUp
+                ? <select value={mapping.schemaOnly ? "schema" : "data"} disabled={!mapping.selected} onChange={(event) => update(table.id, { schemaOnly: event.target.value === "schema", append: event.target.value === "schema" ? false : mapping.append })}>
+                  <option value="data">Schema + data</option>
+                  <option value="schema">Schema only</option>
+                </select>
+                : <span className="chip">Schema only</span>}
+            </td>
+            <td>
+              <div className="restore-table-options">
+                <label className="checkbox-row"><input type="checkbox" checked={mapping.append ?? false} disabled={!mapping.selected || mapping.schemaOnly || !table.dataBackedUp} onChange={(event) => update(table.id, { append: event.target.checked })} /> Append</label>
+                <label className="checkbox-row"><input type="checkbox" checked={mapping.allowSchemaMismatch ?? false} disabled={!mapping.selected} onChange={(event) => update(table.id, { allowSchemaMismatch: event.target.checked })} /> Allow schema mismatch</label>
+              </div>
+            </td>
           </tr>;
         })}
       </DataTable>
@@ -1203,6 +1219,9 @@ function validateRestoreRequest(request: InitiateRestoreRequest, mappings: Resto
   selected.forEach((mapping) => {
     if (!mapping.targetDatabase?.trim() || !mapping.targetTable?.trim()) {
       errors.push("Every selected table needs a target database and target table.");
+    }
+    if (mapping.schemaOnly && mapping.append) {
+      errors.push("Schema-only table restores cannot append data.");
     }
   });
   return [...new Set(errors)];

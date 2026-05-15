@@ -97,7 +97,14 @@ public sealed class BackupRunnerService(
                 : null;
             backup.Error = backup.FailureReason;
             await db.SaveChangesAsync(cancellationToken);
-            await WriteFinalManifestOrFailAsync(backup, tableCount, cancellationToken);
+            if (backup.Status == BackupRunStatus.Succeeded)
+            {
+                await WriteFinalManifestOrFailAsync(backup, tableCount, cancellationToken);
+            }
+            else
+            {
+                await TryWriteFailedManifestAsync(backup.Id);
+            }
             _logger.Information("Backup {BackupId} finished with status {Status}. Failure reason: {FailureReason}.", backup.Id, backup.Status, backup.FailureReason);
             var auditAction = backup.Status == BackupRunStatus.Succeeded ? "succeeded" : backup.Status == BackupRunStatus.PartiallySucceeded ? "partially-succeeded" : "failed";
             await audit.RecordAsync(auditAction, AuditEntityType.Backup, backup.Id.ToString(), new { tableCount, backup.FailureReason });

@@ -1067,6 +1067,43 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Restore_table_mappings_can_override_table_options()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Succeeded, "backup-op", true),
+            new SeedBackupTable("sales", "items", BackupTableStatus.Succeeded, "backup-op", true)
+        ]);
+        backup.Status = BackupRunStatus.Succeeded;
+        await fixture.Db.SaveChangesAsync();
+        var tables = backup.Tables.OrderBy(x => x.Table).ToList();
+
+        var restore = await fixture.Services.GetRequiredService<RestoreApplicationService>().InitiateAsync(new InitiateRestoreRequest(
+            backup.Id,
+            fixture.TargetClusterId,
+            null,
+            null,
+            null,
+            null,
+            false,
+            false,
+            Tables: [
+                new RestoreTableMappingRequest(tables[0].Id, "restored", "items_schema", SchemaOnly: true),
+                new RestoreTableMappingRequest(tables[1].Id, "restored", "orders_append", Append: true, AllowSchemaMismatch: true)
+            ]));
+
+        var schemaOnly = Assert.Single(restore.Tables, x => x.SourceTable == "items");
+        Assert.True(schemaOnly.SchemaOnly);
+        Assert.False(schemaOnly.Append);
+        Assert.Empty(schemaOnly.Shards);
+        var append = Assert.Single(restore.Tables, x => x.SourceTable == "orders");
+        Assert.False(append.SchemaOnly);
+        Assert.True(append.Append);
+        Assert.True(append.AllowSchemaMismatch);
+        Assert.NotEmpty(append.Shards);
+    }
+
+    [Fact]
     public async Task Restore_schema_only_creates_tables_without_submitting_restore_operations()
     {
         await using var fixture = await TestFixture.CreateAsync();
@@ -1093,6 +1130,7 @@ public sealed class BackupRestoreExecutionTests
         Assert.Equal(RestoreRunStatus.Succeeded, completed.Status);
         var table = Assert.Single(completed.Tables);
         Assert.Equal(RestoreTableStatus.Succeeded, table.Status);
+        Assert.True(table.SchemaOnly);
         Assert.Empty(table.Shards);
         Assert.Empty(fixture.ClickHouse.RestoreStartTables);
         Assert.Contains(fixture.ClickHouse.ExecuteSql, sql => sql.Contains("CREATE TABLE IF NOT EXISTS `restored`.`orders_schema`", StringComparison.Ordinal));
@@ -1943,6 +1981,9 @@ public sealed class BackupRestoreExecutionTests
                     table.SourceTable,
                     table.TargetDatabase,
                     table.TargetTable,
+                    table.Append,
+                    table.AllowSchemaMismatch,
+                    table.SchemaOnly,
                     table.Status,
                     table.ClickHouseOperationId,
                     table.ClickHouseStatus,
