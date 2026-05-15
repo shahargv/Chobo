@@ -51,7 +51,7 @@ import type {
 } from "./api/generated";
 import { clearAuth, readStoredAuth, storeAuth } from "./auth";
 import { buildCron, dayOptions, defaultScheduleDraft, parseCronToDraft, ScheduleDraft, summarizeSchedule } from "./schedule";
-import { emptySelector, evaluateSelector } from "./policies";
+import { emptySelector } from "./policies";
 
 type Toast = { kind: "success" | "error"; text: string } | null;
 
@@ -505,6 +505,7 @@ function Policies() {
   const [editing, setEditing] = useState<BackupPolicyDto | null>(null);
   const defaultPolicyDraft = (): UpsertPolicyRequest => ({ name: "", sourceClusterId: "", targetId: "", selector: emptySelector, retention: { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 }, failedBackupRetentionMode: "KeepAndExcludeFromMinBackupsToKeep" });
   const [draft, setDraft] = useState<UpsertPolicyRequest>(() => defaultPolicyDraft());
+  const policyErrors = validatePolicyDraft(draft);
   const simulation = useQuery({
     queryKey: ["policy-simulation", draft.sourceClusterId, draft.selector],
     queryFn: () => api.simulatePolicy({ sourceClusterId: draft.sourceClusterId, selector: draft.selector }),
@@ -526,7 +527,11 @@ function Policies() {
     onError: (error) => showToast({ kind: "error", text: String(error) })
   });
   return (
-    <Page title="Policies" action={<button className="primary" onClick={() => { setEditing(null); setDraft(defaultPolicyDraft()); setShowForm(true); }}><Save size={16} /> Add policy</button>}>
+    <Page title="Policies" action={<button className="primary" onClick={() => {
+      setEditing(null);
+      setDraft({ ...defaultPolicyDraft(), sourceClusterId: clusters.data?.[0]?.id ?? "", targetId: targets.data?.[0]?.id ?? "" });
+      setShowForm(true);
+    }}><Save size={16} /> Add policy</button>}>
       <section className="panel">
         <DataTable headers={["Name", "Source", "Target", "Rules", "Retention", "Actions"]}>
           {(policies.data ?? []).map((policy) => (
@@ -553,20 +558,18 @@ function Policies() {
           <Select label="Target" value={draft.targetId} onChange={(value) => setDraft({ ...draft, targetId: value })} options={(targets.data ?? []).map((target) => [target.id, target.name])} />
           <Select label="Failed backups" value={draft.failedBackupRetentionMode} onChange={(value) => setDraft({ ...draft, failedBackupRetentionMode: value as FailedBackupRetentionMode })} options={[["KeepAndExcludeFromMinBackupsToKeep", "Keep"], ["DeleteByGarbageCollectorAfterFailure", "Garbage collect failed backups"]]} />
         </div>
-        <SelectorBuilder selector={draft.selector} inventory={simulation.data?.inventory ?? []} selected={simulation.data?.tables ?? []} isLoading={simulation.isFetching} error={simulation.error ? String(simulation.error) : null} onChange={(selector) => setDraft({ ...draft, selector })} />
+        <SelectorBuilder selector={draft.selector} hasSource={draft.sourceClusterId.length > 0} inventory={simulation.data?.inventory ?? []} selected={simulation.data?.tables ?? []} isLoading={simulation.isFetching} error={simulation.error ? String(simulation.error) : null} onChange={(selector) => setDraft({ ...draft, selector })} />
         <RetentionEditor value={draft.retention ?? { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 }} onChange={(retention) => setDraft({ ...draft, retention })} />
-        <button className="primary" onClick={() => save.mutate()}><Save size={16} /> Save policy</button>
+        {policyErrors.map((error) => <span className="field-error" key={error}>{error}</span>)}
+        <button className="primary" disabled={policyErrors.length > 0 || save.isPending} onClick={() => {
+          if (policyErrors.length === 0) save.mutate();
+        }}><Save size={16} /> Save policy</button>
       </section>}
     </Page>
   );
 }
 
-function SelectorBuilder({ selector, inventory, selected, isLoading, error, onChange }: { selector: PolicySelector; inventory: Array<{ database: string; table: string }>; selected: Array<{ database: string; table: string }>; isLoading: boolean; error: string | null; onChange: (selector: PolicySelector) => void }) {
-  const preview = inventory.length > 0 ? selected : evaluateSelector(selector, [
-    { database: "sales", table: "orders" },
-    { database: "sales", table: "fact_clickstream_raw" },
-    { database: "tenant_gold", table: "monthly_scratch" }
-  ]);
+function SelectorBuilder({ selector, hasSource, inventory, selected, isLoading, error, onChange }: { selector: PolicySelector; hasSource: boolean; inventory: Array<{ database: string; table: string }>; selected: Array<{ database: string; table: string }>; isLoading: boolean; error: string | null; onChange: (selector: PolicySelector) => void }) {
   const updateRule = (index: number, rule: PolicySelectorRule) => onChange({ ...selector, rules: selector.rules.map((item, i) => i === index ? rule : item) });
   return (
     <div className="selector-builder">
@@ -590,11 +593,15 @@ function SelectorBuilder({ selector, inventory, selected, isLoading, error, onCh
       <div className="preview-grid">
         <pre>{JSON.stringify(selector, null, 2)}</pre>
         <div>
-          <h4>Simulation</h4>
-          {isLoading && <span className="hint">Loading tables from ClickHouse...</span>}
-          {error && <span className="field-error">{error}</span>}
-          {!isLoading && !error && inventory.length > 0 && <span className="hint">{preview.length} of {inventory.length} table(s) will be backed up.</span>}
-          {preview.map((table) => <span className="chip" key={`${table.database}.${table.table}`}>{table.database}.{table.table}</span>)}
+          {!hasSource && <span className="hint">Choose a source cluster to preview the selected tables.</span>}
+          {hasSource && isLoading && <span className="hint">Loading tables from ClickHouse...</span>}
+          {hasSource && !isLoading && error && <span className="field-error">{error}</span>}
+          {hasSource && !isLoading && !error && inventory.length === 0 && <span className="hint">No tables were returned by ClickHouse for this cluster.</span>}
+          {hasSource && !isLoading && !error && inventory.length > 0 && <>
+            <h4>Tables selected</h4>
+            <span className="hint">{selected.length} of {inventory.length} table(s) will be backed up.</span>
+            {selected.map((table) => <span className="chip" key={`${table.database}.${table.table}`}>{table.database}.{table.table}</span>)}
+          </>}
         </div>
       </div>
     </div>
@@ -620,9 +627,10 @@ function RetentionEditor({ value, onChange }: { value: NonNullable<UpsertPolicyR
   return (
     <div className="retention-editor">
       <h3>Retention</h3>
+      <span className="hint">Leave a retention minutes field empty for no time-based retention limit. Minimum counts of 0 mean no minimum backup count is protected.</span>
       <div className="form-grid">
-        <Input label="Full retention minutes" type="number" value={retention.fullRetentionMinutes?.toString() ?? ""} onChange={(value) => onChange({ ...retention, fullRetentionMinutes: value ? Number(value) : null })} />
-        <Input label="Incremental retention minutes" type="number" value={retention.incrementalRetentionMinutes?.toString() ?? ""} onChange={(value) => onChange({ ...retention, incrementalRetentionMinutes: value ? Number(value) : null })} />
+        <Input label="Full retention minutes (empty = no retention)" type="number" value={retention.fullRetentionMinutes?.toString() ?? ""} onChange={(value) => onChange({ ...retention, fullRetentionMinutes: value ? Number(value) : null })} />
+        <Input label="Incremental retention minutes (empty = no retention)" type="number" value={retention.incrementalRetentionMinutes?.toString() ?? ""} onChange={(value) => onChange({ ...retention, incrementalRetentionMinutes: value ? Number(value) : null })} />
         <Input label="Min backups to keep" type="number" value={`${retention.minBackupsToKeep}`} onChange={(value) => onChange({ ...retention, minBackupsToKeep: Number(value) || 0 })} />
         <Input label="Min full backups" type="number" value={`${retention.minFullBackupsToKeep}`} onChange={(value) => onChange({ ...retention, minFullBackupsToKeep: Number(value) || 0 })} />
       </div>
@@ -975,6 +983,15 @@ function move<T>(items: T[], from: number, to: number) {
 
 function nameOf(items: Array<{ id: string; name: string }> | undefined, id: string) {
   return items?.find((item) => item.id === id)?.name ?? id;
+}
+
+function validatePolicyDraft(draft: UpsertPolicyRequest) {
+  const errors: string[] = [];
+  if (!draft.name.trim()) errors.push("Policy name is required.");
+  if (!draft.sourceClusterId) errors.push("Choose a source cluster.");
+  if (!draft.targetId) errors.push("Choose a backup target.");
+  if (draft.selector.rules.length === 0) errors.push("Add at least one selector rule.");
+  return errors;
 }
 
 function formatNodes(nodes: UpsertClusterRequest["accessNodes"]) {
