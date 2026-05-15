@@ -39,6 +39,7 @@ ChoboCli clusters list
 ChoboCli clusters add --name prod --mode Cluster --node ch1:9000,ch2:9000 --username default --password secret --backup-restore-maxdop 3 --clickhouse-cluster-name prod_cluster
 ChoboCli clusters add --name local --mode SingleInstance --host localhost --port 9000
 ChoboCli clusters update --id <cluster-id> --name prod --mode Cluster --node ch1:9000,ch2:9000
+ChoboCli clusters update-credentials --id <cluster-id> --username default --password secret
 ChoboCli clusters test-connection --id <cluster-id>
 ChoboCli clusters remove --id <cluster-id>
 ```
@@ -168,6 +169,8 @@ ChoboCli backups list --policy-id <policy-id>
 ChoboCli backups list --cluster-name source --table-name orders
 ChoboCli backups show --id <backup-id>
 ChoboCli backups wait --id <backup-id> --timeout-seconds 300 --poll-seconds 2
+ChoboCli backups recover --target-id <target-id> --scan-root backups
+ChoboCli backups recover --target-id <target-id> --backup-path backups/full/policy-.../db/table/.../<backup-id>
 
 ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-id> --target-table restored_orders
 ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-id> --append
@@ -181,6 +184,8 @@ ChoboCli restores wait --id <restore-id> --timeout-seconds 300 --poll-seconds 2
 ```
 
 Backup and restore commands return run records immediately. `wait` is a client-side polling helper. Run JSON includes `startedAt` and `endedAt`; `endedAt` is when the actual run process reached a terminal outcome, including success, partial success, failure, or cancellation, not the last metadata update time.
+
+`backups recover` rebuilds SQLite backup metadata from storage-side manifests after local database loss. Use `--scan-root` to scan a bucket/root for manifests, or `--backup-path` for one known backup/table/shard path. The supplied target provides S3 credentials; recovered ClickHouse clusters still need `clusters update-credentials` because manifests do not store ClickHouse credentials.
 
 For MergeTree-family tables in `Cluster` mode, one logical backup table contains one shard task for each source shard. Chobo does not run ClickHouse `BACKUP ... ON CLUSTER`; it queries topology, picks one representative replica per shard, runs the shard operations manually, and records the selected source node in the backup metadata. `backups show` and `backups wait` include per-table `shards` arrays with source shard number, selected node, S3 path, status, operation id, and error details.
 

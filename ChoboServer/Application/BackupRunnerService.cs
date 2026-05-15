@@ -16,6 +16,7 @@ public sealed class BackupRunnerService(
     IClickHouseAdapter clickHouse,
     PolicySelectorEvaluationService selectorEvaluation,
     IOptions<ChoboBackupRestoreOptions> options,
+    IBackupStorageManifestService manifests,
     IAuditService audit,
     Serilog.ILogger logger)
 {
@@ -60,6 +61,7 @@ public sealed class BackupRunnerService(
             {
                 _logger.Information("Preparing backup tables for backup {BackupId}.", backup.Id);
                 await PrepareTablesAsync(backup, cancellationToken);
+                await TryWriteIntermediateManifestAsync(backup.Id, cancellationToken);
             }
 
             var maxDop = EffectiveMaxDop(backup.SourceCluster!);
@@ -95,6 +97,7 @@ public sealed class BackupRunnerService(
                 : null;
             backup.Error = backup.FailureReason;
             await db.SaveChangesAsync(cancellationToken);
+            await WriteFinalManifestOrFailAsync(backup, tableCount, cancellationToken);
             _logger.Information("Backup {BackupId} finished with status {Status}. Failure reason: {FailureReason}.", backup.Id, backup.Status, backup.FailureReason);
             var auditAction = backup.Status == BackupRunStatus.Succeeded ? "succeeded" : backup.Status == BackupRunStatus.PartiallySucceeded ? "partially-succeeded" : "failed";
             await audit.RecordAsync(auditAction, AuditEntityType.Backup, backup.Id.ToString(), new { tableCount, backup.FailureReason });
@@ -107,7 +110,52 @@ public sealed class BackupRunnerService(
             backup.FailureReason = ex.Message;
             backup.CompletedAt = DateTimeOffset.UtcNow;
             await db.SaveChangesAsync(CancellationToken.None);
+            await TryWriteFailedManifestAsync(backup.Id);
             await audit.RecordAsync("failed", AuditEntityType.Backup, backup.Id.ToString(), new { error = ex.Message, backup.FailureReason });
+        }
+    }
+
+    private async Task WriteFinalManifestOrFailAsync(BackupEntity backup, int tableCount, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await manifests.WriteManifestAsync(backup.Id, cancellationToken);
+            await audit.RecordAsync("metadata-manifest-written", AuditEntityType.Backup, backup.Id.ToString(), new { tableCount });
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, "Final backup storage manifest write failed for backup {BackupId}.", backup.Id);
+            backup.Status = BackupRunStatus.Failed;
+            backup.Error = ex.Message;
+            backup.FailureReason = $"Backup metadata manifest write failed: {ex.Message}";
+            backup.CompletedAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync(CancellationToken.None);
+            await audit.RecordAsync("metadata-manifest-write-failed", AuditEntityType.Backup, backup.Id.ToString(), new { error = ex.Message });
+            throw;
+        }
+    }
+
+    private async Task TryWriteIntermediateManifestAsync(Guid backupId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await manifests.WriteManifestAsync(backupId, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning(ex, "Intermediate backup storage manifest write failed for backup {BackupId}.", backupId);
+        }
+    }
+
+    private async Task TryWriteFailedManifestAsync(Guid backupId)
+    {
+        try
+        {
+            await manifests.WriteManifestAsync(backupId, CancellationToken.None);
+        }
+        catch (Exception manifestException)
+        {
+            _logger.Warning(manifestException, "Failed-backup storage manifest write failed for backup {BackupId}.", backupId);
         }
     }
 
@@ -282,6 +330,7 @@ public sealed class BackupRunnerService(
         var scopedAudit = scope.ServiceProvider.GetRequiredService<IAuditService>();
         var scopedOptions = scope.ServiceProvider.GetRequiredService<IOptions<ChoboBackupRestoreOptions>>();
         var scopedTestHooks = scope.ServiceProvider.GetRequiredService<ITestHookCoordinator>();
+        var scopedManifests = scope.ServiceProvider.GetRequiredService<IBackupStorageManifestService>();
 
         var backup = await scopedDb.Backups
             .Include(x => x.SourceCluster).ThenInclude(x => x!.AccessNodes)
@@ -298,6 +347,7 @@ public sealed class BackupRunnerService(
             table.CompletedAt = DateTimeOffset.UtcNow;
             await scopedDb.SaveChangesAsync(cancellationToken);
             await scopedAudit.RecordAsync("table-skipped", AuditEntityType.BackupTable, table.Id.ToString(), new { reason = "schema-only", table.Database, table.Table });
+            await TryWriteIntermediateManifestAsync(scopedManifests, backup.Id, cancellationToken);
             return;
         }
 
@@ -340,6 +390,7 @@ public sealed class BackupRunnerService(
                         await PollBackupShardAsync(scopedClickHouse, endpoint, backup.SourceCluster!, shard, status, scopedOptions.Value.PollInterval, cancellationToken);
                         await scopedDb.SaveChangesAsync(cancellationToken);
                         await scopedAudit.RecordAsync("shard-succeeded", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { table.Database, table.Table, sourceShard = shard.SourceShardNumber, shard.ClickHouseStatus });
+                        await TryWriteIntermediateManifestAsync(scopedManifests, backup.Id, cancellationToken);
                         continue;
                     }
 
@@ -358,6 +409,7 @@ public sealed class BackupRunnerService(
                 await PollBackupShardAsync(scopedClickHouse, endpoint, backup.SourceCluster!, shard, new ClickHouseOperationStatus(true, operation.Status, null), scopedOptions.Value.PollInterval, cancellationToken);
                 await scopedDb.SaveChangesAsync(cancellationToken);
                 await scopedAudit.RecordAsync("shard-succeeded", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { table.Database, table.Table, sourceShard = shard.SourceShardNumber, shard.ClickHouseStatus });
+                await TryWriteIntermediateManifestAsync(scopedManifests, backup.Id, cancellationToken);
             }
             catch (Exception ex)
             {
@@ -367,6 +419,7 @@ public sealed class BackupRunnerService(
                 shard.CompletedAt = DateTimeOffset.UtcNow;
                 await scopedDb.SaveChangesAsync(CancellationToken.None);
                 await scopedAudit.RecordAsync("shard-failed", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { error = ex.Message, sourceShard = shard.SourceShardNumber });
+                await TryWriteIntermediateManifestAsync(scopedManifests, backup.Id, CancellationToken.None);
             }
         }
 
@@ -379,6 +432,19 @@ public sealed class BackupRunnerService(
         await scopedDb.SaveChangesAsync(cancellationToken);
         var tableAction = table.Status == BackupTableStatus.Succeeded ? "table-succeeded" : table.Status == BackupTableStatus.PartiallySucceeded ? "table-partially-succeeded" : "table-failed";
         await scopedAudit.RecordAsync(tableAction, AuditEntityType.BackupTable, table.Id.ToString(), new { table.Database, table.Table, shardCount = table.Shards.Count, failureReason = table.Error });
+        await TryWriteIntermediateManifestAsync(scopedManifests, backup.Id, cancellationToken);
+    }
+
+    private async Task TryWriteIntermediateManifestAsync(IBackupStorageManifestService scopedManifests, Guid backupId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await scopedManifests.WriteManifestAsync(backupId, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning(ex, "Intermediate backup storage manifest write failed for backup {BackupId}.", backupId);
+        }
     }
 
     private async Task<string> GetBackupFailureReasonAsync(Guid backupId, CancellationToken cancellationToken)

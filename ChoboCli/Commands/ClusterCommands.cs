@@ -10,6 +10,7 @@ public sealed class ClusterCommands : CliSubject
         Verb("list", "List ClickHouse clusters.", ListAsync);
         Verb("add", "Add a ClickHouse cluster.", AddAsync);
         Verb("update", "Update a ClickHouse cluster.", UpdateAsync);
+        Verb("update-credentials", "Update ClickHouse cluster credentials.", UpdateCredentialsAsync);
         Verb("remove", "Soft-delete a ClickHouse cluster.", RemoveAsync);
         Verb("test-connection", "Test a ClickHouse cluster connection.", TestConnectionAsync);
     }
@@ -31,6 +32,20 @@ public sealed class ClusterCommands : CliSubject
         var required = context.Command.Options.Require("--id");
         var request = Request(context.Command.Options);
         return CommandHelpers.WithClient(context, client => client.PutAsync($"clusters/{required["--id"]}", request));
+    }
+
+    private static Task<object?> UpdateCredentialsAsync(CommandContext context)
+    {
+        var id = context.Command.Options.Required("--id");
+        if (context.Command.Options.Optional("--username") is null && context.Command.Options.Optional("--password") is null)
+        {
+            throw new InvalidOperationException("Specify --username, --password, or both.");
+        }
+
+        var request = new UpdateClusterCredentialsRequest(
+            context.Command.Options.Optional("--username"),
+            context.Command.Options.Optional("--password"));
+        return CommandHelpers.WithClient(context, client => client.PostAsync($"clusters/{id}/credentials", request));
     }
 
     private static Task<object?> RemoveAsync(CommandContext context) =>

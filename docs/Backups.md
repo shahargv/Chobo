@@ -190,6 +190,20 @@ shards/shard-0002
 
 If the S3 target has `--path-prefix`, Chobo prepends it to the ClickHouse S3 URL and to server-side deletion requests.
 
+## Storage Metadata Manifests
+
+Each backup writes a Chobo metadata manifest into storage so backup metadata can be recovered even if local SQLite state is lost. The manifest is stored as:
+
+```text
+<backup table or shard path>/_chobo/backup-metadata.v1.json
+```
+
+Chobo writes the full backup-run manifest under each table path and each shard path. This intentionally duplicates the same metadata across cleanup-relevant prefixes, so normal backup deletion removes the manifest with the backup objects.
+
+The manifest includes the backup run, table and shard records, schema definitions, source cluster topology, policy, schedule, and S3 target settings. It never includes ClickHouse username/password or S3 access/secret keys. Failed backups are written too when enough metadata exists, so storage recovery can rebuild failure history for diagnostics and lifecycle handling.
+
+When changing backup metadata, update the storage manifest contract and writer in the same change. A backup is not independently recoverable unless the manifest contains the information needed to recreate the SQLite backup, table, shard, schema, policy, target, and source-cluster rows.
+
 ## Monitoring Backups
 
 Dashboard:

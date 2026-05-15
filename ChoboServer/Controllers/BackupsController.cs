@@ -6,7 +6,9 @@ namespace ChoboServer.Controllers;
 
 [ApiController]
 [Route(ChoboApi.ApiPrefix)]
-public sealed class BackupsController(BackupApplicationService backups) : ControllerBase
+public sealed class BackupsController(
+    BackupApplicationService backups,
+    IBackupStorageManifestService backupStorageManifests) : ControllerBase
 {
     [HttpPost("backups/manual")]
     public async Task<ActionResult<BackupDto>> Manual(ManualBackupRequest request, CancellationToken cancellationToken)
@@ -54,5 +56,21 @@ public sealed class BackupsController(BackupApplicationService backups) : Contro
             return result is null ? NotFound() : result;
         }
         catch (ArgumentException ex) { return BadRequest(new ErrorResponse(ex.Message)); }
+    }
+
+    [HttpPost("backups/recover/from-path")]
+    public async Task<ActionResult<BackupMetadataRecoveryResult>> RecoverFromPath(RecoverBackupMetadataFromPathRequest request, CancellationToken cancellationToken)
+    {
+        try { return await backupStorageManifests.RecoverFromPathAsync(request, cancellationToken); }
+        catch (ArgumentException ex) { return BadRequest(new ErrorResponse(ex.Message)); }
+        catch (InvalidOperationException ex) { return BadRequest(new ErrorResponse(ex.Message)); }
+    }
+
+    [HttpPost("backups/recover/scan")]
+    public async Task<ActionResult<BackupMetadataRecoveryResult>> RecoverFromScan(RecoverBackupMetadataScanRequest request, CancellationToken cancellationToken)
+    {
+        try { return await backupStorageManifests.RecoverFromScanAsync(request, cancellationToken); }
+        catch (ArgumentException ex) { return BadRequest(new ErrorResponse(ex.Message)); }
+        catch (InvalidOperationException ex) { return BadRequest(new ErrorResponse(ex.Message)); }
     }
 }

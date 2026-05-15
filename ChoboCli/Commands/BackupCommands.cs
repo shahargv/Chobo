@@ -44,6 +44,7 @@ public sealed class BackupsCommands : CliSubject
         Verb("delete", "Request deletion for one backup.", DeleteAsync);
         Verb("pin", "Pin one backup.", PinAsync);
         Verb("unpin", "Unpin one backup.", UnpinAsync);
+        Verb("recover", "Recover backup metadata from storage manifests.", RecoverAsync);
     }
 
     public override string Name => "backups";
@@ -67,6 +68,22 @@ public sealed class BackupsCommands : CliSubject
 
     private static Task<object?> UnpinAsync(CommandContext context) =>
         CommandHelpers.WithClient(context, client => client.PostAsync($"backups/{context.Command.Options.Required("--id")}/unpin", new { }));
+
+    private static Task<object?> RecoverAsync(CommandContext context)
+    {
+        var targetId = Guid.Parse(context.Command.Options.Required("--target-id"));
+        var backupPath = context.Command.Options.Optional("--backup-path");
+        var scanRoot = context.Command.Options.Optional("--scan-root");
+        if (!string.IsNullOrWhiteSpace(backupPath) == !string.IsNullOrWhiteSpace(scanRoot))
+        {
+            throw new InvalidOperationException("Specify exactly one of --backup-path or --scan-root.");
+        }
+
+        return CommandHelpers.WithClient(context, client =>
+            !string.IsNullOrWhiteSpace(backupPath)
+                ? client.PostAsync("backups/recover/from-path", new RecoverBackupMetadataFromPathRequest(targetId, backupPath))
+                : client.PostAsync("backups/recover/scan", new RecoverBackupMetadataScanRequest(targetId, scanRoot!)));
+    }
 
     private static async Task<object?> WaitAsync(CommandContext context)
     {
