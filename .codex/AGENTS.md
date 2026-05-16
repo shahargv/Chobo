@@ -43,3 +43,4 @@ The product has 3 main parts: ChoboServer, ChoboCli (CLI used to execute command
 - Private fields should use `_camelCase`.
 - Run `dotnet build Upendi.sln -v minimal`, `.\scripts\Test-DirectUdp.ps1`, and `.\scripts\Test-UpendiPath.ps1` after product-path changes.
 - The CLI should be COMPLETE. Meaning, if you add feature to a controller or web ui, it should also be added to the CLI
+- Any backend changes (in ChoboServer) requires running unit-tests (dotnet test) and relevant system tests from the system test suite (see relevant skill)
