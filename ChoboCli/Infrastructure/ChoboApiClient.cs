@@ -10,10 +10,13 @@ public sealed class ChoboApiClient : IDisposable
 {
     private readonly HttpClient _client;
 
-    public ChoboApiClient(string serverUrl, string accessToken)
+    public ChoboApiClient(string serverUrl, string? accessToken = null)
     {
         _client = new HttpClient { BaseAddress = new Uri(serverUrl.TrimEnd('/') + "/") };
-        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        if (!string.IsNullOrWhiteSpace(accessToken))
+        {
+            _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        }
     }
 
     public async Task EnsureCompatibleServerAsync()
@@ -23,6 +26,20 @@ public sealed class ChoboApiClient : IDisposable
         {
             throw new InvalidOperationException($"CLI supports API v{ChoboApi.ApiVersion}, but server returned API v{version?.ApiVersion.ToString() ?? "unknown"}.");
         }
+    }
+
+
+    public async Task<InstallResponse> InstallAsync(InstallRequest request)
+    {
+        using var response = await _client.PostAsJsonAsync(Api("server/install"), request, JsonOutputWriter.JsonOptions);
+        var text = await response.Content.ReadAsStringAsync();
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException(string.IsNullOrWhiteSpace(text) ? response.ReasonPhrase : text);
+        }
+
+        return JsonSerializer.Deserialize<InstallResponse>(text, JsonOutputWriter.JsonOptions)
+            ?? throw new InvalidOperationException("Server returned an empty install response.");
     }
 
     public Task<object?> GetAsync(string relativePath) =>

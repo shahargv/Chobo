@@ -52,6 +52,9 @@ export interface ExportEnvelope { exportVersion: number; schemaVersion: number; 
 export interface ExportPayload { users: UserExport[]; accessTokens: AccessTokenExport[]; clusters: ClusterExport[]; backupTargets: BackupTargetExport[]; backupPolicies: BackupPolicyExport[]; backupSchedules: BackupScheduleExport[]; schemaDefinitions: SchemaDefinitionExport[]; backups: BackupExport[]; backupTables: BackupTableExport[]; backupTableShards: BackupTableShardExport[]; restores: RestoreExport[]; restoreTables: RestoreTableExport[]; restoreTableShards: RestoreTableShardExport[]; }
 export type FailedBackupRetentionMode = "KeepAndExcludeFromMinBackupsToKeep" | "DeleteByGarbageCollectorAfterFailure";
 export interface InitiateRestoreRequest { backupId: string; targetClusterId: string; database?: string; table?: string; targetDatabase?: string | null; targetTable?: string | null; append: boolean; allowSchemaMismatch: boolean; layout: RestoreLayout; sourceShard?: number | null; targetShard?: number | null; tables?: RestoreTableMappingRequest[]; schemaOnly: boolean; sourceShards?: number[] | null; targetShards?: number[] | null; }
+export interface InstallRequest { adminUser: string; }
+export interface InstallResponse { userId: string; userName?: string | null; accessToken: string; }
+export interface InstallStatusDto { requiresInstallation: boolean; message: string; }
 export interface ManualBackupRequest { clusterId: string; targetId: string; selector: PolicySelector; backupType: BackupType; policyId?: string | null; schemaOnly: boolean; }
 export interface PolicyEvaluationDto { policyId: string; policyName?: string | null; sourceClusterId: string; selectorJsonVersion: number; selector: PolicySelector; tables: PolicyInventoryTable[]; }
 export interface PolicyEvaluationRequest { inventory: PolicyInventory; }
@@ -140,6 +143,9 @@ export const openApiSchemaNames = [
   "ExportPayload",
   "FailedBackupRetentionMode",
   "InitiateRestoreRequest",
+  "InstallRequest",
+  "InstallResponse",
+  "InstallStatusDto",
   "ManualBackupRequest",
   "PolicyEvaluationDto",
   "PolicyEvaluationRequest",

@@ -47,6 +47,10 @@ public sealed class ParsedCommand
         {
             return new ParsedCommand(positionals[0], "show", new OptionBag(options), isHelp: false);
         }
+        if (positionals.Count == 1 && string.Equals(positionals[0], "install", StringComparison.OrdinalIgnoreCase))
+        {
+            return new ParsedCommand("server", "install", new OptionBag(options), isHelp: false);
+        }
 
         if (positionals.Count < 2)
         {

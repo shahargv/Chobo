@@ -169,19 +169,10 @@ public static class ServiceCollectionExtensions
         await bootstrap.EnsureSchemaStateAsync();
         await DatabasePerformanceMaintenance.EnsureAsync(db);
 
-        var storage = scope.ServiceProvider.GetRequiredService<IOptions<ChoboStorageOptions>>().Value;
-        var dataDirectory = ChoboPaths.GetDataDirectory(storage.DataDirectory);
-        var markerPath = Path.Combine(dataDirectory, "_initialized");
         var hasUsers = await db.Users.AnyAsync();
-        if (firstStartup || missingDatabaseAfterInitialized || (!File.Exists(markerPath) && !hasUsers))
+        if (!hasUsers)
         {
-            await bootstrap.BootstrapFirstStartupAsync();
-        }
-        else if (File.Exists(markerPath) && !hasUsers)
-        {
-            await bootstrap.BootstrapFirstStartupAsync();
+            await bootstrap.TryInitializeFromOptionsAsync();
         }
     }
 }
-
-

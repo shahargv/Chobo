@@ -21,6 +21,9 @@ import type {
   DashboardDto,
   ExportEnvelope,
   InitiateRestoreRequest,
+  InstallRequest,
+  InstallResponse,
+  InstallStatusDto,
   ManualBackupRequest,
   PolicyEvaluationDto,
   PolicyEvaluationRequest,
@@ -59,6 +62,8 @@ export class ChoboApiClient {
   ) {}
 
   serverVersion() { return this.get<ServerVersionDto>("server/version"); }
+  installStatus() { return this.get<InstallStatusDto>("server/install/status"); }
+  install(request: InstallRequest) { return this.post<InstallResponse>("server/install", request); }
   dashboard(nextHours = 6) { return this.get<DashboardDto>(`dashboard?nextHours=${nextHours}`); }
   metrics() { return this.get<Record<string, number | null>>("metrics"); }
   metricsJsonText() { return this.requestText("metrics"); }
@@ -178,5 +183,3 @@ function query(values: Record<string, string | number | undefined | null>) {
   const text = params.toString();
   return text ? `?${text}` : "";
 }
-
-
