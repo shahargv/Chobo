@@ -30,6 +30,7 @@ public sealed class PolicyApplicationService(
             Name = request.Name.Trim(),
             SourceClusterId = request.SourceClusterId,
             TargetId = request.TargetId,
+            ContentMode = request.ContentMode,
             SelectorJsonVersion = request.Selector.Version,
             SelectorJson = JsonSerializer.Serialize(request.Selector, JsonOptions),
             FullRetentionMinutes = request.Retention?.FullRetentionMinutes,
@@ -60,6 +61,7 @@ public sealed class PolicyApplicationService(
         policy.Name = request.Name.Trim();
         policy.SourceClusterId = request.SourceClusterId;
         policy.TargetId = request.TargetId;
+        policy.ContentMode = request.ContentMode;
         policy.SelectorJsonVersion = request.Selector.Version;
         policy.SelectorJson = JsonSerializer.Serialize(request.Selector, JsonOptions);
         policy.FullRetentionMinutes = request.Retention?.FullRetentionMinutes;
@@ -144,16 +146,22 @@ public sealed class PolicyApplicationService(
         if (request.SourceClusterId == Guid.Empty)
         {
             throw new ArgumentException("Source cluster id is required.");
-        }
-        if (request.TargetId == Guid.Empty)
-        {
-            throw new ArgumentException("Target id is required.");
-        }
-        if (await clusters.FindActiveAsync(request.SourceClusterId) is null)
+        }        if (await clusters.FindActiveAsync(request.SourceClusterId) is null)
         {
             throw new ArgumentException("Source cluster was not found.");
         }
-        if (await targets.FindActiveAsync(request.TargetId) is null)
+        if (request.ContentMode == BackupContentMode.SchemaAndData)
+        {
+            if (request.TargetId is null || request.TargetId == Guid.Empty)
+            {
+                throw new ArgumentException("Target id is required.");
+            }
+            if (await targets.FindActiveAsync(request.TargetId.Value) is null)
+            {
+                throw new ArgumentException("Target was not found.");
+            }
+        }
+        else if (request.TargetId is { } targetId && targetId != Guid.Empty && await targets.FindActiveAsync(targetId) is null)
         {
             throw new ArgumentException("Target was not found.");
         }
@@ -196,12 +204,14 @@ public sealed class PolicyApplicationService(
             x.Name,
             x.SourceClusterId,
             x.TargetId,
+            x.ContentMode,
             x.SelectorJsonVersion,
             Deserialize(x.SelectorJson),
             x.FullRetentionMinutes is null && x.IncrementalRetentionMinutes is null
                 ? null
                 : new BackupRetentionDto(x.FullRetentionMinutes, x.IncrementalRetentionMinutes, x.MinBackupsToKeep, x.MinFullBackupsToKeep),
             x.FailedBackupRetentionMode,
+            x.IsSystemDefault,
             x.IsDeleted,
             x.CreatedAt,
             x.UpdatedAt);
@@ -222,3 +232,6 @@ public sealed class PolicyApplicationService(
         return options;
     }
 }
+
+
+

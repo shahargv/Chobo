@@ -1,3 +1,4 @@
+using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text.Encodings.Web;
 using System.Text;
@@ -23,6 +24,7 @@ public sealed record ClickHouseShardReplicaInfo(int ShardNumber, string? ShardNa
 public interface IClickHouseAdapter
 {
     Task<IReadOnlyList<ClickHouseTableInfo>> GetTablesAsync(ClickHouseClusterEntity cluster, CancellationToken cancellationToken);
+    Task<IReadOnlyList<ClickHouseTableInfo>> GetTablesAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, CancellationToken cancellationToken);
     Task<IReadOnlyList<string>> GetClusterNamesAsync(ClickHouseClusterEntity cluster, CancellationToken cancellationToken);
     Task<ClickHouseTableInfo?> GetTableAsync(ClickHouseClusterEntity cluster, string database, string table, CancellationToken cancellationToken);
     Task<ClickHouseTableInfo?> GetTableAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string database, string table, CancellationToken cancellationToken);
@@ -42,12 +44,16 @@ public interface IClickHouseAdapter
 public sealed class ClickHouseAdapter(ICredentialProtector protector, IEndpointRewriteService endpointRewrites, Serilog.ILogger logger) : IClickHouseAdapter
 {
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan OperationSubmitTimeout = TimeSpan.FromMinutes(2);
     private readonly Serilog.ILogger _logger = logger.ForContext<ClickHouseAdapter>();
 
-    public async Task<IReadOnlyList<ClickHouseTableInfo>> GetTablesAsync(ClickHouseClusterEntity cluster, CancellationToken cancellationToken)
+    public Task<IReadOnlyList<ClickHouseTableInfo>> GetTablesAsync(ClickHouseClusterEntity cluster, CancellationToken cancellationToken) =>
+        GetTablesAsync(ToEndpoint(FirstAccessNode(cluster)), cluster, cancellationToken);
+
+    public async Task<IReadOnlyList<ClickHouseTableInfo>> GetTablesAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, CancellationToken cancellationToken)
     {
-        _logger.Information("Reading ClickHouse inventory for cluster {ClusterId} ({ClusterName}).", cluster.Id, cluster.Name);
-        var rows = await QueryAsync(cluster, """
+        _logger.Information("Reading ClickHouse inventory for cluster {ClusterId} ({ClusterName}) on {Host}:{Port}.", cluster.Id, cluster.Name, endpoint.Host, endpoint.Port);
+        var rows = await QueryAsync(endpoint, cluster, """
             SELECT database, name, engine, create_table_query
             FROM system.tables
             WHERE database NOT IN ('system', 'information_schema', 'INFORMATION_SCHEMA')
@@ -61,15 +67,14 @@ public sealed class ClickHouseAdapter(ICredentialProtector protector, IEndpointR
             var table = row[1];
             var engine = row[2];
             var createSql = row[3];
-            var columnsJson = await GetColumnsJsonAsync(cluster, database, table, cancellationToken);
+            var columnsJson = await GetColumnsJsonAsync(endpoint, cluster, database, table, cancellationToken);
             var hash = Hash($"{engine}\n{ClickHouseSql.NormalizeCreateTableName(createSql)}\n{columnsJson}");
             result.Add(new ClickHouseTableInfo(database, table, engine, createSql, columnsJson, hash));
         }
 
-        _logger.Information("Read {TableCount} ClickHouse tables for cluster {ClusterId}.", result.Count, cluster.Id);
+        _logger.Information("Read {TableCount} ClickHouse tables for cluster {ClusterId} on {Host}:{Port}.", result.Count, cluster.Id, endpoint.Host, endpoint.Port);
         return result;
     }
-
     public async Task<IReadOnlyList<string>> GetClusterNamesAsync(ClickHouseClusterEntity cluster, CancellationToken cancellationToken)
     {
         if (cluster.Mode == Chobo.Contracts.ClusterMode.SingleInstance)
@@ -264,7 +269,7 @@ public sealed class ClickHouseAdapter(ICredentialProtector protector, IEndpointR
 
     private async Task<ClickHouseOperationResult> StartOperationAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string sql, IReadOnlyList<string>? sensitiveValues, CancellationToken cancellationToken)
     {
-        var rows = await QueryAsync(endpoint, cluster, sql, cancellationToken, sensitiveValues);
+        var rows = await SubmitAsyncOperationOverHttpAsync(endpoint, cluster, sql, sensitiveValues, cancellationToken);
         if (rows.Count == 0 || rows[0].Count < 2)
         {
             throw new InvalidOperationException("ClickHouse did not return an async operation id.");
@@ -273,6 +278,48 @@ public sealed class ClickHouseAdapter(ICredentialProtector protector, IEndpointR
         var operation = new ClickHouseOperationResult(rows[0][0], rows[0][1]);
         _logger.Information("ClickHouse async operation submitted: {OperationId} status {Status}.", operation.OperationId, operation.Status);
         return operation;
+    }
+
+    private async Task<List<List<string>>> SubmitAsyncOperationOverHttpAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string sql, IReadOnlyList<string>? sensitiveValues, CancellationToken cancellationToken)
+    {
+        var effectiveEndpoint = endpointRewrites.RewriteClickHouseEndpointForServer(endpoint);
+        var settings = await CreateSettingsAsync(effectiveEndpoint, cluster, cancellationToken);
+        var uri = new UriBuilder
+        {
+            Scheme = settings.Protocol,
+            Host = settings.Host,
+            Port = settings.Port,
+            Query = "wait_end_of_query=0&default_format=TabSeparated"
+        }.Uri;
+
+        using var client = new HttpClient { Timeout = OperationSubmitTimeout };
+        using var request = new HttpRequestMessage(HttpMethod.Post, uri) { Content = new StringContent(sql, Encoding.UTF8, "text/plain") };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes($"{settings.Username}:{settings.Password}")));
+
+        try
+        {
+            using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            using var reader = new StreamReader(stream, Encoding.UTF8);
+            var firstLine = await reader.ReadLineAsync(cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                var rest = await reader.ReadToEndAsync(cancellationToken);
+                var body = string.Join('\n', new[] { firstLine, rest }.Where(x => !string.IsNullOrWhiteSpace(x)));
+                throw new InvalidOperationException(string.IsNullOrWhiteSpace(body) ? $"ClickHouse returned HTTP {(int)response.StatusCode} {response.ReasonPhrase}." : body.Trim());
+            }
+            if (string.IsNullOrWhiteSpace(firstLine))
+            {
+                throw new InvalidOperationException("ClickHouse did not return an async operation id.");
+            }
+
+            return [firstLine.Split('\t').ToList()];
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, "ClickHouse async operation submit failed on {Host}:{Port}: {Message}. SQL: {SqlPreview}", effectiveEndpoint.Host, settings.Port, ex.Message, SqlLogRedactor.Preview(sql, sensitiveValues));
+            throw new InvalidOperationException(ex.Message, ex);
+        }
     }
 
     private async Task<string> GetColumnsJsonAsync(ClickHouseClusterEntity cluster, string database, string table, CancellationToken cancellationToken)
@@ -405,6 +452,8 @@ public sealed class ClickHouseAdapter(ICredentialProtector protector, IEndpointR
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
 }
+
+
 
 
 

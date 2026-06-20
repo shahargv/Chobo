@@ -15,7 +15,7 @@ public sealed class BackupTableEntity
     public string Table { get; set; } = "";
     public string Engine { get; set; } = "";
     public bool DataBackedUp { get; set; }
-    public Guid SchemaDefinitionId { get; set; }
+    public Guid? SchemaDefinitionId { get; set; }
     public SchemaDefinitionEntity? SchemaDefinition { get; set; }
     public string S3Path { get; set; } = "";
     public BackupTableStatus Status { get; set; } = BackupTableStatus.Queued;
@@ -26,3 +26,4 @@ public sealed class BackupTableEntity
     public string? Error { get; set; }
     public List<BackupTableShardEntity> Shards { get; set; } = [];
 }
+

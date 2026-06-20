@@ -119,7 +119,8 @@ public sealed class Baseline : Migration
                 Id TEXT NOT NULL CONSTRAINT PK_BackupPolicies PRIMARY KEY,
                 Name TEXT NOT NULL,
                 SourceClusterId TEXT NOT NULL,
-                TargetId TEXT NOT NULL,
+                TargetId TEXT NULL,
+                ContentMode INTEGER NOT NULL DEFAULT 0,
                 SelectorJsonVersion INTEGER NOT NULL,
                 SelectorJson TEXT NOT NULL,
                 FullRetentionMinutes INTEGER NULL,
@@ -127,12 +128,13 @@ public sealed class Baseline : Migration
                 MinBackupsToKeep INTEGER NOT NULL,
                 MinFullBackupsToKeep INTEGER NOT NULL,
                 FailedBackupRetentionMode INTEGER NOT NULL,
+                IsSystemDefault INTEGER NOT NULL DEFAULT 0,
                 IsDeleted INTEGER NOT NULL,
                 CreatedAt INTEGER NOT NULL,
                 UpdatedAt INTEGER NULL,
                 DeletedAt INTEGER NULL,
                 CONSTRAINT FK_BackupPolicies_ClickHouseClusters_SourceClusterId FOREIGN KEY (SourceClusterId) REFERENCES ClickHouseClusters (Id) ON DELETE CASCADE,
-                CONSTRAINT FK_BackupPolicies_BackupTargets_TargetId FOREIGN KEY (TargetId) REFERENCES BackupTargets (Id) ON DELETE CASCADE
+                CONSTRAINT FK_BackupPolicies_BackupTargets_TargetId FOREIGN KEY (TargetId) REFERENCES BackupTargets (Id) ON DELETE RESTRICT
             );
 
             CREATE TABLE IF NOT EXISTS BackupSchedules (
@@ -145,6 +147,7 @@ public sealed class Baseline : Migration
                 IsEnabled INTEGER NOT NULL,
                 MissedRunGracePeriod TEXT NULL,
                 Description TEXT NULL,
+                IsSystemDefault INTEGER NOT NULL DEFAULT 0,
                 IsDeleted INTEGER NOT NULL,
                 CreatedAt INTEGER NOT NULL,
                 UpdatedAt INTEGER NULL,
@@ -168,8 +171,9 @@ public sealed class Baseline : Migration
                 TriggerType INTEGER NOT NULL,
                 Status INTEGER NOT NULL,
                 BackupType INTEGER NOT NULL,
+                ContentMode INTEGER NOT NULL DEFAULT 0,
                 SourceClusterId TEXT NOT NULL,
-                TargetId TEXT NOT NULL,
+                TargetId TEXT NULL,
                 PolicyId TEXT NULL,
                 ScheduleId TEXT NULL,
                 ManualRequestJson TEXT NULL,
@@ -192,7 +196,7 @@ public sealed class Baseline : Migration
                 DeletionError TEXT NULL,
                 DeletionAttemptCount INTEGER NOT NULL,
                 CONSTRAINT FK_Backups_ClickHouseClusters_SourceClusterId FOREIGN KEY (SourceClusterId) REFERENCES ClickHouseClusters (Id) ON DELETE CASCADE,
-                CONSTRAINT FK_Backups_BackupTargets_TargetId FOREIGN KEY (TargetId) REFERENCES BackupTargets (Id) ON DELETE CASCADE,
+                CONSTRAINT FK_Backups_BackupTargets_TargetId FOREIGN KEY (TargetId) REFERENCES BackupTargets (Id) ON DELETE RESTRICT,
                 CONSTRAINT FK_Backups_BackupPolicies_PolicyId FOREIGN KEY (PolicyId) REFERENCES BackupPolicies (Id),
                 CONSTRAINT FK_Backups_BackupSchedules_ScheduleId FOREIGN KEY (ScheduleId) REFERENCES BackupSchedules (Id)
             );
@@ -207,7 +211,7 @@ public sealed class Baseline : Migration
                 "Table" TEXT NOT NULL,
                 Engine TEXT NOT NULL,
                 DataBackedUp INTEGER NOT NULL,
-                SchemaDefinitionId TEXT NOT NULL,
+                SchemaDefinitionId TEXT NULL,
                 S3Path TEXT NOT NULL,
                 Status INTEGER NOT NULL,
                 ClickHouseOperationId TEXT NULL,
@@ -216,7 +220,7 @@ public sealed class Baseline : Migration
                 CompletedAt INTEGER NULL,
                 Error TEXT NULL,
                 CONSTRAINT FK_BackupTables_Backups_BackupId FOREIGN KEY (BackupId) REFERENCES Backups (Id) ON DELETE CASCADE,
-                CONSTRAINT FK_BackupTables_SchemaDefinitions_SchemaDefinitionId FOREIGN KEY (SchemaDefinitionId) REFERENCES SchemaDefinitions (Id) ON DELETE CASCADE,
+                CONSTRAINT FK_BackupTables_SchemaDefinitions_SchemaDefinitionId FOREIGN KEY (SchemaDefinitionId) REFERENCES SchemaDefinitions (Id) ON DELETE SET NULL,
                 CONSTRAINT FK_BackupTables_BackupTables_ParentFullBackupTableId FOREIGN KEY (ParentFullBackupTableId) REFERENCES BackupTables (Id)
             );
 
@@ -388,4 +392,6 @@ public sealed class Baseline : Migration
             """);
     }
 }
+
+
 

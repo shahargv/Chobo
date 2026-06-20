@@ -1992,6 +1992,132 @@
         }
       }
     },
+    "/api/v1/schema/backups": {
+      "get": {
+        "tags": [
+          "SchemaBrowser"
+        ],
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SchemaBackupSummaryDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SchemaBackupSummaryDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SchemaBackupSummaryDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/schema/backups/{backupId}": {
+      "get": {
+        "tags": [
+          "SchemaBrowser"
+        ],
+        "parameters": [
+          {
+            "name": "backupId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchemaBackupDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchemaBackupDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchemaBackupDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/schema/backups/{backupId}/export": {
+      "get": {
+        "tags": [
+          "SchemaBrowser"
+        ],
+        "parameters": [
+          {
+            "name": "backupId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "database",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
     "/api/v1/server/version": {
       "get": {
         "tags": [
@@ -2763,6 +2889,13 @@
         },
         "additionalProperties": false
       },
+      "BackupContentMode": {
+        "enum": [
+          "SchemaAndData",
+          "SchemaOnly"
+        ],
+        "type": "string"
+      },
       "BackupDto": {
         "type": "object",
         "properties": {
@@ -2779,13 +2912,17 @@
           "backupType": {
             "$ref": "#/components/schemas/BackupType"
           },
+          "contentMode": {
+            "$ref": "#/components/schemas/BackupContentMode"
+          },
           "sourceClusterId": {
             "type": "string",
             "format": "uuid"
           },
           "targetId": {
             "type": "string",
-            "format": "uuid"
+            "format": "uuid",
+            "nullable": true
           },
           "policyId": {
             "type": "string",
@@ -2902,13 +3039,17 @@
           "backupType": {
             "$ref": "#/components/schemas/BackupType"
           },
+          "contentMode": {
+            "$ref": "#/components/schemas/BackupContentMode"
+          },
           "sourceClusterId": {
             "type": "string",
             "format": "uuid"
           },
           "targetId": {
             "type": "string",
-            "format": "uuid"
+            "format": "uuid",
+            "nullable": true
           },
           "policyId": {
             "type": "string",
@@ -3130,7 +3271,11 @@
           },
           "targetId": {
             "type": "string",
-            "format": "uuid"
+            "format": "uuid",
+            "nullable": true
+          },
+          "contentMode": {
+            "$ref": "#/components/schemas/BackupContentMode"
           },
           "selectorJsonVersion": {
             "type": "integer",
@@ -3144,6 +3289,9 @@
           },
           "failedBackupRetentionMode": {
             "$ref": "#/components/schemas/FailedBackupRetentionMode"
+          },
+          "isSystemDefault": {
+            "type": "boolean"
           },
           "isDeleted": {
             "type": "boolean"
@@ -3177,7 +3325,11 @@
           },
           "targetId": {
             "type": "string",
-            "format": "uuid"
+            "format": "uuid",
+            "nullable": true
+          },
+          "contentMode": {
+            "$ref": "#/components/schemas/BackupContentMode"
           },
           "selectorJsonVersion": {
             "type": "integer",
@@ -3191,6 +3343,9 @@
           },
           "failedBackupRetentionMode": {
             "$ref": "#/components/schemas/FailedBackupRetentionMode"
+          },
+          "isSystemDefault": {
+            "type": "boolean"
           },
           "isDeleted": {
             "type": "boolean"
@@ -3296,6 +3451,9 @@
             "type": "string",
             "nullable": true
           },
+          "isSystemDefault": {
+            "type": "boolean"
+          },
           "isDeleted": {
             "type": "boolean"
           },
@@ -3348,6 +3506,9 @@
           "description": {
             "type": "string",
             "nullable": true
+          },
+          "isSystemDefault": {
+            "type": "boolean"
           },
           "isDeleted": {
             "type": "boolean"
@@ -3410,7 +3571,8 @@
           },
           "schemaDefinitionId": {
             "type": "string",
-            "format": "uuid"
+            "format": "uuid",
+            "nullable": true
           },
           "s3Path": {
             "type": "string",
@@ -3492,7 +3654,8 @@
           },
           "schemaDefinitionId": {
             "type": "string",
-            "format": "uuid"
+            "format": "uuid",
+            "nullable": true
           },
           "s3Path": {
             "type": "string",
@@ -4553,7 +4716,8 @@
           },
           "targetId": {
             "type": "string",
-            "format": "uuid"
+            "format": "uuid",
+            "nullable": true
           },
           "selector": {
             "$ref": "#/components/schemas/PolicySelector"
@@ -5329,6 +5493,91 @@
         },
         "additionalProperties": false
       },
+      "SchemaBackupDto": {
+        "type": "object",
+        "properties": {
+          "backupId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "$ref": "#/components/schemas/BackupRunStatus"
+          },
+          "contentMode": {
+            "$ref": "#/components/schemas/BackupContentMode"
+          },
+          "databases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SchemaDatabaseDto"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "SchemaBackupSummaryDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "$ref": "#/components/schemas/BackupRunStatus"
+          },
+          "contentMode": {
+            "$ref": "#/components/schemas/BackupContentMode"
+          },
+          "backupType": {
+            "$ref": "#/components/schemas/BackupType"
+          },
+          "sourceClusterId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sourceClusterName": {
+            "type": "string",
+            "nullable": true
+          },
+          "policyId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "endedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "tableCount": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SchemaDatabaseDto": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "nullable": true
+          },
+          "tables": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SchemaTableDto"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
       "SchemaDefinitionExport": {
         "type": "object",
         "properties": {
@@ -5363,6 +5612,39 @@
           "createdAt": {
             "type": "string",
             "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SchemaTableDto": {
+        "type": "object",
+        "properties": {
+          "backupTableId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "database": {
+            "type": "string",
+            "nullable": true
+          },
+          "table": {
+            "type": "string",
+            "nullable": true
+          },
+          "engine": {
+            "type": "string",
+            "nullable": true
+          },
+          "dataBackedUp": {
+            "type": "boolean"
+          },
+          "createTableSql": {
+            "type": "string",
+            "nullable": true
+          },
+          "columnsJson": {
+            "type": "string",
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -5507,10 +5789,14 @@
           },
           "targetId": {
             "type": "string",
-            "format": "uuid"
+            "format": "uuid",
+            "nullable": true
           },
           "selector": {
             "$ref": "#/components/schemas/PolicySelector"
+          },
+          "contentMode": {
+            "$ref": "#/components/schemas/BackupContentMode"
           },
           "retention": {
             "$ref": "#/components/schemas/BackupRetentionDto"
@@ -5730,6 +6016,9 @@
     },
     {
       "name": "Schedules"
+    },
+    {
+      "name": "SchemaBrowser"
     },
     {
       "name": "Server"
