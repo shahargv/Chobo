@@ -2065,7 +2065,9 @@ public sealed class BackupRestoreExecutionTests
                 .AddScoped<RestoreRunnerService>()
                 .AddScoped<BackupCleanupService>()
                 .AddSingleton<IBackupRestoreQueues, BackupRestoreQueues>()
-                .AddSingleton(Options.Create(options ?? new ChoboBackupRestoreOptions { MaxDop = 3, PollInterval = TimeSpan.FromMilliseconds(1), SchedulerInterval = TimeSpan.FromSeconds(1) }))
+                // The in-memory SQLite fixture shares one open connection across scoped DbContexts.
+                // Keep default runner work serial so table workers do not contend for that test-only connection.
+                .AddSingleton(Options.Create(options ?? new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1), SchedulerInterval = TimeSpan.FromSeconds(1) }))
                 .AddSingleton(Options.Create(new RetentionManagementOptions { Interval = TimeSpan.FromSeconds(1), MaxDop = 2 }))
                 .AddSingleton(Options.Create(new BackupsGarbageCollectorOptions { Interval = TimeSpan.FromSeconds(1), MaxDop = 2 }))
                 .AddSingleton(timeProvider ?? TimeProvider.System)
