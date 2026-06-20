@@ -138,7 +138,7 @@ public sealed class ChoboFoundationTests
     }
 
     [Fact]
-    public async Task First_startup_uses_configured_values_and_writes_initial_token_to_stdout()
+    public async Task First_startup_uses_configured_values_without_writing_initial_token_to_stdout()
     {
         var dataDir = NewTestDataDirectory();
         using var writer = new StringWriter();
@@ -152,7 +152,8 @@ public sealed class ChoboFoundationTests
             var users = await client.GetFromJsonAsync<List<UserDto>>("/api/v1/users", JsonOptions);
 
             Assert.Contains(users!, x => x.UserName == "env-admin" && x.IsActive);
-            Assert.Contains(Token, writer.ToString());
+            Assert.DoesNotContain(Token, writer.ToString());
+            Assert.Contains("Chobo initialized from configured", writer.ToString());
             Assert.True(File.Exists(Path.Combine(dataDir, "_initialized")));
         }
         finally
@@ -181,6 +182,39 @@ public sealed class ChoboFoundationTests
         Assert.True(await db.Users.AnyAsync());
         Assert.True(await db.AccessTokens.AnyAsync());
         Assert.True(await db.AuditEntries.AnyAsync(x => x.Action == "initialize" && x.EntityType == "server"));
+    }
+
+
+    [Fact]
+    public async Task Unconfigured_first_startup_requires_one_time_install_before_authenticated_use()
+    {
+        var dataDir = NewTestDataDirectory();
+        await using var factory = CreateFactory(dataDir, adminUser: "", accessToken: "");
+        var anonymous = factory.CreateClient();
+
+        var usersBeforeInstall = await anonymous.GetAsync("/api/v1/users");
+        var status = await anonymous.GetFromJsonAsync<InstallStatusDto>("/api/v1/server/install/status", JsonOptions);
+        var install = await Post<InstallResponse>(anonymous, "/api/v1/server/install", new InstallRequest(null));
+        var repeatedInstall = await anonymous.PostAsJsonAsync("/api/v1/server/install", new InstallRequest(null), JsonOptions);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, usersBeforeInstall.StatusCode);
+        Assert.True(status!.RequiresInstallation);
+        Assert.Equal("admin", install.UserName);
+        Assert.False(string.IsNullOrWhiteSpace(install.AccessToken));
+        Assert.Equal(HttpStatusCode.Conflict, repeatedInstall.StatusCode);
+
+        var installedStatus = await anonymous.GetFromJsonAsync<InstallStatusDto>("/api/v1/server/install/status", JsonOptions);
+        Assert.False(installedStatus!.RequiresInstallation);
+
+        var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", install.AccessToken);
+        var users = await client.GetFromJsonAsync<List<UserDto>>("/api/v1/users", JsonOptions);
+        Assert.Contains(users!, x => x.UserName == "admin" && x.IsActive);
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+        Assert.True(await db.AccessTokens.AnyAsync());
+        Assert.True(await db.AuditEntries.AnyAsync(x => x.ActorName == "system" && x.Action == "initialize" && x.EntityType == "server"));
     }
 
     [Fact]
@@ -1521,5 +1555,3 @@ public sealed class ChoboFoundationTests
         }
     }
 }
-
-

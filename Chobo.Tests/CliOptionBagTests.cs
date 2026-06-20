@@ -16,4 +16,14 @@ public sealed class CliOptionBagTests
 
         Assert.Equal("Missing required options: --policy-id, --cron.", ex.Message);
     }
+
+    [Fact]
+    public void Install_alias_maps_to_server_install_command()
+    {
+        var command = ParsedCommand.Parse(["install", "--server-url", "http://localhost:8080"]);
+
+        Assert.Equal("server", command.Subject);
+        Assert.Equal("install", command.Verb);
+        Assert.Equal("http://localhost:8080", command.Options.Optional("--server-url"));
+    }
 }
