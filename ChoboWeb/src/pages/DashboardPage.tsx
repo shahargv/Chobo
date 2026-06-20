@@ -4,10 +4,10 @@ import { Activity, CheckCircle2, Circle, ShieldCheck } from "lucide-react";
 import { useApi } from "../api-context";
 import { DataTable, Empty, Page, Stat, Status } from "../components/ui";
 import { formatTime } from "../utils/format";
+
 export function Dashboard() {
   const { api } = useApi();
   const dashboard = useQuery({ queryKey: ["dashboard"], queryFn: () => api.dashboard(12) });
-  const metrics = useQuery({ queryKey: ["metrics"], queryFn: () => api.metrics() });
   const clusters = useQuery({ queryKey: ["clusters"], queryFn: () => api.clusters() });
   const targets = useQuery({ queryKey: ["targets"], queryFn: () => api.targets() });
   const policies = useQuery({ queryKey: ["policies"], queryFn: () => api.policies() });
@@ -17,6 +17,9 @@ export function Dashboard() {
   const running = dashboard.data?.runningBackups ?? [];
   const schedules = dashboard.data?.schedules ?? [];
   const failures = schedules.filter((schedule) => schedule.lastRunFailureReason);
+  const latestBackups = [...(backups.data ?? [])]
+    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
+    .slice(0, 8);
   const onboarding = buildOnboardingSteps({
     clusterCount: clusters.data?.filter((x) => !x.isDeleted).length ?? 0,
     targetCount: targets.data?.filter((x) => !x.isDeleted).length ?? 0,
@@ -27,13 +30,13 @@ export function Dashboard() {
   });
   const missingOnboarding = onboarding.filter((step) => !step.done);
   return (
-    <Page title="Dashboard" action={<button className="secondary" onClick={() => dashboard.refetch()}><Activity size={16} /> Refresh</button>}>
+    <Page title="Dashboard" action={<button className="secondary" onClick={() => { dashboard.refetch(); backups.refetch(); }}><Activity size={16} /> Refresh</button>}>
       {missingOnboarding.length > 0 ? <OnboardingPanel steps={onboarding} /> : <OnboardingComplete />}
       <div className="stat-grid">
         <Stat label="Running backups" value={running.length} tone={running.length ? "warn" : "ok"} />
         <Stat label="Enabled schedules" value={schedules.filter((x) => x.isEnabled).length} />
         <Stat label="Recent failures" value={failures.length} tone={failures.length ? "bad" : "ok"} />
-        <Stat label="Metrics" value={Object.keys(metrics.data ?? {}).length} />
+        <Stat label="Latest backups" value={latestBackups.length} />
       </div>
       <section className="panel">
         <h2>Running backups</h2>
@@ -52,15 +55,15 @@ export function Dashboard() {
       </section>
       <section className="panel two-col">
         <div>
-          <h2>Schedules</h2>
-          <DataTable headers={["Name", "Policy", "Type", "Last run", "Next window"]}>
-            {schedules.map((schedule) => (
-              <tr key={schedule.scheduleId}>
-                <td>{schedule.scheduleName}</td>
-                <td>{schedule.policyName ?? schedule.policyId}</td>
-                <td>{schedule.backupType}</td>
-                <td><Status value={schedule.lastRunStatus ?? "never"} /></td>
-                <td>{dashboard.data?.futureSchedules.filter((x) => x.scheduleId === schedule.scheduleId).length ?? 0} planned</td>
+          <h2>Latest backups</h2>
+          <DataTable headers={["Status", "Created", "Type", "Tables", "Failure"]}>
+            {latestBackups.map((backup) => (
+              <tr key={backup.id}>
+                <td><Status value={backup.status} /></td>
+                <td>{formatTime(backup.createdAt)}</td>
+                <td>{backup.backupType}</td>
+                <td>{backup.tables.length}</td>
+                <td>{backup.failureReason ?? backup.error ?? ""}</td>
               </tr>
             ))}
           </DataTable>
@@ -193,4 +196,3 @@ function OnboardingComplete() {
     </section>
   );
 }
-

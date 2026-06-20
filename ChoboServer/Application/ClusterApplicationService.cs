@@ -25,6 +25,25 @@ public sealed class ClusterApplicationService(
 
         return new ClickHouseClusterNamesDto(id, await clickHouse.GetClusterNamesAsync(cluster, cancellationToken));
     }
+    public async Task<ClickHouseClusterTopologyDto?> GetTopologyAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var cluster = await clusters.FindActiveAsync(id);
+        if (cluster is null)
+        {
+            return null;
+        }
+
+        var topology = await clickHouse.GetTopologyAsync(cluster, cancellationToken);
+        return new ClickHouseClusterTopologyDto(
+            id,
+            topology
+                .OrderBy(x => x.ShardNumber)
+                .ThenBy(x => x.ReplicaNumber)
+                .ThenBy(x => x.Host, StringComparer.Ordinal)
+                .ThenBy(x => x.Port)
+                .Select(x => new ClickHouseClusterShardDto(x.ShardNumber, x.ShardName, x.ReplicaNumber, x.Host, x.Port, x.UseTls, x.ErrorsCount))
+                .ToList());
+    }
 
     public async Task<ClusterDto> AddAsync(UpsertClusterRequest request)
     {
@@ -207,3 +226,4 @@ public sealed class ClusterApplicationService(
     private static string? NormalizeClusterName(string? clusterName) =>
         string.IsNullOrWhiteSpace(clusterName) ? null : clusterName.Trim();
 }
+

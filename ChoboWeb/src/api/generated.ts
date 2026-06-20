@@ -29,7 +29,7 @@ export type PolicySelectorAction = "Include" | "Exclude";
 export type FailedBackupRetentionMode = "KeepAndExcludeFromMinBackupsToKeep" | "DeleteByGarbageCollectorAfterFailure";
 
 export interface ErrorResponse { error: string; }
-export interface ServerVersionDto { productName: string; serverVersion: string; apiVersion: number; schemaVersion: number; databaseSchemaVersion: number; }
+export interface ServerVersionDto { productName: string; productVersion: string; apiVersion: number; schemaVersion: number; databaseSchemaVersion: number; }
 export interface PagedResultDto<T> { items: T[]; offset: number; limit: number; totalCount: number; }
 export interface ApplicationLogEntryDto { id: number; timestamp: string; level: string; category: string; message: string; exception?: string | null; }
 export interface ClearApplicationLogsRequest { before: string; }
@@ -43,6 +43,8 @@ export interface UpsertClusterRequest { name: string; mode: ClusterMode; accessN
 export interface UpdateClusterCredentialsRequest { userName?: string | null; password?: string | null; }
 export interface ClusterConnectionTestResult { clusterId: string; succeeded: boolean; message: string; }
 export interface ClickHouseClusterNamesDto { clusterId: string; names: string[]; }
+export interface ClickHouseClusterTopologyDto { clusterId: string; shards: ClickHouseClusterShardDto[]; }
+export interface ClickHouseClusterShardDto { shardNumber: number; shardName?: string | null; replicaNumber: number; host: string; port: number; useTls: boolean; errorsCount: number; }
 
 export interface S3TargetSettingsDto { endpoint: string; region: string; bucket: string; pathPrefix?: string | null; forcePathStyle: boolean; }
 export interface BackupTargetDto { id: string; name: string; type: BackupTargetType; s3: S3TargetSettingsDto; isDeleted: boolean; createdAt: string; updatedAt?: string | null; }
@@ -79,7 +81,7 @@ export interface BackupMetadataRecoveryItem { backupId: string; status: BackupRu
 export interface RestoreDto { id: string; backupId: string; targetClusterId: string; status: RestoreRunStatus; append: boolean; allowSchemaMismatch: boolean; layout: RestoreLayout; sourceShard?: number | null; targetShard?: number | null; requestedByUserId?: string | null; requestedByName: string; requestJson: string; createdAt: string; startedAt?: string | null; endedAt?: string | null; error?: string | null; failureReason?: string | null; tables: RestoreTableDto[]; }
 export interface RestoreTableDto { id: string; restoreId: string; backupTableId: string; sourceDatabase: string; sourceTable: string; targetDatabase: string; targetTable: string; append: boolean; allowSchemaMismatch: boolean; schemaOnly: boolean; status: RestoreTableStatus; clickHouseOperationId?: string | null; clickHouseStatus?: string | null; warning?: string | null; startedAt?: string | null; completedAt?: string | null; error?: string | null; shards: RestoreTableShardDto[]; }
 export interface RestoreTableShardDto { id: string; restoreTableId: string; backupTableShardId: string; sourceShardNumber: number; targetShardNumber?: number | null; targetShardName?: string | null; targetReplicaNumber?: number | null; targetHost: string; targetPort: number; targetUseTls: boolean; layoutRole: string; restoreDatabase: string; restoreTableName: string; status: RestoreTableStatus; clickHouseOperationId?: string | null; clickHouseStatus?: string | null; warning?: string | null; startedAt?: string | null; completedAt?: string | null; error?: string | null; }
-export interface InitiateRestoreRequest { backupId: string; targetClusterId: string; database?: string | null; table?: string | null; targetDatabase?: string | null; targetTable?: string | null; append: boolean; allowSchemaMismatch: boolean; layout?: RestoreLayout | null; sourceShard?: number | null; targetShard?: number | null; tables?: RestoreTableMappingRequest[] | null; schemaOnly: boolean; sourceShards?: number[] | null; }
+export interface InitiateRestoreRequest { backupId: string; targetClusterId: string; database?: string | null; table?: string | null; targetDatabase?: string | null; targetTable?: string | null; append: boolean; allowSchemaMismatch: boolean; layout?: RestoreLayout | null; sourceShard?: number | null; targetShard?: number | null; tables?: RestoreTableMappingRequest[] | null; schemaOnly: boolean; sourceShards?: number[] | null; targetShards?: number[] | null; }
 export interface RestoreTableMappingRequest { backupTableId: string; targetDatabase?: string | null; targetTable?: string | null; append?: boolean | null; allowSchemaMismatch?: boolean | null; schemaOnly?: boolean | null; }
 
 export interface DashboardDto { generatedAt: string; futureWindowHours: number; runningBackups: DashboardRunningBackupDto[]; schedules: DashboardScheduleDto[]; futureSchedules: DashboardFutureScheduleDto[]; }
@@ -101,7 +103,6 @@ export const openApiSchemaNames = [
   "AccessTokenExport",
   "ApplicationLogEntryDto",
   "AuditEntryDto",
-  "PagedResultDto",
   "BackupDto",
   "BackupMetadataRecoveryItem",
   "BackupMetadataRecoveryResult",
@@ -122,6 +123,8 @@ export const openApiSchemaNames = [
   "ClearApplicationLogsRequest",
   "ClearAuditEntriesRequest",
   "ClickHouseClusterNamesDto",
+  "ClickHouseClusterShardDto",
+  "ClickHouseClusterTopologyDto",
   "ClusterConnectionTestResult",
   "ClusterDto",
   "ClusterExport",
@@ -174,4 +177,3 @@ export const openApiSchemaNames = [
   "ValidateScheduleCronRequest",
   "ValidateScheduleCronResponse"
 ] as const;
-

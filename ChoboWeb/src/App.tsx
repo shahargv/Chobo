@@ -8,13 +8,14 @@ import { LoginScreen } from "./components/LoginScreen";
 import { Backups } from "./pages/BackupsPage";
 import { Dashboard } from "./pages/DashboardPage";
 import { Audit, Logs } from "./pages/EntriesPages";
-import { Restores } from "./pages/RestoresPage";
+import { RestoreDetailPage, RestoreHistory, RestoreWizard } from "./pages/RestoresPage";
 import { Policies } from "./pages/PoliciesPage";
 import { Schedules } from "./pages/SchedulesPage";
 import { Clusters } from "./pages/ClustersPage";
 import { Targets } from "./pages/TargetsPage";
 import { UsersPage } from "./pages/UsersPage";
 import { ImportExport } from "./pages/ImportExportPage";
+import { MonitoringPage } from "./pages/MonitoringPage";
 import { clearAuth, readStoredAuth, storeAuth } from "./auth";
 
 export function App() {
@@ -56,7 +57,9 @@ export function App() {
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/backups" element={<Backups />} />
-          <Route path="/restores" element={<Restores />} />
+          <Route path="/restores" element={<RestoreHistory />} />
+          <Route path="/restores/start" element={<RestoreWizard />} />
+          <Route path="/restores/:restoreId" element={<RestoreDetailPage />} />
           <Route path="/policies" element={<Policies />} />
           <Route path="/schedules" element={<Schedules />} />
           <Route path="/clusters" element={<Clusters />} />
@@ -65,8 +68,10 @@ export function App() {
           <Route path="/logs" element={<Logs />} />
           <Route path="/audit" element={<Audit />} />
           <Route path="/import-export" element={<ImportExport />} />
+          <Route path="/monitoring" element={<MonitoringPage />} />
         </Routes>
       </AppShell>
     </ApiContext.Provider>
   );
 }
+

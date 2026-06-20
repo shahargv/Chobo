@@ -614,7 +614,46 @@
         }
       }
     },
-    "/api/v1/clusters/{id}": {
+    "/api/v1/clusters/{id}/topology": {
+      "get": {
+        "tags": [
+          "Clusters"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClickHouseClusterTopologyDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClickHouseClusterTopologyDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClickHouseClusterTopologyDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },    "/api/v1/clusters/{id}": {
       "put": {
         "tags": [
           "Clusters"
@@ -1786,7 +1825,25 @@
         }
       }
     },
-    "/api/v1/server/version": {
+    "/api/v1/metrics/prometheus": {
+      "get": {
+        "tags": [
+          "Dashboard"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },    "/api/v1/server/version": {
       "get": {
         "tags": [
           "Server"
@@ -3284,7 +3341,56 @@
         },
         "additionalProperties": false
       },
-      "ClusterConnectionTestResult": {
+      "ClickHouseClusterShardDto": {
+        "type": "object",
+        "properties": {
+          "shardNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "shardName": {
+            "type": "string",
+            "nullable": true
+          },
+          "replicaNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "host": {
+            "type": "string",
+            "nullable": true
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "useTls": {
+            "type": "boolean"
+          },
+          "errorsCount": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ClickHouseClusterTopologyDto": {
+        "type": "object",
+        "properties": {
+          "clusterId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "shards": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClickHouseClusterShardDto"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },      "ClusterConnectionTestResult": {
         "type": "object",
         "properties": {
           "clusterId": {
@@ -3841,6 +3947,14 @@
             "type": "boolean"
           },
           "sourceShards": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "nullable": true
+          },
+          "targetShards": {
             "type": "array",
             "items": {
               "type": "integer",
@@ -4442,7 +4556,7 @@
             "type": "string",
             "nullable": true
           },
-          "serverVersion": {
+          "productVersion": {
             "type": "string",
             "nullable": true
           },
@@ -4797,3 +4911,4 @@
     }
   ]
 }
+

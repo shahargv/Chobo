@@ -158,11 +158,22 @@ jobs:
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
         shell: bash
         run: |
+          cat > release-notes.md <<EOF
+          Chobo $RELEASE_VERSION
+
+          Docker images:
+          - [server-v$RELEASE_VERSION](https://hub.docker.com/r/shahargv/chobo/tags?name=server-v$RELEASE_VERSION)
+          - [cli-v$RELEASE_VERSION](https://hub.docker.com/r/shahargv/chobo/tags?name=cli-v$RELEASE_VERSION)
+          EOF
+
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release create "$RELEASE_TAG" \
               --target "$GITHUB_SHA" \
               --title "Chobo $RELEASE_VERSION" \
-              --notes "Chobo $RELEASE_VERSION"
+              --notes-file release-notes.md
+          else
+            gh release edit "$RELEASE_TAG" --notes-file release-notes.md
           fi
 
           gh release upload "$RELEASE_TAG" .artifacts/build/Release/*.zip .artifacts/build/Release/SHA256SUMS.txt --clobber
+

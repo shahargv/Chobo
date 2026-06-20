@@ -18,7 +18,8 @@ public sealed class RestoreCommand : CliSubject
     {
         var required = context.Command.Options.Require("--backup-id", "--target-cluster-id");
         var tableMappings = ParseTableMappings(context.Command.Options);
-        var sourceShards = ParseSourceShards(context.Command.Options.Optional("--source-shards"));
+        var sourceShards = ParseShards(context.Command.Options.Optional("--source-shards"));
+        var targetShards = ParseShards(context.Command.Options.Optional("--target-shards"));
         var request = new InitiateRestoreRequest(
             Guid.Parse(required["--backup-id"]),
             Guid.Parse(required["--target-cluster-id"]),
@@ -33,11 +34,12 @@ public sealed class RestoreCommand : CliSubject
             context.Command.Options.Optional("--target-shard") is { } targetShard ? int.Parse(targetShard) : null,
             tableMappings,
             context.Command.Options.Has("--schema-only"),
-            sourceShards);
+            sourceShards,
+            targetShards);
         return CommandHelpers.WithClient(context, client => client.PostAsync("restores/initiate", request));
     }
 
-    private static IReadOnlyList<int>? ParseSourceShards(string? value) =>
+    private static IReadOnlyList<int>? ParseShards(string? value) =>
         string.IsNullOrWhiteSpace(value)
             ? null
             : value
@@ -125,3 +127,4 @@ public sealed class RestoresCommands : CliSubject
     private static bool IsTerminal(RestoreRunStatus status) =>
         status is RestoreRunStatus.Succeeded or RestoreRunStatus.PartiallySucceeded or RestoreRunStatus.Failed or RestoreRunStatus.Canceled;
 }
+

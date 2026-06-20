@@ -2,10 +2,12 @@ import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
+  Activity,
   Archive,
   CalendarClock,
   Download,
   FileClock,
+  Github,
   HardDrive,
   History,
   LayoutDashboard,
@@ -27,7 +29,8 @@ const navItems = [
   { to: "/users", label: "Users", icon: Users },
   { to: "/logs", label: "Logs", icon: FileClock },
   { to: "/audit", label: "Audit", icon: History },
-  { to: "/import-export", label: "Import/Export", icon: Download }
+  { to: "/import-export", label: "Import/Export", icon: Download },
+  { to: "/monitoring", label: "Monitoring", icon: Activity }
 ];
 
 export function AppShell({ toast, onLogout, children }: { toast: Toast; onLogout: () => void; children: ReactNode }) {
@@ -38,7 +41,7 @@ export function AppShell({ toast, onLogout, children }: { toast: Toast; onLogout
           <div className="brand-mark">C</div>
           <div>
             <strong>Chobo</strong>
-            <span>ClickHouse Backup Orchestrator</span>
+            <span>ClickHouse Backups Orchestrator</span>
           </div>
         </div>
         <nav>
@@ -52,6 +55,7 @@ export function AppShell({ toast, onLogout, children }: { toast: Toast; onLogout
             );
           })}
         </nav>
+        <a className="sidebar-github" href="https://github.com/shahargv/Chobo/" target="_blank" rel="noreferrer" title="Open Chobo on GitHub"><Github size={18} /><span>GitHub</span></a>
       </aside>
       <main className="main">
         <TopBar onLogout={onLogout} />
@@ -69,9 +73,10 @@ function TopBar({ onLogout }: { onLogout: () => void }) {
     <header className="topbar">
       <div>
         <strong>{version.data?.productName ?? "Chobo"}</strong>
-        <span>{version.data ? `API v${version.data.apiVersion} · schema ${version.data.databaseSchemaVersion}` : "Connecting..."}</span>
+        <span>{version.data ? `Product version ${version.data.productVersion}` : "Connecting..."}</span>
       </div>
       <button className="ghost" onClick={onLogout}>Sign out</button>
     </header>
   );
 }
+

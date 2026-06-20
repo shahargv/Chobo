@@ -129,7 +129,7 @@ function BackupDrawer({ backupId, onClose }: { backupId: string; onClose: () => 
             ))}
           </DataTable>
         </section>
-        <div className="drawer-footer"><button className="primary" onClick={() => navigate("/restores", { state: { backupId: current.id } })}><RotateCcw size={16} /> Start restore</button></div>
+        <div className="drawer-footer"><button className="primary" onClick={() => navigate("/restores/start", { state: { backupId: current.id } })}><RotateCcw size={16} /> Start restore</button></div>
       </>}
     </Drawer>
   );
@@ -160,5 +160,6 @@ function formatTimeSeconds(value?: string | null) {
     second: "2-digit"
   });
 }
+
 
 

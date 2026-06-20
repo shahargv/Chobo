@@ -218,7 +218,7 @@ public sealed class ChoboFoundationTests
         var client = AuthenticatedClient(factory);
         var version = await client.GetFromJsonAsync<ServerVersionDto>("/api/v1/server/version", JsonOptions);
         Assert.Equal(ChoboApi.ApiVersion, version!.ApiVersion);
-        Assert.Equal(ChoboApi.ProductVersion, version.ServerVersion);
+        Assert.Equal(ChoboApi.ProductVersion, version.ProductVersion);
         var users = await client.GetFromJsonAsync<List<UserDto>>("/api/v1/users", JsonOptions);
         Assert.Single(users!);
         Assert.Equal("admin", users![0].UserName);
@@ -1023,5 +1023,4 @@ public sealed class ChoboFoundationTests
         }
     }
 }
-
 

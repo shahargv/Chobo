@@ -4,6 +4,7 @@ using ChoboServer.Options;
 using ChoboServer.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Serilog.Context;
 
 namespace ChoboServer.Application;
 
@@ -27,6 +28,10 @@ public sealed class RestoreRunnerService(
         {
             return;
         }
+
+        using var operationCorrelationScope = OperationCorrelationContext.Push(restore.Id.ToString());
+        using var operationLogScope = LogContext.PushProperty("OperationId", restore.Id.ToString());
+
         if (restore.Status is RestoreRunStatus.Succeeded or RestoreRunStatus.Failed or RestoreRunStatus.Canceled)
         {
             return;
@@ -131,6 +136,10 @@ public sealed class RestoreRunnerService(
             if (!hasSubmittedOperations && existing is null && table.Append)
             {
                 throw new InvalidOperationException($"Append restore requires target table {table.TargetDatabase}.{table.TargetTable} to already exist.");
+            }
+            if (!hasSubmittedOperations && existing is null && !table.Append)
+            {
+                await EnsureTargetTableExistsOnAllShardsAsync(scopedClickHouse, restore.TargetCluster!, backupTable, table, cancellationToken);
             }
 
             if (!backupTable.DataBackedUp || orderedShards.Count == 0)
@@ -244,6 +253,36 @@ public sealed class RestoreRunnerService(
             await scopedAudit.RecordAsync("table-failed", AuditEntityType.RestoreTable, table.Id.ToString(), new { error = ex.Message });
         }
     }
+
+    private static async Task EnsureTargetTableExistsOnAllShardsAsync(IClickHouseAdapter adapter, ClickHouseClusterEntity cluster, BackupTableEntity backupTable, RestoreTableEntity table, CancellationToken cancellationToken)
+    {
+        var topology = await adapter.GetTopologyAsync(cluster, cancellationToken);
+        var endpoints = SelectShardRepresentativeEndpoints(topology);
+        if (endpoints.Count == 0 && cluster.AccessNodes.Count > 0)
+        {
+            endpoints = cluster.AccessNodes
+                .Select(x => new ClickHouseNodeEndpoint(x.Host, x.Port, x.UseTls))
+                .ToList();
+        }
+
+        var createTableSql = ClickHouseSql.RewriteCreateTableNameIfNotExists(backupTable.SchemaDefinition!.CreateTableSql, table.TargetDatabase, table.TargetTable);
+        foreach (var endpoint in endpoints)
+        {
+            await adapter.ExecuteAsync(endpoint, cluster, $"CREATE DATABASE IF NOT EXISTS {ClickHouseSql.Identifier(table.TargetDatabase)}", cancellationToken);
+            await adapter.ExecuteAsync(endpoint, cluster, createTableSql, cancellationToken);
+        }
+    }
+
+    private static List<ClickHouseNodeEndpoint> SelectShardRepresentativeEndpoints(IReadOnlyList<ClickHouseShardReplicaInfo> topology) =>
+        topology
+            .GroupBy(x => x.ShardNumber)
+            .OrderBy(x => x.Key)
+            .Select(x =>
+            {
+                var representative = x.OrderBy(r => r.ErrorsCount).ThenBy(r => r.ReplicaNumber).First();
+                return new ClickHouseNodeEndpoint(representative.Host, representative.Port, representative.UseTls);
+            })
+            .ToList();
 
     private static async Task PollRestoreAsync(IClickHouseAdapter adapter, ClickHouseClusterEntity cluster, RestoreTableEntity table, ClickHouseOperationStatus current, TimeSpan interval, CancellationToken cancellationToken)
     {
@@ -410,3 +449,4 @@ public sealed class RestoreRunnerService(
         return RestoreTableStatus.Failed;
     }
 }
+

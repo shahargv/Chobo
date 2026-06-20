@@ -10,6 +10,7 @@ import type {
   BackupScheduleDto,
   BackupTargetDto,
   ClickHouseClusterNamesDto,
+  ClickHouseClusterTopologyDto,
   ClusterConnectionTestResult,
   ClusterDto,
   CreateAccessTokenRequest,
@@ -59,6 +60,7 @@ export class ChoboApiClient {
   serverVersion() { return this.get<ServerVersionDto>("server/version"); }
   dashboard(nextHours = 6) { return this.get<DashboardDto>(`dashboard?nextHours=${nextHours}`); }
   metrics() { return this.get<Record<string, number | null>>("metrics"); }
+  prometheusMetrics() { return this.requestText("metrics/prometheus", { accept: "text/plain" }); }
 
   users() { return this.get<UserDto[]>("users"); }
   addUser(request: CreateUserRequest) { return this.post<CreateUserResponse>("users", request); }
@@ -74,6 +76,7 @@ export class ChoboApiClient {
   removeCluster(id: string) { return this.deleteVoid(`clusters/${id}`); }
   testCluster(id: string) { return this.post<ClusterConnectionTestResult>(`clusters/${id}/test-connection`, {}); }
   clickHouseClusterNames(id: string) { return this.get<ClickHouseClusterNamesDto>(`clusters/${id}/clickhouse-cluster-names`); }
+  clusterTopology(id: string) { return this.get<ClickHouseClusterTopologyDto>(`clusters/${id}/topology`); }
 
   targets() { return this.get<BackupTargetDto[]>("targets"); }
   addTarget(request: UpsertS3TargetRequest) { return this.post<BackupTargetDto>("targets/s3", request); }
@@ -123,15 +126,24 @@ export class ChoboApiClient {
   importConfig(envelope: ExportEnvelope) { return this.post<void>("config/import", envelope); }
 
   private get<T>(path: string) { return this.request<T>(path); }
+  private requestText(path: string, options: { accept?: string } = {}) { return this.requestRaw(path, { accept: options.accept }).then((response) => response.text()); }
   private post<T>(path: string, body: unknown) { return this.request<T>(path, { method: "POST", body: JSON.stringify(body) }); }
   private put<T>(path: string, body: unknown) { return this.request<T>(path, { method: "PUT", body: JSON.stringify(body) }); }
   private delete<T>(path: string) { return this.request<T>(path, { method: "DELETE" }); }
   private async deleteVoid(path: string) { await this.request<void>(path, { method: "DELETE" }); }
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const response = await this.requestRaw(path, { init });
+    if (response.status === 204) return undefined as T;
+    const text = await response.text();
+    return text ? (JSON.parse(text) as T) : (undefined as T);
+  }
+
+  private async requestRaw(path: string, options: { init?: RequestInit; accept?: string } = {}): Promise<Response> {
+    const init = options.init ?? {};
     const token = this.getToken();
     const headers = new Headers(init.headers);
-    headers.set("Accept", "application/json");
+    headers.set("Accept", options.accept ?? "application/json");
     if (init.body) headers.set("Content-Type", "application/json");
     if (token) headers.set("Authorization", `Bearer ${token}`);
 
@@ -149,9 +161,7 @@ export class ChoboApiClient {
       throw new ApiError(message, response.status);
     }
 
-    if (response.status === 204) return undefined as T;
-    const text = await response.text();
-    return text ? (JSON.parse(text) as T) : (undefined as T);
+    return response;
   }
 }
 
