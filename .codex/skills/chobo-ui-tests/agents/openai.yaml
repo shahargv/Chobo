@@ -1,0 +1,4 @@
+interface:
+  display_name: "Chobo UI Tests"
+  short_description: "Run Chrome-based Chobo GUI QA with numbered screenshots."
+  default_prompt: "Run the Chobo UI test skill for the requested scenario and report the artifact folder."
