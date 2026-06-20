@@ -1,50 +1,63 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
-import { Play, RefreshCw, RotateCcw } from "lucide-react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { Ban, Play, RefreshCw, RotateCcw } from "lucide-react";
 import type { BackupDto, BackupRunStatus } from "../api/generated";
 import { useApi } from "../api-context";
 import { DataTable, Detail, Drawer, Empty, Page, Status } from "../components/ui";
-import { formatTime } from "../utils/format";
+import { formatCompletionTime, formatTime } from "../utils/format";
+import { isBackupStatusRestorable } from "./restores/restoreUtils";
 
 export function Backups() {
   const { api, showToast } = useApi();
-  const [selectedBackupId, setSelectedBackupId] = useState<string | null>(null);
+  const { backupId } = useParams();
+  const navigate = useNavigate();
+  const [selectedBackupId, setSelectedBackupId] = useState<string | null>(backupId ?? null);
   const backups = useQuery({ queryKey: ["backups"], queryFn: () => api.backups() });
+  const schedules = useQuery({ queryKey: ["schedules"], queryFn: () => api.schedules() });
+  const policies = useQuery({ queryKey: ["policies"], queryFn: () => api.policies() });
+  const scheduleById = new Map((schedules.data ?? []).map((schedule) => [schedule.id, schedule]));
+  const policyById = new Map((policies.data ?? []).map((policy) => [policy.id, policy]));
+  useEffect(() => {
+    setSelectedBackupId(backupId ?? null);
+  }, [backupId]);
   const mutation = useMutation({
-    mutationFn: ({ id, action }: { id: string; action: "pin" | "unpin" | "delete" }) =>
-      action === "pin" ? api.pinBackup(id) : action === "unpin" ? api.unpinBackup(id) : api.deleteBackup(id),
+    mutationFn: ({ id, action }: { id: string; action: "pin" | "unpin" | "delete" | "cancel" }) =>
+      action === "pin" ? api.pinBackup(id) : action === "unpin" ? api.unpinBackup(id) : action === "cancel" ? api.cancelBackup(id) : api.deleteBackup(id),
     onSuccess: () => { backups.refetch(); showToast({ kind: "success", text: "Backup updated." }); },
     onError: (error) => showToast({ kind: "error", text: String(error) })
   });
   return (
     <Page title="Backups" action={<ManualBackupButton />}>
       <section className="panel">
-        <DataTable headers={["Status", "Type", "Created", "Policy", "Tables", "Pinned", "Actions"]}>
+        <DataTable headers={["Status", "Completion Time", "Type", "Initiated by", "Created", "Policy", "Tables", "Pinned", "Actions"]}>
           {(backups.data ?? []).map((backup) => (
             <tr key={backup.id}>
               <td><Status value={backup.status} /></td>
+              <td>{formatCompletionTime(backup.endedAt ?? backup.deletedAt, backup.startedAt, backup.createdAt)}</td>
               <td>{backup.backupType}</td>
+              <td>{backupInitiator(backup, scheduleById)}</td>
               <td>{formatTime(backup.createdAt)}</td>
-              <td>{backup.policyId ?? "manual"}</td>
+              <td>{backupPolicyLink(backup.policyId, policyById)}</td>
               <td>{backup.tables.length}</td>
               <td>{backup.isPinned ? "yes" : "no"}</td>
               <td className="actions">
-                <button className="ghost" onClick={() => setSelectedBackupId(backup.id)}>Details</button>
-                <button className="ghost" onClick={() => mutation.mutate({ id: backup.id, action: backup.isPinned ? "unpin" : "pin" })}>{backup.isPinned ? "Unpin" : "Pin"}</button>
-                <button className="danger" onClick={() => mutation.mutate({ id: backup.id, action: "delete" })}>Delete</button>
+                <Link className="ghost" to={`/backups/${backup.id}`}>Details</Link>
+                {!isBackupDeleted(backup) && <button className="ghost" onClick={() => mutation.mutate({ id: backup.id, action: backup.isPinned ? "unpin" : "pin" })}>{backup.isPinned ? "Unpin" : "Pin"}</button>}
+                {isBackupInExecutionPhase(backup.status) && <button className="danger" onClick={() => mutation.mutate({ id: backup.id, action: "cancel" })}><Ban size={16} /> Cancel</button>}
+                {!isBackupDeleted(backup) && <button className="danger" onClick={() => mutation.mutate({ id: backup.id, action: "delete" })}>Delete</button>}
               </td>
             </tr>
           ))}
         </DataTable>
       </section>
-      {selectedBackupId && <BackupDrawer backupId={selectedBackupId} onClose={() => setSelectedBackupId(null)} />}
+      {selectedBackupId && <BackupDrawer backupId={selectedBackupId} onClose={() => { setSelectedBackupId(null); navigate("/backups"); }} />}
     </Page>
   );
 }
 
 function BackupDrawer({ backupId, onClose }: { backupId: string; onClose: () => void }) {
-  const { api } = useApi();
+  const { api, showToast } = useApi();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const backup = useQuery({
@@ -52,6 +65,8 @@ function BackupDrawer({ backupId, onClose }: { backupId: string; onClose: () => 
     queryFn: () => api.backup(backupId),
     refetchInterval: (query) => isBackupInExecutionPhase(query.state.data?.status) ? 3000 : false
   });
+  const schedules = useQuery({ queryKey: ["schedules"], queryFn: () => api.schedules() });
+  const scheduleById = new Map((schedules.data ?? []).map((schedule) => [schedule.id, schedule]));
   const current = backup.data;
   const isActive = isBackupInExecutionPhase(current?.status);
   const relatedLogs = useQuery({
@@ -68,6 +83,11 @@ function BackupDrawer({ backupId, onClose }: { backupId: string; onClose: () => 
   });
   const backupLogs = relatedLogs.data?.items ?? [];
   const backupAudits = relatedAudits.data?.items ?? [];
+  const cancelBackup = useMutation({
+    mutationFn: () => api.cancelBackup(backupId),
+    onSuccess: () => { backup.refetch(); queryClient.invalidateQueries({ queryKey: ["backups"] }); showToast({ kind: "success", text: "Backup canceled." }); },
+    onError: (error) => showToast({ kind: "error", text: String(error) })
+  });
   useEffect(() => {
     if (!current) return;
     queryClient.setQueryData<BackupDto[]>(["backups"], (items) => items?.map((item) => item.id === current.id ? current : item));
@@ -87,6 +107,8 @@ function BackupDrawer({ backupId, onClose }: { backupId: string; onClose: () => 
         <div className="detail-list">
           <Detail label="Backup id" value={current.id} />
           <Detail label="Status" value={<Status value={current.status} />} />
+          <Detail label="Completion Time" value={formatCompletionTime(current.endedAt ?? current.deletedAt, current.startedAt, current.createdAt)} />
+          <Detail label="Initiated by" value={backupInitiator(current, scheduleById)} />
           <Detail label="Failure" value={current.failureReason ?? current.error ?? "none"} />
         </div>
         <section className="detail-section detail-section-tables">
@@ -129,10 +151,25 @@ function BackupDrawer({ backupId, onClose }: { backupId: string; onClose: () => 
             ))}
           </DataTable>
         </section>
-        <div className="drawer-footer"><button className="primary" onClick={() => navigate("/restores/start", { state: { backupId: current.id } })}><RotateCcw size={16} /> Start restore</button></div>
+        <div className="drawer-footer">{isActive && <button className="danger" disabled={cancelBackup.isPending} onClick={() => cancelBackup.mutate()}><Ban size={16} /> Cancel</button>}{isBackupStatusRestorable(current.status) && <button className="primary" onClick={() => navigate("/restores/start", { state: { backupId: current.id } })}><RotateCcw size={16} /> Start restore</button>}</div>
       </>}
     </Drawer>
   );
+}
+
+function isBackupDeleted(backup: BackupDto) {
+  return Boolean(backup.deletedAt) || backup.status === "ManualDeleted" || backup.status === "FailedBackupDeletedByGarbageCollector" || backup.status === "BackupExpiredDeleted";
+}
+function backupPolicyLink(policyId: string | null | undefined, policyById: Map<string, { name: string }>) {
+  if (!policyId) return "manual";
+  return <Link to={`/policies/${policyId}`}>{policyById.get(policyId)?.name ?? policyId}</Link>;
+}
+function backupInitiator(backup: BackupDto, scheduleById: Map<string, { name: string }>) {
+  if (backup.triggerType === "Scheduled" && backup.scheduleId) {
+    return <Link to={`/schedules/${backup.scheduleId}`}>{scheduleById.get(backup.scheduleId)?.name ?? backup.scheduleId}</Link>;
+  }
+
+  return backup.requestedByName || "manual";
 }
 
 function ManualBackupButton() {
@@ -141,11 +178,7 @@ function ManualBackupButton() {
 }
 
 function isBackupInExecutionPhase(status: BackupRunStatus | undefined) {
-  return status === "Queued" ||
-    status === "Running" ||
-    status === "ManualDeleteRequested" ||
-    status === "FailedBackupDeleteRequested" ||
-    status === "BackupExpiredDeleteStarted";
+  return status === "Queued" || status === "Running";
 }
 
 
@@ -160,6 +193,5 @@ function formatTimeSeconds(value?: string | null) {
     second: "2-digit"
   });
 }
-
 
 

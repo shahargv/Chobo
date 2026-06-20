@@ -19,6 +19,16 @@ public sealed class RestoresController(RestoreApplicationService restores) : Con
     public Task<IReadOnlyList<RestoreDto>> List(CancellationToken cancellationToken) =>
         restores.ListAsync(cancellationToken);
 
+    [HttpPost("{id:guid}/cancel")]
+    public async Task<ActionResult<RestoreDto>> Cancel(Guid id, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await restores.CancelAsync(id, cancellationToken);
+            return result is null ? NotFound() : result;
+        }
+        catch (ArgumentException ex) { return BadRequest(new ErrorResponse(ex.Message)); }
+    }
     [HttpGet("{id:guid}")]
     public async Task<ActionResult<RestoreDto>> Get(Guid id, CancellationToken cancellationToken)
     {

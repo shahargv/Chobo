@@ -11,6 +11,7 @@ namespace ChoboServer.Application;
 public sealed class BackupApplicationService(
     ChoboDbContext db,
     IBackupRestoreQueues queues,
+    IClickHouseAdapter clickHouse,
     IAuditService audit,
     ActorContext actor,
     Serilog.ILogger logger)
@@ -210,6 +211,93 @@ public sealed class BackupApplicationService(
         return BackupRestoreMapping.ToDto(backup);
     }
 
+    public async Task<BackupDto?> CancelAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var backup = await db.Backups
+            .Include(x => x.SourceCluster).ThenInclude(x => x!.AccessNodes)
+            .Include(x => x.Tables).ThenInclude(x => x.Shards)
+            .FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+        if (backup is null)
+        {
+            return null;
+        }
+        if (backup.Status is not (BackupRunStatus.Queued or BackupRunStatus.Running))
+        {
+            throw new ArgumentException("Only queued or running backups can be canceled.");
+        }
+
+        using var operationCorrelationScope = OperationCorrelationContext.Push(backup.Id.ToString());
+        using var operationLogScope = Serilog.Context.LogContext.PushProperty("OperationId", backup.Id.ToString());
+
+        var now = DateTimeOffset.UtcNow;
+        backup.Status = BackupRunStatus.Canceled;
+        backup.CompletedAt = now;
+        backup.FailureReason = $"Backup canceled by {actor.ActorName}.";
+        backup.Error = backup.FailureReason;
+        backup.DeletionReason = "canceled";
+        backup.DeletionRequestedAt ??= now;
+        backup.DeletionError = null;
+        foreach (var table in backup.Tables.Where(x => x.Status is BackupTableStatus.Queued or BackupTableStatus.Running))
+        {
+            table.Status = BackupTableStatus.Skipped;
+            table.Error = "Backup canceled.";
+            table.CompletedAt ??= now;
+            foreach (var shard in table.Shards.Where(x => x.Status is BackupTableStatus.Queued or BackupTableStatus.Running))
+            {
+                shard.Status = BackupTableStatus.Skipped;
+                shard.Error = "Backup canceled.";
+                shard.CompletedAt ??= now;
+            }
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+        var killResults = await KillBackupOperationsAsync(backup, cancellationToken);
+        await audit.RecordAsync("canceled", AuditEntityType.Backup, id.ToString(), new { operationId = id, actor.UserId, actor.ActorName, killed = killResults.Killed, killFailures = killResults.Failures });
+        return BackupRestoreMapping.ToDto(backup);
+    }
+
+    private async Task<(int Killed, IReadOnlyList<string> Failures)> KillBackupOperationsAsync(BackupEntity backup, CancellationToken cancellationToken)
+    {
+        if (backup.SourceCluster is null)
+        {
+            return (0, []);
+        }
+
+        var killed = 0;
+        var failures = new List<string>();
+        var operations = backup.Tables
+            .SelectMany(table => table.Shards.Count == 0
+                ? string.IsNullOrWhiteSpace(table.ClickHouseOperationId) ? [] : [new { Endpoint = (ClickHouseNodeEndpoint?)null, OperationId = table.ClickHouseOperationId! }]
+                : table.Shards
+                    .Where(shard => !string.IsNullOrWhiteSpace(shard.ClickHouseOperationId))
+                    .Select(shard => new { Endpoint = (ClickHouseNodeEndpoint?)new ClickHouseNodeEndpoint(shard.Host, shard.Port, shard.UseTls), OperationId = shard.ClickHouseOperationId! }))
+            .DistinctBy(x => x.OperationId)
+            .ToList();
+
+        foreach (var operation in operations)
+        {
+            try
+            {
+                if (operation.Endpoint is { } endpoint)
+                {
+                    await clickHouse.KillQueryAsync(endpoint, backup.SourceCluster, operation.OperationId, cancellationToken);
+                }
+                else
+                {
+                    await clickHouse.KillQueryAsync(backup.SourceCluster, operation.OperationId, cancellationToken);
+                }
+
+                killed++;
+            }
+            catch (Exception ex)
+            {
+                failures.Add($"{operation.OperationId}: {ex.Message}");
+                _logger.Warning(ex, "Failed to kill ClickHouse backup operation {OperationId} for backup {BackupId}.", operation.OperationId, backup.Id);
+            }
+        }
+
+        return (killed, failures);
+    }
     private Task<BackupEntity?> LoadAsync(Guid id, CancellationToken cancellationToken) =>
         db.Backups
             .Include(x => x.Tables).ThenInclude(x => x.Shards)

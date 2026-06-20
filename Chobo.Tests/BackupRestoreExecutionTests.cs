@@ -934,6 +934,28 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Garbage_collector_completes_manual_delete_requests()
+    {
+        var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now));
+        var policy = await fixture.SeedPolicyAsync();
+        var backup = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.ManualDeleteRequested, now.AddMinutes(-30));
+        backup.DeletionReason = "manual";
+        backup.DeletionRequestedAt = now.AddMinutes(-20);
+        await fixture.Db.SaveChangesAsync();
+
+        var result = await fixture.Services.GetRequiredService<BackupsGarbageCollectorBackgroundService>().RunOnceAsync();
+
+        fixture.Db.ChangeTracker.Clear();
+        var completed = await fixture.Db.Backups.SingleAsync(x => x.Id == backup.Id);
+        Assert.Equal(BackupRunStatus.ManualDeleted, completed.Status);
+        Assert.NotNull(completed.DeletedAt);
+        Assert.Equal(1, result.LastPendingCleanupCount);
+        Assert.Equal(1, result.LastCleanedCount);
+        Assert.Contains(backup.Tables.Single().S3Path, fixture.StorageDeletion.DeletedDirectories);
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "backup-cleanup-succeeded" && x.EntityId == backup.Id.ToString()));
+    }
+    [Fact]
     public async Task Garbage_collector_deletes_failed_incremental_without_deleting_parent_full()
     {
         var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
@@ -983,6 +1005,55 @@ public sealed class BackupRestoreExecutionTests
         fixture.Db.ChangeTracker.Clear();
         Assert.Equal(BackupRunStatus.FailedBackupDeletedByGarbageCollector, (await fixture.Db.Backups.SingleAsync(x => x.Id == incremental.Id)).Status);
         Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "orphaned-incremental-garbage-collection-requested" && x.EntityId == incremental.Id.ToString()));
+    }
+
+    [Fact]
+    public async Task Backup_cancel_marks_run_canceled_kills_queries_and_garbage_collector_cleans_remains()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Running, "backup-op-1", true)
+        ]);
+        backup.Status = BackupRunStatus.Running;
+        await fixture.Db.SaveChangesAsync();
+
+        var canceled = await fixture.Services.GetRequiredService<BackupApplicationService>().CancelAsync(backup.Id);
+
+        Assert.NotNull(canceled);
+        Assert.Equal(BackupRunStatus.Canceled, canceled.Status);
+        Assert.Contains("backup-op-1", fixture.ClickHouse.KilledQueries);
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "canceled" && x.EntityType == "backup" && x.EntityId == backup.Id.ToString()));
+
+        await fixture.Services.GetRequiredService<BackupsGarbageCollectorBackgroundService>().RunOnceAsync();
+
+        fixture.Db.ChangeTracker.Clear();
+        var afterCleanup = await fixture.Db.Backups.SingleAsync(x => x.Id == backup.Id);
+        Assert.Equal(BackupRunStatus.Canceled, afterCleanup.Status);
+        Assert.NotNull(afterCleanup.DeletedAt);
+        Assert.Contains(backup.Tables.Single().S3Path, fixture.StorageDeletion.DeletedDirectories);
+    }
+
+    [Fact]
+    public async Task Restore_cancel_marks_run_canceled_and_kills_queries()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Succeeded, "backup-op", true)
+        ]);
+        backup.Status = BackupRunStatus.Succeeded;
+        await fixture.Db.SaveChangesAsync();
+        var restore = await fixture.SeedRestoreAsync(backup, [
+            new SeedRestoreTable("sales", "orders", RestoreTableStatus.Running, "restore-op-1")
+        ]);
+        restore.Status = RestoreRunStatus.Running;
+        await fixture.Db.SaveChangesAsync();
+
+        var canceled = await fixture.Services.GetRequiredService<RestoreApplicationService>().CancelAsync(restore.Id);
+
+        Assert.NotNull(canceled);
+        Assert.Equal(RestoreRunStatus.Canceled, canceled.Status);
+        Assert.Contains("restore-op-1", fixture.ClickHouse.KilledQueries);
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "canceled" && x.EntityType == "restore" && x.EntityId == restore.Id.ToString()));
     }
 
     [Fact]
@@ -1601,6 +1672,7 @@ public sealed class BackupRestoreExecutionTests
         public List<string?> BackupBasePaths { get; } = [];
         public List<string> RestoreStartTables { get; } = [];
         public List<string> ExecuteSql { get; } = [];
+        public List<string> KilledQueries { get; } = [];
         public List<ClickHouseNodeEndpoint> ExecuteEndpoints { get; } = [];
         public List<(ClickHouseNodeEndpoint Endpoint, string Sql)> EndpointExecuteSql { get; } = [];
         public int MaxConcurrentBackupStarts { get; private set; }
@@ -1741,6 +1813,16 @@ public sealed class BackupRestoreExecutionTests
                 ? new ClickHouseOperationStatus(true, status, OperationErrors.GetValueOrDefault(operationId))
                 : new ClickHouseOperationStatus(false, null, null);
         }
+
+        public Task KillQueryAsync(ClickHouseClusterEntity cluster, string queryId, CancellationToken cancellationToken)
+        {
+            KilledQueries.Add(queryId);
+            KnownOperations[queryId] = "CANCELLED";
+            return Task.CompletedTask;
+        }
+
+        public Task KillQueryAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string queryId, CancellationToken cancellationToken) =>
+            KillQueryAsync(cluster, queryId, cancellationToken);
 
         public Task WaitForBlockedStatusAsync() => _statusBlocked.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
@@ -2255,4 +2337,6 @@ public sealed class BackupRestoreExecutionTests
         public override DateTimeOffset GetUtcNow() => utcNow;
     }
 }
+
+
 

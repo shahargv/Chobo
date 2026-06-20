@@ -92,6 +92,12 @@ public sealed class BackupRunnerService(
                 await Task.WhenAll(tasks);
             }
 
+            if (await db.Backups.Where(x => x.Id == backup.Id).Select(x => x.Status).FirstAsync(cancellationToken) == BackupRunStatus.Canceled)
+            {
+                _logger.Information("Backup {BackupId} observed cancellation and will not overwrite canceled status.", backup.Id);
+                return;
+            }
+
             var statuses = await db.BackupTables.Where(x => x.BackupId == backup.Id).Select(x => x.Status).ToListAsync(cancellationToken);
             var tableCount = await db.BackupTables.CountAsync(x => x.BackupId == backup.Id, cancellationToken);
             backup.Status = AggregateBackupStatus(statuses);
@@ -353,6 +359,12 @@ public sealed class BackupRunnerService(
             .Include(x => x.Tables).ThenInclude(x => x.Shards)
             .FirstAsync(x => x.Id == backupId, cancellationToken);
         var table = backup.Tables.Single(x => x.Id == tableId);
+        if (backup.Status == BackupRunStatus.Canceled)
+        {
+            _logger.Information("Backup table {BackupTableId} skipped because backup {BackupId} was canceled.", table.Id, backup.Id);
+            return;
+        }
+
 
         if (!table.DataBackedUp)
         {
@@ -389,6 +401,11 @@ public sealed class BackupRunnerService(
 
         foreach (var shard in table.Shards.Where(x => x.Status is BackupTableStatus.Queued or BackupTableStatus.Running).OrderBy(x => x.SourceShardNumber).ToList())
         {
+            if (await scopedDb.Backups.Where(x => x.Id == backup.Id).Select(x => x.Status).FirstAsync(cancellationToken) == BackupRunStatus.Canceled)
+            {
+                _logger.Information("Backup table {BackupTableId} stopped before shard {ShardNumber} because backup {BackupId} was canceled.", table.Id, shard.SourceShardNumber, backup.Id);
+                return;
+            }
             shard.Status = BackupTableStatus.Running;
             shard.StartedAt ??= DateTimeOffset.UtcNow;
             await scopedDb.SaveChangesAsync(cancellationToken);

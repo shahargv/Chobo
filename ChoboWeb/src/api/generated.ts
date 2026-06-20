@@ -70,6 +70,7 @@ export interface ValidateScheduleCronRequest { cronExpression: string; timeZoneI
 export interface ValidateScheduleCronResponse { isValid: boolean; error?: string | null; nextRuns: string[]; }
 
 export interface BackupDto { id: string; triggerType: BackupTriggerType; status: BackupRunStatus; backupType: BackupType; sourceClusterId: string; targetId: string; policyId?: string | null; scheduleId?: string | null; requestedByUserId?: string | null; requestedByName: string; manualRequestJson?: string | null; createdAt: string; startedAt?: string | null; endedAt?: string | null; error?: string | null; failureReason?: string | null; isPinned: boolean; pinnedAt?: string | null; pinnedByUserId?: string | null; pinnedByName?: string | null; deletionReason?: string | null; deletionRequestedAt?: string | null; deletionStartedAt?: string | null; deletedAt?: string | null; deletionError?: string | null; deletionAttemptCount: number; tables: BackupTableDto[]; }
+export interface BackupGarbageCollectorStatusDto { isRunning: boolean; currentRunReason: string; lastStartedAt?: string | null; lastCompletedAt?: string | null; lastError?: string | null; lastMarkedCount: number; lastPendingCleanupCount: number; lastCleanedCount: number; lastFailedCount: number; }
 export interface BackupTableDto { id: string; backupId: string; effectiveBackupType: BackupType; parentFullBackupId?: string | null; parentFullBackupTableId?: string | null; database: string; table: string; engine: string; dataBackedUp: boolean; schemaDefinitionId: string; s3Path: string; status: BackupTableStatus; clickHouseOperationId?: string | null; clickHouseStatus?: string | null; startedAt?: string | null; completedAt?: string | null; error?: string | null; shards: BackupTableShardDto[]; }
 export interface BackupTableShardDto { id: string; backupTableId: string; effectiveBackupType: BackupType; parentFullBackupId?: string | null; parentFullBackupTableShardId?: string | null; sourceShardNumber: number; sourceShardName?: string | null; replicaNumber: number; host: string; port: number; useTls: boolean; s3Path: string; status: BackupTableStatus; clickHouseOperationId?: string | null; clickHouseStatus?: string | null; startedAt?: string | null; completedAt?: string | null; error?: string | null; }
 export interface ManualBackupRequest { clusterId: string; targetId: string; selector: PolicySelector; backupType: BackupType; policyId?: string | null; schemaOnly: boolean; }
@@ -177,3 +178,5 @@ export const openApiSchemaNames = [
   "ValidateScheduleCronRequest",
   "ValidateScheduleCronResponse"
 ] as const;
+
+

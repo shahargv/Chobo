@@ -23,7 +23,7 @@ public sealed class BackupCleanupService(
         {
             return false;
         }
-        if (backup.Status == finalStatus)
+        if (backup.Status == finalStatus && backup.DeletedAt is not null)
         {
             return true;
         }
@@ -47,6 +47,7 @@ public sealed class BackupCleanupService(
             backup.DeletionError = null;
             await db.SaveChangesAsync(cancellationToken);
             await audit.RecordAsync("backup-cleanup-succeeded", AuditEntityType.Backup, backup.Id.ToString(), new { reason, finalStatus, backup.DeletionAttemptCount });
+            await audit.RecordAsync("delete-completed", AuditEntityType.Backup, backup.Id.ToString(), new { reason, finalStatus, backup.DeletionAttemptCount, backup.DeletedAt });
             return true;
         }
         catch (Exception ex)
@@ -70,3 +71,4 @@ public sealed class BackupCleanupService(
         }
     }
 }
+
