@@ -10,3 +10,24 @@ export function formatTime(value?: string | null) {
   if (!value) return "never";
   return new Date(value).toLocaleString();
 }
+export function formatCompletionTime(completedAt?: string | null, startedAt?: string | null, fallbackStartAt?: string | null) {
+  if (!completedAt) return "not completed";
+  const duration = formatDuration(startedAt ?? fallbackStartAt, completedAt);
+  return duration ? `${formatTime(completedAt)} (took ${duration})` : formatTime(completedAt);
+}
+
+function formatDuration(start?: string | null, end?: string | null) {
+  if (!start || !end) return null;
+  const milliseconds = new Date(end).getTime() - new Date(start).getTime();
+  if (!Number.isFinite(milliseconds) || milliseconds < 0) return null;
+  const totalMinutes = Math.max(1, Math.round(milliseconds / 60000));
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+  const parts: string[] = [];
+  if (days > 0) parts.push(`${days} day${days === 1 ? "" : "s"}`);
+  if (hours > 0) parts.push(`${hours} hour${hours === 1 ? "" : "s"}`);
+  if (minutes > 0 || parts.length === 0) parts.push(`${minutes} minute${minutes === 1 ? "" : "s"}`);
+  return parts.join(" and ");
+}
+

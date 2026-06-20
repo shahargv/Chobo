@@ -60,6 +60,12 @@ public sealed class RestoreRunnerService(
                 .ToList();
             await Task.WhenAll(tasks);
 
+            if (await db.Restores.Where(x => x.Id == restore.Id).Select(x => x.Status).FirstAsync(cancellationToken) == RestoreRunStatus.Canceled)
+            {
+                _logger.Information("Restore {RestoreId} observed cancellation and will not overwrite canceled status.", restore.Id);
+                return;
+            }
+
             var statuses = await db.RestoreTables.Where(x => x.RestoreId == restore.Id).Select(x => x.Status).ToListAsync(cancellationToken);
             var tableCount = await db.RestoreTables.CountAsync(x => x.RestoreId == restore.Id, cancellationToken);
             restore.Status = AggregateRestoreStatus(statuses);
@@ -100,6 +106,11 @@ public sealed class RestoreRunnerService(
             .Include(x => x.Tables).ThenInclude(x => x.Shards)
             .FirstAsync(x => x.Id == restoreId, cancellationToken);
         var table = restore.Tables.Single(x => x.Id == tableId);
+        if (restore.Status == RestoreRunStatus.Canceled)
+        {
+            _logger.Information("Restore table {RestoreTableId} skipped because restore {RestoreId} was canceled.", table.Id, restore.Id);
+            return;
+        }
         var backupTable = await scopedDb.BackupTables.Include(x => x.SchemaDefinition).Include(x => x.Shards).FirstAsync(x => x.Id == table.BackupTableId, cancellationToken);
 
         table.Status = RestoreTableStatus.Running;
@@ -165,6 +176,11 @@ public sealed class RestoreRunnerService(
 
             foreach (var shard in orderedShards.Where(x => x.Status is RestoreTableStatus.Queued or RestoreTableStatus.Running))
             {
+                if (await scopedDb.Restores.Where(x => x.Id == restore.Id).Select(x => x.Status).FirstAsync(cancellationToken) == RestoreRunStatus.Canceled)
+                {
+                    _logger.Information("Restore table {RestoreTableId} stopped before shard {ShardId} because restore {RestoreId} was canceled.", table.Id, shard.Id, restore.Id);
+                    return;
+                }
                 var endpoint = new ClickHouseNodeEndpoint(shard.TargetHost, shard.TargetPort, shard.TargetUseTls);
                 var backupShard = backupTable.Shards.Single(x => x.Id == shard.BackupTableShardId);
                 await scopedClickHouse.ExecuteAsync(endpoint, restore.TargetCluster!, $"CREATE DATABASE IF NOT EXISTS {ClickHouseSql.Identifier(shard.RestoreDatabase)}", cancellationToken);

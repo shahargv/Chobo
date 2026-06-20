@@ -188,6 +188,90 @@ public sealed class RestoreApplicationService(
     public async Task<RestoreDto?> GetAsync(Guid id, CancellationToken cancellationToken = default) =>
         await LoadAsync(id, cancellationToken) is { } restore ? BackupRestoreMapping.ToDto(restore) : null;
 
+    public async Task<RestoreDto?> CancelAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var restore = await db.Restores
+            .Include(x => x.TargetCluster).ThenInclude(x => x!.AccessNodes)
+            .Include(x => x.Tables).ThenInclude(x => x.Shards)
+            .FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+        if (restore is null)
+        {
+            return null;
+        }
+        if (restore.Status is not (RestoreRunStatus.Queued or RestoreRunStatus.Running))
+        {
+            throw new ArgumentException("Only queued or running restores can be canceled.");
+        }
+
+        using var operationCorrelationScope = OperationCorrelationContext.Push(restore.Id.ToString());
+        using var operationLogScope = LogContext.PushProperty("OperationId", restore.Id.ToString());
+
+        var now = DateTimeOffset.UtcNow;
+        restore.Status = RestoreRunStatus.Canceled;
+        restore.CompletedAt = now;
+        restore.FailureReason = $"Restore canceled by {actor.ActorName}.";
+        restore.Error = restore.FailureReason;
+        foreach (var table in restore.Tables.Where(x => x.Status is RestoreTableStatus.Queued or RestoreTableStatus.Running))
+        {
+            table.Status = RestoreTableStatus.Skipped;
+            table.Error = "Restore canceled.";
+            table.CompletedAt ??= now;
+            foreach (var shard in table.Shards.Where(x => x.Status is RestoreTableStatus.Queued or RestoreTableStatus.Running))
+            {
+                shard.Status = RestoreTableStatus.Skipped;
+                shard.Error = "Restore canceled.";
+                shard.CompletedAt ??= now;
+            }
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+        var killResults = await KillRestoreOperationsAsync(restore, cancellationToken);
+        await audit.RecordAsync("canceled", AuditEntityType.Restore, id.ToString(), new { operationId = id, actor.UserId, actor.ActorName, killed = killResults.Killed, killFailures = killResults.Failures });
+        return BackupRestoreMapping.ToDto(restore);
+    }
+
+    private async Task<(int Killed, IReadOnlyList<string> Failures)> KillRestoreOperationsAsync(RestoreEntity restore, CancellationToken cancellationToken)
+    {
+        if (restore.TargetCluster is null)
+        {
+            return (0, []);
+        }
+
+        var killed = 0;
+        var failures = new List<string>();
+        var operations = restore.Tables
+            .SelectMany(table => table.Shards.Count == 0
+                ? string.IsNullOrWhiteSpace(table.ClickHouseOperationId) ? [] : [new { Endpoint = (ClickHouseNodeEndpoint?)null, OperationId = table.ClickHouseOperationId! }]
+                : table.Shards
+                    .Where(shard => !string.IsNullOrWhiteSpace(shard.ClickHouseOperationId))
+                    .Select(shard => new { Endpoint = (ClickHouseNodeEndpoint?)new ClickHouseNodeEndpoint(shard.TargetHost, shard.TargetPort, shard.TargetUseTls), OperationId = shard.ClickHouseOperationId! }))
+            .DistinctBy(x => x.OperationId)
+            .ToList();
+
+        foreach (var operation in operations)
+        {
+            try
+            {
+                if (operation.Endpoint is { } endpoint)
+                {
+                    await clickHouse.KillQueryAsync(endpoint, restore.TargetCluster, operation.OperationId, cancellationToken);
+                }
+                else
+                {
+                    await clickHouse.KillQueryAsync(restore.TargetCluster, operation.OperationId, cancellationToken);
+                }
+
+                killed++;
+            }
+            catch (Exception ex)
+            {
+                failures.Add($"{operation.OperationId}: {ex.Message}");
+                _logger.Warning(ex, "Failed to kill ClickHouse restore operation {OperationId} for restore {RestoreId}.", operation.OperationId, restore.Id);
+            }
+        }
+
+        return (killed, failures);
+    }
     private Task<RestoreEntity?> LoadAsync(Guid id, CancellationToken cancellationToken) =>
         db.Restores.Include(x => x.Tables).ThenInclude(x => x.Shards).FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
 

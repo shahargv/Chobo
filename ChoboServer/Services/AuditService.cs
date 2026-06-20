@@ -32,6 +32,7 @@ public enum AuditEntityType
     ApplicationLog,
     Audit,
     Backup,
+    BackupGarbageCollector,
     BackupPolicy,
     BackupSchedule,
     BackupTarget,
@@ -58,6 +59,7 @@ public static class AuditEntityTypes
             AuditEntityType.ApplicationLog => "application-log",
             AuditEntityType.Audit => "audit",
             AuditEntityType.Backup => "backup",
+            AuditEntityType.BackupGarbageCollector => "backup-garbage-collector",
             AuditEntityType.BackupPolicy => "backup-policy",
             AuditEntityType.BackupSchedule => "backup-schedule",
             AuditEntityType.BackupTarget => "backup-target",
@@ -76,4 +78,5 @@ public static class AuditEntityTypes
             _ => throw new ArgumentOutOfRangeException(nameof(entityType), entityType, "Unsupported audit entity type.")
         };
 }
+
 

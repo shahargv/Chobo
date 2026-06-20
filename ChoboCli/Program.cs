@@ -11,6 +11,7 @@ var registry = new CommandRegistry()
     .Add(new ScheduleCommands())
     .Add(new DashboardCommands())
     .Add(new MetricsCommands())
+    .Add(new GarbageCollectorCommands())
     .Add(new BackupCommand())
     .Add(new BackupsCommands())
     .Add(new RestoreCommand())
@@ -23,3 +24,4 @@ var registry = new CommandRegistry()
 
 var app = new CliApplication(registry, new ChoboApiClientFactory(), new ProfileStore(), new JsonOutputWriter());
 return await app.RunAsync(args);
+

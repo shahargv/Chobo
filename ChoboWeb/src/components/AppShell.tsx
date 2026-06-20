@@ -14,6 +14,7 @@ import {
   RotateCcw,
   Server,
   Settings2,
+  Trash2,
   Users
 } from "lucide-react";
 import { useApi, type Toast } from "../api-context";
@@ -29,6 +30,7 @@ const navItems = [
   { to: "/users", label: "Users", icon: Users },
   { to: "/logs", label: "Logs", icon: FileClock },
   { to: "/audit", label: "Audit", icon: History },
+  { to: "/gc", label: "Backup GC", icon: Trash2 },
   { to: "/import-export", label: "Import/Export", icon: Download },
   { to: "/monitoring", label: "Monitoring", icon: Activity }
 ];
@@ -79,4 +81,5 @@ function TopBar({ onLogout }: { onLogout: () => void }) {
     </header>
   );
 }
+
 

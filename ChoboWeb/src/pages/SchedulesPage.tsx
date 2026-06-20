@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useParams } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { CalendarClock, Save } from "lucide-react";
 import type { BackupScheduleDto, BackupType, UpsertScheduleRequest } from "../api/generated";
@@ -10,6 +10,7 @@ import { formatTime, nameOf, presetLabel } from "../utils/format";
 export function Schedules() {
   const { api, showToast } = useApi();
   const location = useLocation();
+  const { scheduleId } = useParams();
   const schedules = useQuery({ queryKey: ["schedules"], queryFn: () => api.schedules() });
   const policies = useQuery({ queryKey: ["policies"], queryFn: () => api.policies() });
   const [showForm, setShowForm] = useState(false);
@@ -22,6 +23,15 @@ export function Schedules() {
     setShowForm(true);
     setDraft((current) => ({ ...current, policyId: state.policyId ?? current.policyId }));
   }, [location.state]);
+  useEffect(() => {
+    if (!scheduleId || !schedules.data) return;
+    const schedule = schedules.data.find((item) => item.id === scheduleId);
+    if (!schedule) return;
+    setEditing(schedule);
+    setScheduleDraft(parseCronToDraft(schedule.cronExpression));
+    setDraft({ name: schedule.name, policyId: schedule.policyId, backupType: schedule.backupType, cronExpression: schedule.cronExpression, timeZoneId: schedule.timeZoneId, isEnabled: schedule.isEnabled, missedRunGracePeriod: schedule.missedRunGracePeriod, description: schedule.description });
+    setShowForm(true);
+  }, [scheduleId, schedules.data]);
   const reset = () => {
     setShowForm(false);
     setEditing(null);
@@ -125,4 +135,5 @@ function ScheduleEditor({ draft, timezone, onChange }: { draft: ScheduleDraft; t
     </div>
   );
 }
+
 

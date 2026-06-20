@@ -47,6 +47,16 @@ public sealed class BackupsController(
         return result is null ? NotFound() : result;
     }
 
+    [HttpPost("backups/{id:guid}/cancel")]
+    public async Task<ActionResult<BackupDto>> Cancel(Guid id, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await backups.CancelAsync(id, cancellationToken);
+            return result is null ? NotFound() : result;
+        }
+        catch (ArgumentException ex) { return BadRequest(new ErrorResponse(ex.Message)); }
+    }
     [HttpDelete("backups/{id:guid}")]
     public async Task<ActionResult<BackupDto>> Delete(Guid id, [FromQuery] bool force, CancellationToken cancellationToken)
     {
