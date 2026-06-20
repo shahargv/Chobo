@@ -34,6 +34,29 @@
               "type": "integer",
               "format": "int32"
             }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "operationId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -42,26 +65,17 @@
             "content": {
               "text/plain": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/AuditEntryDto"
-                  }
+                  "$ref": "#/components/schemas/AuditEntryDtoPagedResultDto"
                 }
               },
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/AuditEntryDto"
-                  }
+                  "$ref": "#/components/schemas/AuditEntryDtoPagedResultDto"
                 }
               },
               "text/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/AuditEntryDto"
-                  }
+                  "$ref": "#/components/schemas/AuditEntryDtoPagedResultDto"
                 }
               }
             }
@@ -96,6 +110,64 @@
         "responses": {
           "200": {
             "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v1/backups/garbage-collector/status": {
+      "get": {
+        "tags": [
+          "BackupGarbageCollector"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupGarbageCollectorStatusDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupGarbageCollectorStatusDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupGarbageCollectorStatusDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/backups/garbage-collector/run": {
+      "post": {
+        "tags": [
+          "BackupGarbageCollector"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupGarbageCollectorStatusDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupGarbageCollectorStatusDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupGarbageCollectorStatusDto"
+                }
+              }
+            }
           }
         }
       }
@@ -343,6 +415,46 @@
       }
     },
     "/api/v1/backups/{id}/unpin": {
+      "post": {
+        "tags": [
+          "Backups"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/backups/{id}/cancel": {
       "post": {
         "tags": [
           "Backups"
@@ -653,7 +765,8 @@
           }
         }
       }
-    },    "/api/v1/clusters/{id}": {
+    },
+    "/api/v1/clusters/{id}": {
       "put": {
         "tags": [
           "Clusters"
@@ -1065,6 +1178,29 @@
               "type": "integer",
               "format": "int32"
             }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "operationId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -1073,26 +1209,17 @@
             "content": {
               "text/plain": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/ApplicationLogEntryDto"
-                  }
+                  "$ref": "#/components/schemas/ApplicationLogEntryDtoPagedResultDto"
                 }
               },
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/ApplicationLogEntryDto"
-                  }
+                  "$ref": "#/components/schemas/ApplicationLogEntryDtoPagedResultDto"
                 }
               },
               "text/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/ApplicationLogEntryDto"
-                  }
+                  "$ref": "#/components/schemas/ApplicationLogEntryDtoPagedResultDto"
                 }
               }
             }
@@ -1527,6 +1654,46 @@
         }
       }
     },
+    "/api/v1/restores/{id}/cancel": {
+      "post": {
+        "tags": [
+          "Restores"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/restores/{id}": {
       "get": {
         "tags": [
@@ -1825,25 +1992,7 @@
         }
       }
     },
-    "/api/v1/metrics/prometheus": {
-      "get": {
-        "tags": [
-          "Dashboard"
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "text/plain": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          }
-        }
-      }
-    },    "/api/v1/server/version": {
+    "/api/v1/server/version": {
       "get": {
         "tags": [
           "Server"
@@ -2076,102 +2225,6 @@
                 }
               }
             }
-          }
-        }
-      }
-    },
-    "/api/v1/test-hooks/seed-missing-backup-operation": {
-      "post": {
-        "tags": [
-          "TestHooks"
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SeedMissingBackupOperationRequest"
-              }
-            },
-            "text/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SeedMissingBackupOperationRequest"
-              }
-            },
-            "application/*+json": {
-              "schema": {
-                "$ref": "#/components/schemas/SeedMissingBackupOperationRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "text/plain": {
-                "schema": {
-                  "$ref": "#/components/schemas/BackupDto"
-                }
-              },
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BackupDto"
-                }
-              },
-              "text/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BackupDto"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/test-hooks/delay-next-backup-before-poll": {
-      "post": {
-        "tags": [
-          "TestHooks"
-        ],
-        "responses": {
-          "200": {
-            "description": "OK"
-          }
-        }
-      }
-    },
-    "/api/v1/test-hooks/delay-next-restore-before-poll": {
-      "post": {
-        "tags": [
-          "TestHooks"
-        ],
-        "responses": {
-          "200": {
-            "description": "OK"
-          }
-        }
-      }
-    },
-    "/api/v1/test-hooks/crash": {
-      "post": {
-        "tags": [
-          "TestHooks"
-        ],
-        "responses": {
-          "200": {
-            "description": "OK"
-          }
-        }
-      }
-    },
-    "/api/v1/test-hooks/delete-sqlite-and-crash": {
-      "post": {
-        "tags": [
-          "TestHooks"
-        ],
-        "responses": {
-          "200": {
-            "description": "OK"
           }
         }
       }
@@ -2547,6 +2600,31 @@
         },
         "additionalProperties": false
       },
+      "ApplicationLogEntryDtoPagedResultDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApplicationLogEntryDto"
+            },
+            "nullable": true
+          },
+          "offset": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "limit": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "totalCount": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
       "AuditEntryDto": {
         "type": "object",
         "properties": {
@@ -2580,6 +2658,31 @@
             "nullable": true
           },
           "details": { }
+        },
+        "additionalProperties": false
+      },
+      "AuditEntryDtoPagedResultDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuditEntryDto"
+            },
+            "nullable": true
+          },
+          "offset": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "limit": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "totalCount": {
+            "type": "integer",
+            "format": "int32"
+          }
         },
         "additionalProperties": false
       },
@@ -2702,6 +2805,170 @@
               "$ref": "#/components/schemas/BackupTableDto"
             },
             "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "BackupExport": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "triggerType": {
+            "$ref": "#/components/schemas/BackupTriggerType"
+          },
+          "status": {
+            "$ref": "#/components/schemas/BackupRunStatus"
+          },
+          "backupType": {
+            "$ref": "#/components/schemas/BackupType"
+          },
+          "sourceClusterId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "targetId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "policyId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "scheduleId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "manualRequestJson": {
+            "type": "string",
+            "nullable": true
+          },
+          "requestedByUserId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "requestedByName": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "queuedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "completedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "error": {
+            "type": "string",
+            "nullable": true
+          },
+          "failureReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "isPinned": {
+            "type": "boolean"
+          },
+          "pinnedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "pinnedByUserId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "pinnedByName": {
+            "type": "string",
+            "nullable": true
+          },
+          "deletionReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "deletionRequestedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "deletionStartedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "deletedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "deletionError": {
+            "type": "string",
+            "nullable": true
+          },
+          "deletionAttemptCount": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BackupGarbageCollectorStatusDto": {
+        "type": "object",
+        "properties": {
+          "isRunning": {
+            "type": "boolean"
+          },
+          "currentRunReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastStartedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastCompletedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastError": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastMarkedCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "lastPendingCleanupCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "lastCleanedCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "lastFailedCount": {
+            "type": "integer",
+            "format": "int32"
           }
         },
         "additionalProperties": false
@@ -3107,7 +3374,161 @@
         },
         "additionalProperties": false
       },
+      "BackupTableExport": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "backupId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "effectiveBackupType": {
+            "$ref": "#/components/schemas/BackupType"
+          },
+          "parentFullBackupId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "parentFullBackupTableId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "database": {
+            "type": "string",
+            "nullable": true
+          },
+          "table": {
+            "type": "string",
+            "nullable": true
+          },
+          "engine": {
+            "type": "string",
+            "nullable": true
+          },
+          "dataBackedUp": {
+            "type": "boolean"
+          },
+          "schemaDefinitionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "s3Path": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "$ref": "#/components/schemas/BackupTableStatus"
+          },
+          "clickHouseOperationId": {
+            "type": "string",
+            "nullable": true
+          },
+          "clickHouseStatus": {
+            "type": "string",
+            "nullable": true
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "completedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "error": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
       "BackupTableShardDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "backupTableId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "effectiveBackupType": {
+            "$ref": "#/components/schemas/BackupType"
+          },
+          "parentFullBackupId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "parentFullBackupTableShardId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "sourceShardNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "sourceShardName": {
+            "type": "string",
+            "nullable": true
+          },
+          "replicaNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "host": {
+            "type": "string",
+            "nullable": true
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "useTls": {
+            "type": "boolean"
+          },
+          "s3Path": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "$ref": "#/components/schemas/BackupTableStatus"
+          },
+          "clickHouseOperationId": {
+            "type": "string",
+            "nullable": true
+          },
+          "clickHouseStatus": {
+            "type": "string",
+            "nullable": true
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "completedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "error": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "BackupTableShardExport": {
         "type": "object",
         "properties": {
           "id": {
@@ -3390,7 +3811,8 @@
           }
         },
         "additionalProperties": false
-      },      "ClusterConnectionTestResult": {
+      },
+      "ClusterConnectionTestResult": {
         "type": "object",
         "properties": {
           "clusterId": {
@@ -3465,6 +3887,10 @@
           },
           "mode": {
             "$ref": "#/components/schemas/ClusterMode"
+          },
+          "clickHouseClusterName": {
+            "type": "string",
+            "nullable": true
           },
           "accessNodes": {
             "type": "array",
@@ -3866,17 +4292,52 @@
             },
             "nullable": true
           },
-          "audits": {
+          "schemaDefinitions": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/AuditEntryDto"
+              "$ref": "#/components/schemas/SchemaDefinitionExport"
             },
             "nullable": true
           },
-          "logs": {
+          "backups": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/ApplicationLogEntryDto"
+              "$ref": "#/components/schemas/BackupExport"
+            },
+            "nullable": true
+          },
+          "backupTables": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BackupTableExport"
+            },
+            "nullable": true
+          },
+          "backupTableShards": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BackupTableShardExport"
+            },
+            "nullable": true
+          },
+          "restores": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RestoreExport"
+            },
+            "nullable": true
+          },
+          "restoreTables": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RestoreTableExport"
+            },
+            "nullable": true
+          },
+          "restoreTableShards": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RestoreTableShardExport"
             },
             "nullable": true
           }
@@ -4258,6 +4719,86 @@
         },
         "additionalProperties": false
       },
+      "RestoreExport": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "backupId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "targetClusterId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RestoreRunStatus"
+          },
+          "append": {
+            "type": "boolean"
+          },
+          "allowSchemaMismatch": {
+            "type": "boolean"
+          },
+          "layout": {
+            "$ref": "#/components/schemas/RestoreLayout"
+          },
+          "sourceShard": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "targetShard": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "requestJson": {
+            "type": "string",
+            "nullable": true
+          },
+          "requestedByUserId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "requestedByName": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "queuedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "completedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "error": {
+            "type": "string",
+            "nullable": true
+          },
+          "failureReason": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
       "RestoreLayout": {
         "enum": [
           "Preserve",
@@ -4351,6 +4892,78 @@
             "items": {
               "$ref": "#/components/schemas/RestoreTableShardDto"
             },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "RestoreTableExport": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "restoreId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "backupTableId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sourceDatabase": {
+            "type": "string",
+            "nullable": true
+          },
+          "sourceTable": {
+            "type": "string",
+            "nullable": true
+          },
+          "targetDatabase": {
+            "type": "string",
+            "nullable": true
+          },
+          "targetTable": {
+            "type": "string",
+            "nullable": true
+          },
+          "append": {
+            "type": "boolean"
+          },
+          "allowSchemaMismatch": {
+            "type": "boolean"
+          },
+          "schemaOnly": {
+            "type": "boolean"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RestoreTableStatus"
+          },
+          "clickHouseOperationId": {
+            "type": "string",
+            "nullable": true
+          },
+          "clickHouseStatus": {
+            "type": "string",
+            "nullable": true
+          },
+          "warning": {
+            "type": "string",
+            "nullable": true
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "completedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "error": {
+            "type": "string",
             "nullable": true
           }
         },
@@ -4474,6 +5087,94 @@
         },
         "additionalProperties": false
       },
+      "RestoreTableShardExport": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "restoreTableId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "backupTableShardId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sourceShardNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "targetShardNumber": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "targetShardName": {
+            "type": "string",
+            "nullable": true
+          },
+          "targetReplicaNumber": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "targetHost": {
+            "type": "string",
+            "nullable": true
+          },
+          "targetPort": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "targetUseTls": {
+            "type": "boolean"
+          },
+          "layoutRole": {
+            "type": "string",
+            "nullable": true
+          },
+          "restoreDatabase": {
+            "type": "string",
+            "nullable": true
+          },
+          "restoreTableName": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "$ref": "#/components/schemas/RestoreTableStatus"
+          },
+          "clickHouseOperationId": {
+            "type": "string",
+            "nullable": true
+          },
+          "clickHouseStatus": {
+            "type": "string",
+            "nullable": true
+          },
+          "warning": {
+            "type": "string",
+            "nullable": true
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "completedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "error": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
       "RestoreTableStatus": {
         "enum": [
           "Queued",
@@ -4510,16 +5211,16 @@
         },
         "additionalProperties": false
       },
-      "SeedMissingBackupOperationRequest": {
+      "SchemaDefinitionExport": {
         "type": "object",
         "properties": {
-          "sourceClusterId": {
+          "id": {
             "type": "string",
             "format": "uuid"
           },
-          "targetId": {
+          "schemaHash": {
             "type": "string",
-            "format": "uuid"
+            "nullable": true
           },
           "database": {
             "type": "string",
@@ -4529,9 +5230,21 @@
             "type": "string",
             "nullable": true
           },
-          "shardCount": {
-            "type": "integer",
-            "format": "int32"
+          "engine": {
+            "type": "string",
+            "nullable": true
+          },
+          "createTableSql": {
+            "type": "string",
+            "nullable": true
+          },
+          "columnsJson": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
           }
         },
         "additionalProperties": false
@@ -4871,6 +5584,9 @@
       "name": "Audit"
     },
     {
+      "name": "BackupGarbageCollector"
+    },
+    {
       "name": "Backups"
     },
     {
@@ -4904,11 +5620,7 @@
       "name": "Targets"
     },
     {
-      "name": "TestHooks"
-    },
-    {
       "name": "Users"
     }
   ]
 }
-

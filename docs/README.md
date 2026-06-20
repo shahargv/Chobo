@@ -19,3 +19,5 @@ Additional local-development material:
 - [System test suite](SystemTestSuite.md)
 - [Codex development notes](CodexDevelopment.md)
 
+
+Data export/import excludes audit entries and application logs, and imported ClickHouse/S3 credentials must be re-entered so they are encrypted with the current server key.

@@ -7,6 +7,7 @@ function Get-ChoboDeclarativeTokens {
         RunId = $Context.RunId
         TestName = $Context.TestName
         TestId = $Context.TestId
+        TestOutput = $Context.OutputDirectory
     }
 
     Ensure-ChoboContextVariables -Context $Context
@@ -318,7 +319,7 @@ function Invoke-ChoboDeclarativeCliStep {
     } while ((Get-Date) -lt $deadline)
 
     if ($lastError) {
-        throw $lastError
+        throw "Step '$Name' failed: $lastError"
     }
 
     if ($Step.ContainsKey('SaveJsonAs')) {
@@ -393,7 +394,7 @@ function Invoke-ChoboDeclarativeShellStep {
     } while ((Get-Date) -lt $deadline)
 
     if ($lastError) {
-        throw $lastError
+        throw "Step '$Name' failed: $lastError"
     }
 }
 

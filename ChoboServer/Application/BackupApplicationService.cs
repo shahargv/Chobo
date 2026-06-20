@@ -186,10 +186,11 @@ public sealed class BackupApplicationService(
             return BackupRestoreMapping.ToDto(backup);
         }
 
+        List<BackupEntity> dependents = [];
         if (dependentBackupIds.Count > 0)
         {
             var deletedStatuses = DeletedStatuses;
-            var dependents = await db.Backups
+            dependents = await db.Backups
                 .Where(x => dependentBackupIds.Contains(x.Id) && !deletedStatuses.Contains(x.Status))
                 .ToListAsync(cancellationToken);
             foreach (var dependent in dependents)
@@ -198,7 +199,6 @@ public sealed class BackupApplicationService(
                 dependent.DeletionReason = force ? "manual-parent-force" : "manual-parent";
                 dependent.DeletionRequestedAt ??= DateTimeOffset.UtcNow;
                 dependent.DeletionError = null;
-                await audit.RecordAsync("dependent-delete-requested", AuditEntityType.Backup, dependent.Id.ToString(), new { parentBackupId = id, force });
             }
         }
 
@@ -207,6 +207,10 @@ public sealed class BackupApplicationService(
         backup.DeletionRequestedAt ??= DateTimeOffset.UtcNow;
         backup.DeletionError = null;
         await db.SaveChangesAsync(cancellationToken);
+        foreach (var dependent in dependents)
+        {
+            await audit.RecordAsync("dependent-delete-requested", AuditEntityType.Backup, dependent.Id.ToString(), new { parentBackupId = id, force });
+        }
         await audit.RecordAsync("delete-requested", AuditEntityType.Backup, id.ToString(), new { operationId = id, reason = backup.DeletionReason, force, backup.IsPinned });
         return BackupRestoreMapping.ToDto(backup);
     }
@@ -345,3 +349,4 @@ public sealed class BackupApplicationService(
         return options;
     }
 }
+

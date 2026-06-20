@@ -122,7 +122,7 @@ export function RestoreWizard() {
   });
 
   return (
-    <Page title="Start restore" action={<Link className="secondary" to="/restores"><ArrowLeft size={16} /> Restore history</Link>}>
+    <Page title="Start restore" subtitle="Choose a backup, destination cluster, tables, and shard layout for a restore." action={<Link className="secondary" to="/restores"><ArrowLeft size={16} /> Restore history</Link>}>
       <section className="restore-workbench">
         <div className="restore-main panel">
           <RestoreStepper step={step} errors={restoreErrors} onStep={setStep} />

@@ -113,13 +113,13 @@ public sealed class ClickHouseAdapter(ICredentialProtector protector, IEndpointR
 
     public async Task ExecuteAsync(ClickHouseClusterEntity cluster, string sql, CancellationToken cancellationToken)
     {
-        _logger.Information("Executing ClickHouse command on cluster {ClusterId}: {SqlPreview}", cluster.Id, Preview(sql));
+        _logger.Information("Executing ClickHouse command on cluster {ClusterId}: {SqlPreview}", cluster.Id, SqlLogRedactor.Preview(sql));
         await QueryAsync(cluster, sql, cancellationToken);
     }
 
     public async Task ExecuteAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string sql, CancellationToken cancellationToken)
     {
-        _logger.Information("Executing ClickHouse command on {Host}:{Port} for cluster {ClusterId}: {SqlPreview}", endpoint.Host, endpoint.Port, cluster.Id, Preview(sql));
+        _logger.Information("Executing ClickHouse command on {Host}:{Port} for cluster {ClusterId}: {SqlPreview}", endpoint.Host, endpoint.Port, cluster.Id, SqlLogRedactor.Preview(sql));
         await QueryAsync(endpoint, cluster, sql, cancellationToken);
     }
 
@@ -195,7 +195,7 @@ public sealed class ClickHouseAdapter(ICredentialProtector protector, IEndpointR
             : $" SETTINGS base_backup = {ClickHouseSql.S3(S3Endpoint(target, baseBackupPath), accessKey, secretKey)}";
         var sql = $"BACKUP TABLE {ClickHouseSql.Qualified(table.Database, table.Table)} TO {ClickHouseSql.S3(s3, accessKey, secretKey)}{settings} ASYNC";
         _logger.Information("Submitting ClickHouse backup for {Database}.{Table} shard {ShardNumber} on {Host}:{Port} to {S3Path}.", table.Database, table.Table, shard.SourceShardNumber, endpoint.Host, endpoint.Port, shard.S3Path);
-        return await StartOperationAsync(endpoint, cluster, sql, cancellationToken);
+        return await StartOperationAsync(endpoint, cluster, sql, [accessKey, secretKey], cancellationToken);
     }
 
     public async Task<ClickHouseOperationResult> StartRestoreAsync(ClickHouseClusterEntity cluster, BackupTargetEntity target, RestoreTableEntity table, BackupTableEntity backupTable, CancellationToken cancellationToken)
@@ -215,7 +215,7 @@ public sealed class ClickHouseAdapter(ICredentialProtector protector, IEndpointR
         var secretKey = await protector.DecryptAsync(target.EncryptedSecretKey, target.EncryptedSecretKeyKeyId, cancellationToken) ?? "";
         var sql = $"RESTORE TABLE {from} AS {to} FROM {ClickHouseSql.S3(s3, accessKey, secretKey)} ASYNC";
         _logger.Information("Submitting ClickHouse restore for {SourceDatabase}.{SourceTable} source shard {SourceShard} to {TargetDatabase}.{TargetTable} on {Host}:{Port}.", backupTable.Database, backupTable.Table, backupShard.SourceShardNumber, shard.RestoreDatabase, shard.RestoreTableName, endpoint.Host, endpoint.Port);
-        return await StartOperationAsync(endpoint, cluster, sql, cancellationToken);
+        return await StartOperationAsync(endpoint, cluster, sql, [accessKey, secretKey], cancellationToken);
     }
 
     public async Task<ClickHouseOperationStatus> GetOperationStatusAsync(ClickHouseClusterEntity cluster, string operationId, CancellationToken cancellationToken)
@@ -262,9 +262,9 @@ public sealed class ClickHouseAdapter(ICredentialProtector protector, IEndpointR
         await QueryAsync(endpoint, cluster, $"KILL QUERY WHERE query_id = {ClickHouseSql.Literal(queryId)} ASYNC", cancellationToken);
     }
 
-    private async Task<ClickHouseOperationResult> StartOperationAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string sql, CancellationToken cancellationToken)
+    private async Task<ClickHouseOperationResult> StartOperationAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string sql, IReadOnlyList<string>? sensitiveValues, CancellationToken cancellationToken)
     {
-        var rows = await QueryAsync(endpoint, cluster, sql, cancellationToken);
+        var rows = await QueryAsync(endpoint, cluster, sql, cancellationToken, sensitiveValues);
         if (rows.Count == 0 || rows[0].Count < 2)
         {
             throw new InvalidOperationException("ClickHouse did not return an async operation id.");
@@ -302,7 +302,7 @@ public sealed class ClickHouseAdapter(ICredentialProtector protector, IEndpointR
         return await QueryAsync(ToEndpoint(FirstAccessNode(cluster)), cluster, sql, cancellationToken);
     }
 
-    private async Task<List<List<string>>> QueryAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string sql, CancellationToken cancellationToken)
+    private async Task<List<List<string>>> QueryAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string sql, CancellationToken cancellationToken, IReadOnlyList<string>? sensitiveValues = null)
     {
         var effectiveEndpoint = endpointRewrites.RewriteClickHouseEndpointForServer(endpoint);
         var settings = await CreateSettingsAsync(effectiveEndpoint, cluster, cancellationToken);
@@ -331,7 +331,7 @@ public sealed class ClickHouseAdapter(ICredentialProtector protector, IEndpointR
         }
         catch (Exception ex)
         {
-            _logger.Error(ex, "ClickHouse query failed on {Host}:{Port}: {Message}. SQL: {SqlPreview}", effectiveEndpoint.Host, settings.Port, ex.Message, Preview(sql));
+            _logger.Error(ex, "ClickHouse query failed on {Host}:{Port}: {Message}. SQL: {SqlPreview}", effectiveEndpoint.Host, settings.Port, ex.Message, SqlLogRedactor.Preview(sql, sensitiveValues));
             throw new InvalidOperationException(ex.Message, ex);
         }
     }
@@ -361,9 +361,21 @@ public sealed class ClickHouseAdapter(ICredentialProtector protector, IEndpointR
             _ => endpoint.Port
         });
 
-    private static string Preview(string sql)
+    private static string Preview(string sql, IReadOnlyList<string>? sensitiveValues = null)
     {
-        var compact = string.Join(' ', sql.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var redacted = sql;
+        foreach (var value in sensitiveValues ?? [])
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                continue;
+            }
+
+            redacted = redacted.Replace(ClickHouseSql.Literal(value), "'***REDACTED***'", StringComparison.Ordinal);
+            redacted = redacted.Replace(value, "***REDACTED***", StringComparison.Ordinal);
+        }
+
+        var compact = string.Join(' ', redacted.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
         return compact.Length <= 400 ? compact : compact[..400] + "...";
     }
 
@@ -393,3 +405,6 @@ public sealed class ClickHouseAdapter(ICredentialProtector protector, IEndpointR
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
 }
+
+
+

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Chobo OpenAPI Refresh"
+  short_description: "Refresh and verify Chobo API contracts"
+  default_prompt: "Use $chobo-openapi-refresh to update Chobo OpenAPI and generated TypeScript after API changes."

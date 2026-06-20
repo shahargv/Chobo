@@ -5,7 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace ChoboServer.Controllers;
 
 [ApiController]
-public sealed class ImportExportController(IExportImportService exports, IAuditService audit) : ControllerBase
+public sealed class ImportExportController(IExportImportService exports) : ControllerBase
 {
     [HttpGet(ChoboApi.ApiPrefix + "/data/export")]
     public Task<ExportEnvelope> ExportData() => exports.ExportAsync(configOnly: false);
@@ -16,7 +16,6 @@ public sealed class ImportExportController(IExportImportService exports, IAuditS
         try
         {
             await exports.ImportAsync(envelope, configOnly: false);
-            await audit.RecordAsync("import", AuditEntityType.Data, null, new { envelope.ExportVersion, envelope.SchemaVersion });
             return NoContent();
         }
         catch (InvalidOperationException ex)
@@ -34,7 +33,6 @@ public sealed class ImportExportController(IExportImportService exports, IAuditS
         try
         {
             await exports.ImportAsync(envelope, configOnly: true);
-            await audit.RecordAsync("import", AuditEntityType.Config, null, new { envelope.ExportVersion, envelope.SchemaVersion });
             return NoContent();
         }
         catch (InvalidOperationException ex)

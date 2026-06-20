@@ -202,6 +202,10 @@ public sealed class BackupsGarbageCollectorBackgroundService(
             dependent.DeletionReason = reason;
             dependent.DeletionRequestedAt ??= now;
             dependent.DeletionError = null;
+        }
+        await db.SaveChangesAsync(cancellationToken);
+        foreach (var dependent in dependents)
+        {
             await audit.RecordAsync("dependent-failed-backup-garbage-collection-requested", AuditEntityType.Backup, dependent.Id.ToString(), new { parentBackupId = fullBackupId, reason });
         }
 
@@ -231,6 +235,10 @@ public sealed class BackupsGarbageCollectorBackgroundService(
             orphan.DeletionReason = "orphaned-incremental-parent-missing";
             orphan.DeletionRequestedAt ??= now;
             orphan.DeletionError = null;
+        }
+        await db.SaveChangesAsync(cancellationToken);
+        foreach (var orphan in orphans)
+        {
             await audit.RecordAsync("orphaned-incremental-garbage-collection-requested", AuditEntityType.Backup, orphan.Id.ToString(), new { reason = orphan.DeletionReason });
         }
 
@@ -266,5 +274,6 @@ public sealed class BackupsGarbageCollectorBackgroundService(
         await Task.WhenAll(tasks);
     }
 }
+
 
 
