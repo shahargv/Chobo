@@ -645,6 +645,15 @@ pre, .token-box {
   text-align: left;
 }
 .restore-choice:hover { border-color: #8dc9d6; }
+.restore-choice:disabled,
+.restore-choice.disabled {
+  cursor: not-allowed;
+  background: #f3f6f6;
+  color: var(--muted);
+  border-color: var(--border);
+  box-shadow: none;
+}
+.restore-choice:disabled:hover { border-color: var(--border); }
 .restore-choice.selected {
   background: #eef8fa;
   border-color: var(--accent);

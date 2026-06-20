@@ -43,7 +43,7 @@ export function BackupChoiceStep({ backups, selectedBackupId, onSelect, clusterN
   );
 }
 
-export function DestinationStep({ request, onChange, clusters, targetShardOptions, selectedTargetShards, onTargetShardsChange, targetShardsLoading }: { request: InitiateRestoreRequest; onChange: (request: InitiateRestoreRequest) => void; clusters: Array<{ id: string; name: string }>; targetShardOptions: TargetShardOption[]; selectedTargetShards: number[]; onTargetShardsChange: (value: number[]) => void; targetShardsLoading: boolean }) {
+export function DestinationStep({ request, onChange, clusters, targetShardOptions, selectedTargetShards, onTargetShardsChange, targetShardsLoading, preserveLayoutDisabled, preserveLayoutReason }: { request: InitiateRestoreRequest; onChange: (request: InitiateRestoreRequest) => void; clusters: Array<{ id: string; name: string }>; targetShardOptions: TargetShardOption[]; selectedTargetShards: number[]; onTargetShardsChange: (value: number[]) => void; targetShardsLoading: boolean; preserveLayoutDisabled: boolean; preserveLayoutReason: string | null }) {
   return (
     <div className="restore-step-content">
       <StepIntro icon={<GitBranch size={20} />} title="Choose the destination and layout" body="The target cluster receives new or appended tables. Chobo records this as a restore operation and writes audit entries when it is queued and executed." />
@@ -51,7 +51,7 @@ export function DestinationStep({ request, onChange, clusters, targetShardOption
         <Select label="Target cluster" value={request.targetClusterId} onChange={(value) => onChange({ ...request, targetClusterId: value })} options={clusters.map((cluster) => [cluster.id, cluster.name])} />
       </div>
       <div className="restore-choice-grid">
-        <LayoutChoice value="Preserve" selected={request.layout ?? "Preserve"} title="Preserve layout" body="Restore each selected source shard to the matching target shard. Best when the target cluster has the same topology." onSelect={(layout) => onChange({ ...request, layout })} />
+        <LayoutChoice value="Preserve" selected={request.layout ?? "Preserve"} title="Preserve layout" body="Restore each selected source shard to the matching target shard. Available only when those shard numbers exist on the target cluster." disabled={preserveLayoutDisabled} disabledReason={preserveLayoutReason} onSelect={(layout) => onChange({ ...request, layout })} />
         <LayoutChoice value="Redistribute" selected={request.layout ?? "Preserve"} title="Redistribute" body="Spread restored data across selected target shards. Choose one shard here when you intentionally want all restored data placed there." onSelect={(layout) => onChange({ ...request, layout })} />
         <LayoutChoice value="SingleNode" selected={request.layout ?? "Preserve"} title="Single node" body="Restore into one target node. Useful for inspection, recovery drills, or extracting a small subset." onSelect={(layout) => onChange({ ...request, layout })} />
       </div>
@@ -60,8 +60,8 @@ export function DestinationStep({ request, onChange, clusters, targetShardOption
   );
 }
 
-function LayoutChoice({ value, selected, title, body, onSelect }: { value: RestoreLayout; selected: RestoreLayout; title: string; body: string; onSelect: (value: RestoreLayout) => void }) {
-  return <button type="button" className={`restore-choice ${selected === value ? "selected" : ""}`} onClick={() => onSelect(value)}><strong>{title}</strong><span>{body}</span></button>;
+function LayoutChoice({ value, selected, title, body, disabled, disabledReason, onSelect }: { value: RestoreLayout; selected: RestoreLayout; title: string; body: string; disabled?: boolean; disabledReason?: string | null; onSelect: (value: RestoreLayout) => void }) {
+  return <button type="button" disabled={disabled} className={`restore-choice ${selected === value ? "selected" : ""} ${disabled ? "disabled" : ""}`} onClick={() => onSelect(value)}><strong>{title}</strong><span>{disabled && disabledReason ? disabledReason : body}</span></button>;
 }
 
 export function ScopeStep({ backup, mappings, onMappingsChange, sourceShardOptions, selectedSourceShards, onSourceShardsChange }: { backup: BackupDto | null; mappings: RestoreMappingDraft[]; onMappingsChange: (mappings: RestoreMappingDraft[]) => void; sourceShardOptions: SourceShardOption[]; selectedSourceShards: number[]; onSourceShardsChange: (value: number[]) => void }) {
@@ -94,7 +94,7 @@ export function ReviewStep({ backup, targetClusterName, request, mappings, sourc
           const table = backup?.tables.find((item) => item.id === mapping.backupTableId);
           return <tr key={mapping.backupTableId}>
             <td>{table ? `${table.database}.${table.table}` : mapping.backupTableId}</td>
-            <td>{mapping.targetDatabase}.{restoreTargetTableName(mapping.targetTable ?? "")}</td>
+            <td>{mapping.targetDatabase}.{mapping.targetTable}</td>
             <td>{mapping.schemaOnly ? "Schema only" : "Schema + data"}</td>
             <td>{mapping.schemaOnly ? "No" : mapping.append ? "Yes" : "No"}</td>
             <td>{mapping.allowSchemaMismatch ? "Allowed" : "Blocked"}</td>

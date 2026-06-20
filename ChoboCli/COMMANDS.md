@@ -192,7 +192,7 @@ For MergeTree-family tables in `Cluster` mode, one logical backup table contains
 
 Restore layout controls:
 
-- `preserve`: default. Source shard N restores to target shard N when source and target shard counts match. If counts differ, the request fails with a clear message unless another layout is chosen.
+- `preserve`: default. Source shard N restores to target shard N. It is valid for a different target cluster only when every selected source shard number exists on the target cluster; otherwise choose `redistribute`.
 - `redistribute`: maps selected source shards across the target topology in target shard order. This is the explicit choice for restoring from one shard count to another.
 - `single-node`: restores selected source shards through the first target node, useful for sharded-to-standalone restore or single-shard extraction.
 - `--source-shard <n>` limits restore to one backed-up source shard.
@@ -227,3 +227,4 @@ ChoboCli config import --file .\chobo-config.json
 ```
 
 `data` includes logs and audits. `config` excludes logs and audits.
+

@@ -7,7 +7,7 @@ import { useApi } from "../../api-context";
 import { Page } from "../../components/ui";
 import type { RestoreMappingDraft, RestoreStep } from "./restoreTypes";
 import { BackupChoiceStep, DestinationStep, ImpactSummary, RestoreStepper, ReviewStep, ScopeStep } from "./RestoreWizardSteps";
-import { getRequestedBackupId, getSourceShardOptions, getTargetShardOptions, restoreTargetTableName, validateRestoreRequest, validateStep } from "./restoreUtils";
+import { getMissingPreserveTargetShards, getRequestedBackupId, getSourceShardOptions, getTargetShardOptions, restoreTargetTableName, validateRestoreRequest, validateStep } from "./restoreUtils";
 
 export function RestoreWizard() {
   const { api, showToast } = useApi();
@@ -26,15 +26,22 @@ export function RestoreWizard() {
   const targetTopology = useQuery({
     queryKey: ["cluster-topology", request.targetClusterId],
     queryFn: () => api.clusterTopology(request.targetClusterId),
-    enabled: Boolean(request.targetClusterId) && isRedistribute
+    enabled: Boolean(request.targetClusterId)
   });
   const clusterById = useMemo(() => new Map((clusters.data ?? []).map((cluster) => [cluster.id, cluster])), [clusters.data]);
   const selectedBackup = (backups.data ?? []).find((backup) => backup.id === request.backupId) ?? null;
   const sourceShardOptions = useMemo(() => getSourceShardOptions(selectedBackup), [selectedBackup]);
   const targetShardOptions = useMemo(() => getTargetShardOptions(targetTopology.data?.shards), [targetTopology.data]);
+  const isDifferentCluster = Boolean(selectedBackup && request.targetClusterId && selectedBackup.sourceClusterId !== request.targetClusterId);
+  const preserveMissingTargetShards = isDifferentCluster && targetTopology.isSuccess ? getMissingPreserveTargetShards(selectedSourceShards, targetShardOptions) : [];
+  const preserveLayoutError = isDifferentCluster && targetTopology.isFetching
+    ? "Preserve layout is checking target topology."
+    : preserveMissingTargetShards.length > 0 ? `Preserve layout needs target shard${preserveMissingTargetShards.length === 1 ? "" : "s"} ${preserveMissingTargetShards.join(", ")}. Choose redistribute for this target cluster.` : null;
+  const preserveLayoutDisabled = Boolean(preserveLayoutError);
+  const preserveLayoutReason = preserveLayoutError;
   const selectedMappings = mappings.filter((mapping) => mapping.selected);
-  const restoreErrors = validateRestoreRequest(request, mappings, selectedSourceShards, sourceShardOptions.length, selectedTargetShards, targetShardOptions.length);
-  const stepErrors = validateStep(step, request, mappings, selectedSourceShards, sourceShardOptions.length, selectedTargetShards, targetShardOptions.length);
+  const restoreErrors = validateRestoreRequest(request, mappings, selectedSourceShards, sourceShardOptions.length, selectedTargetShards, targetShardOptions.length, preserveLayoutError);
+  const stepErrors = validateStep(step, request, mappings, selectedSourceShards, sourceShardOptions.length, selectedTargetShards, targetShardOptions.length, preserveLayoutError);
 
   useEffect(() => {
     if (!requestedBackupId || request.backupId || !(backups.data ?? []).some((backup) => backup.id === requestedBackupId)) return;
@@ -60,6 +67,12 @@ export function RestoreWizard() {
     })));
     setSelectedSourceShards(getSourceShardOptions(selectedBackup).map((shard) => shard.value));
   }, [selectedBackup?.id]);
+
+  useEffect(() => {
+    if ((request.layout ?? "Preserve") === "Preserve" && preserveMissingTargetShards.length > 0) {
+      setRequest((current) => ({ ...current, layout: "Redistribute" }));
+    }
+  }, [preserveMissingTargetShards, request.layout]);
 
   useEffect(() => {
     if (!isRedistribute) {
@@ -89,7 +102,7 @@ export function RestoreWizard() {
     tables: selectedMappings.map(({ selected: _, ...mapping }) => ({
       ...mapping,
       targetDatabase: mapping.targetDatabase || null,
-      targetTable: mapping.targetTable ? restoreTargetTableName(mapping.targetTable) : null,
+      targetTable: mapping.targetTable || null,
       append: mapping.schemaOnly ? false : mapping.append ?? false,
       allowSchemaMismatch: mapping.allowSchemaMismatch ?? false,
       schemaOnly: mapping.schemaOnly ?? false
@@ -114,7 +127,7 @@ export function RestoreWizard() {
           <RestoreStepper step={step} errors={restoreErrors} onStep={setStep} />
           <div className="restore-step-body">
             {step === 0 && <BackupChoiceStep backups={backups.data ?? []} selectedBackupId={request.backupId} onSelect={(backupId) => setRequest({ ...request, backupId })} clusterName={(clusterId) => clusterById.get(clusterId)?.name ?? clusterId} />}
-            {step === 1 && <DestinationStep request={request} onChange={setRequest} clusters={clusters.data ?? []} targetShardOptions={targetShardOptions} selectedTargetShards={selectedTargetShards} onTargetShardsChange={setSelectedTargetShards} targetShardsLoading={targetTopology.isFetching} />}
+            {step === 1 && <DestinationStep request={request} onChange={setRequest} clusters={clusters.data ?? []} targetShardOptions={targetShardOptions} selectedTargetShards={selectedTargetShards} onTargetShardsChange={setSelectedTargetShards} targetShardsLoading={targetTopology.isFetching} preserveLayoutDisabled={preserveLayoutDisabled} preserveLayoutReason={preserveLayoutReason} />}
             {step === 2 && <ScopeStep backup={selectedBackup} mappings={mappings} onMappingsChange={setMappings} sourceShardOptions={sourceShardOptions} selectedSourceShards={selectedSourceShards} onSourceShardsChange={setSelectedSourceShards} />}
             {step === 3 && <ReviewStep backup={selectedBackup} targetClusterName={clusterById.get(request.targetClusterId)?.name ?? request.targetClusterId} request={request} mappings={selectedMappings} sourceShardOptions={sourceShardOptions} selectedSourceShards={selectedSourceShards} targetShardOptions={targetShardOptions} selectedTargetShards={selectedTargetShards} errors={restoreErrors} />}
           </div>
