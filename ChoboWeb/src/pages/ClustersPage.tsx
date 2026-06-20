@@ -1,16 +1,29 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { useParams } from "react-router-dom";
 import type { ClusterDto, UpsertClusterRequest } from "../api/generated";
 import { useApi } from "../api-context";
 import { CrudPage, DataTable, Input, Select } from "../components/ui";
 export function Clusters() {
   const { api, showToast } = useApi();
+  const { clusterId } = useParams();
   const clusters = useQuery({ queryKey: ["clusters"], queryFn: () => api.clusters() });
   const [showForm, setShowForm] = useState(false);
   const [modifyCredentials, setModifyCredentials] = useState(true);
   const [editing, setEditing] = useState<ClusterDto | null>(null);
   const [draft, setDraft] = useState<UpsertClusterRequest>({ name: "", mode: "SingleInstance", accessNodes: [{ host: "localhost", port: 9000, useTls: false }], userName: null, password: null });
   const clickHouseNames = useQuery({ queryKey: ["clickhouse-cluster-names", editing?.id], queryFn: () => api.clickHouseClusterNames(editing!.id), enabled: !!editing && draft.mode === "Cluster", retry: false });
+  const editCluster = (cluster: ClusterDto) => {
+    setEditing(cluster);
+    setShowForm(true);
+    setModifyCredentials(false);
+    setDraft({ name: cluster.name, mode: cluster.mode, accessNodes: cluster.accessNodes.map((node) => ({ host: node.host, port: node.port, useTls: node.useTls })), userName: null, password: null, backupRestoreMaxDop: cluster.backupRestoreMaxDop, clickHouseClusterName: cluster.clickHouseClusterName });
+  };
+  useEffect(() => {
+    if (!clusterId || !clusters.data) return;
+    const cluster = clusters.data.find((item) => item.id === clusterId);
+    if (cluster) editCluster(cluster);
+  }, [clusterId, clusters.data]);
   const reset = () => {
     setShowForm(false);
     setEditing(null);
@@ -36,12 +49,7 @@ export function Clusters() {
       {editing && <label className="checkbox-row"><input type="checkbox" checked={modifyCredentials} onChange={(event) => setModifyCredentials(event.target.checked)} /> Modify credentials</label>}
       {(!editing || modifyCredentials) && <Input label="Username" value={draft.userName ?? ""} onChange={(value) => setDraft({ ...draft, userName: value || null })} />}
       {(!editing || modifyCredentials) && <Input label="Password" type="password" value={draft.password ?? ""} onChange={(value) => setDraft({ ...draft, password: value || null })} />}
-    </>} table={<DataTable headers={["Name", "Mode", "Access nodes", "Max DOP", "Actions"]}>{(clusters.data ?? []).map((cluster) => <tr key={cluster.id}><td>{cluster.name}</td><td>{cluster.mode}</td><td>{cluster.accessNodes.map((node) => `${node.host}:${node.port}`).join(", ")}</td><td>{cluster.backupRestoreMaxDop ?? "default"}</td><td className="actions"><button className="ghost" onClick={() => {
-      setEditing(cluster);
-      setShowForm(true);
-      setModifyCredentials(false);
-      setDraft({ name: cluster.name, mode: cluster.mode, accessNodes: cluster.accessNodes.map((node) => ({ host: node.host, port: node.port, useTls: node.useTls })), userName: null, password: null, backupRestoreMaxDop: cluster.backupRestoreMaxDop, clickHouseClusterName: cluster.clickHouseClusterName });
-    }}>Edit</button><button className="ghost" onClick={() => api.testCluster(cluster.id).then((x) => showToast({ kind: x.succeeded ? "success" : "error", text: x.message }))}>Test</button></td></tr>)}</DataTable>} />
+    </>} table={<DataTable headers={["Name", "Mode", "Access nodes", "Max DOP", "Actions"]}>{(clusters.data ?? []).map((cluster) => <tr key={cluster.id}><td>{cluster.name}</td><td>{cluster.mode}</td><td>{cluster.accessNodes.map((node) => `${node.host}:${node.port}`).join(", ")}</td><td>{cluster.backupRestoreMaxDop ?? "default"}</td><td className="actions"><button className="ghost" onClick={() => editCluster(cluster)}>Edit</button><button className="ghost" onClick={() => api.testCluster(cluster.id).then((x) => showToast({ kind: x.succeeded ? "success" : "error", text: x.message }))}>Test</button></td></tr>)}</DataTable>} />
   );
 }
 
@@ -67,4 +75,5 @@ function clickHouseClusterNameOptions(names: string[], current?: string | null) 
   if (current && !options.includes(current)) options.unshift(current);
   return options.map((name) => [name, name]);
 }
+
 

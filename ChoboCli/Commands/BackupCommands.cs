@@ -43,6 +43,7 @@ public sealed class BackupsCommands : CliSubject
         Verb("show", "Show one backup.", ShowAsync);
         Verb("wait", "Wait for a backup to finish.", WaitAsync);
         Verb("delete", "Request deletion for one backup.", DeleteAsync);
+        Verb("cancel", "Cancel a queued or running backup.", CancelAsync);
         Verb("pin", "Pin one backup.", PinAsync);
         Verb("unpin", "Unpin one backup.", UnpinAsync);
         Verb("recover", "Recover backup metadata from storage manifests.", RecoverAsync);
@@ -64,6 +65,8 @@ public sealed class BackupsCommands : CliSubject
         return CommandHelpers.WithClient(context, client => client.DeleteAsync($"backups/{id}{force}"));
     }
 
+    private static Task<object?> CancelAsync(CommandContext context) =>
+        CommandHelpers.WithClient(context, client => client.PostAsync($"backups/{context.Command.Options.Required("--id")}/cancel", new { }));
     private static Task<object?> PinAsync(CommandContext context) =>
         CommandHelpers.WithClient(context, client => client.PostAsync($"backups/{context.Command.Options.Required("--id")}/pin", new { }));
 
@@ -141,3 +144,4 @@ public sealed class BackupsCommands : CliSubject
             BackupRunStatus.FailedBackupDeletedByGarbageCollector or
             BackupRunStatus.BackupExpiredDeleted;
 }
+

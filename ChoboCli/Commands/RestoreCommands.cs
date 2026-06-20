@@ -77,6 +77,7 @@ public sealed class RestoresCommands : CliSubject
         Verb("list", "List restores.", ListAsync);
         Verb("show", "Show one restore.", ShowAsync);
         Verb("wait", "Wait for a restore to finish.", WaitAsync);
+        Verb("cancel", "Cancel a queued or running restore.", CancelAsync);
     }
 
     public override string Name => "restores";
@@ -88,6 +89,8 @@ public sealed class RestoresCommands : CliSubject
     private static Task<object?> ShowAsync(CommandContext context) =>
         CommandHelpers.WithClient(context, client => client.GetAsync($"restores/{context.Command.Options.Required("--id")}"));
 
+    private static Task<object?> CancelAsync(CommandContext context) =>
+        CommandHelpers.WithClient(context, client => client.PostAsync($"restores/{context.Command.Options.Required("--id")}/cancel", new { }));
     private static async Task<object?> WaitAsync(CommandContext context)
     {
         using var client = await context.CreateClientAsync();
@@ -127,4 +130,5 @@ public sealed class RestoresCommands : CliSubject
     private static bool IsTerminal(RestoreRunStatus status) =>
         status is RestoreRunStatus.Succeeded or RestoreRunStatus.PartiallySucceeded or RestoreRunStatus.Failed or RestoreRunStatus.Canceled;
 }
+
 

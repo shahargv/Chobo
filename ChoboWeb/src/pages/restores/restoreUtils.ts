@@ -1,4 +1,4 @@
-import type { BackupDto, ClickHouseClusterShardDto, InitiateRestoreRequest, RestoreLayout, RestoreRunStatus } from "../../api/generated";
+import type { BackupDto, BackupRunStatus, ClickHouseClusterShardDto, InitiateRestoreRequest, RestoreLayout, RestoreRunStatus } from "../../api/generated";
 import type { RestoreMappingDraft, RestoreStep, SourceShardOption, TargetShardOption } from "./restoreTypes";
 
 export function validateStep(step: RestoreStep, request: InitiateRestoreRequest, mappings: RestoreMappingDraft[], selectedSourceShards: number[], sourceShardCount: number, selectedTargetShards: number[] = [], targetShardCount = 0, preserveLayoutError: string | null = null) {
@@ -8,6 +8,13 @@ export function validateStep(step: RestoreStep, request: InitiateRestoreRequest,
   return validateRestoreRequest(request, mappings, selectedSourceShards, sourceShardCount, selectedTargetShards, targetShardCount, preserveLayoutError);
 }
 
+export function isBackupRestorable(backup: BackupDto | null | undefined) {
+  return backup ? isBackupStatusRestorable(backup.status) : false;
+}
+
+export function isBackupStatusRestorable(status: BackupRunStatus) {
+  return status === "Succeeded" || status === "PartiallySucceeded";
+}
 export function validateRestoreRequest(request: InitiateRestoreRequest, mappings: RestoreMappingDraft[], selectedSourceShards: number[], sourceShardCount: number, selectedTargetShards: number[] = [], targetShardCount = 0, preserveLayoutError: string | null = null) {
   const errors: string[] = [];
   if (!request.backupId) errors.push("Choose a backup.");
@@ -120,4 +127,6 @@ export function getRequestedBackupId(state: unknown) {
   const backupId = (state as { backupId?: unknown }).backupId;
   return typeof backupId === "string" ? backupId : null;
 }
+
+
 

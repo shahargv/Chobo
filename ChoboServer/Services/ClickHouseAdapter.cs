@@ -35,6 +35,8 @@ public interface IClickHouseAdapter
     Task<ClickHouseOperationResult> StartRestoreShardAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, BackupTargetEntity target, RestoreTableShardEntity shard, BackupTableEntity backupTable, BackupTableShardEntity backupShard, CancellationToken cancellationToken);
     Task<ClickHouseOperationStatus> GetOperationStatusAsync(ClickHouseClusterEntity cluster, string operationId, CancellationToken cancellationToken);
     Task<ClickHouseOperationStatus> GetOperationStatusAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string operationId, CancellationToken cancellationToken);
+    Task KillQueryAsync(ClickHouseClusterEntity cluster, string queryId, CancellationToken cancellationToken);
+    Task KillQueryAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string queryId, CancellationToken cancellationToken);
 }
 
 public sealed class ClickHouseAdapter(ICredentialProtector protector, IEndpointRewriteService endpointRewrites, Serilog.ILogger logger) : IClickHouseAdapter
@@ -241,6 +243,23 @@ public sealed class ClickHouseAdapter(ICredentialProtector protector, IEndpointR
 
         _logger.Information("ClickHouse operation {OperationId} status is {Status}.", operationId, rows[0][0]);
         return new ClickHouseOperationStatus(true, rows[0][0], rows[0].Count > 1 ? rows[0][1] : null);
+    }
+
+    public async Task KillQueryAsync(ClickHouseClusterEntity cluster, string queryId, CancellationToken cancellationToken)
+    {
+        var endpoint = ToEndpoint(FirstAccessNode(cluster));
+        await KillQueryAsync(endpoint, cluster, queryId, cancellationToken);
+    }
+
+    public async Task KillQueryAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string queryId, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(queryId))
+        {
+            return;
+        }
+
+        _logger.Information("Requesting ClickHouse query cancellation for {QueryId} on {Host}:{Port} for cluster {ClusterId}.", queryId, endpoint.Host, endpoint.Port, cluster.Id);
+        await QueryAsync(endpoint, cluster, $"KILL QUERY WHERE query_id = {ClickHouseSql.Literal(queryId)} ASYNC", cancellationToken);
     }
 
     private async Task<ClickHouseOperationResult> StartOperationAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string sql, CancellationToken cancellationToken)

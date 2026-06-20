@@ -105,6 +105,17 @@ public sealed record ManualBackupRequest(
 
 public sealed record BackupListRequest(Guid? PolicyId, string? ClusterName, string? TableName, BackupRunStatus? Status);
 
+public sealed record BackupGarbageCollectorStatusDto(
+    bool IsRunning,
+    string CurrentRunReason,
+    DateTimeOffset? LastStartedAt,
+    DateTimeOffset? LastCompletedAt,
+    string? LastError,
+    int LastMarkedCount,
+    int LastPendingCleanupCount,
+    int LastCleanedCount,
+    int LastFailedCount);
+
 public sealed record RestoreDto(
     Guid Id,
     Guid BackupId,
@@ -191,4 +202,5 @@ public sealed record RestoreTableMappingRequest(
     bool? Append = null,
     bool? AllowSchemaMismatch = null,
     bool? SchemaOnly = null);
+
 

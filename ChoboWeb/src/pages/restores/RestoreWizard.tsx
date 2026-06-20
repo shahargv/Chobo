@@ -7,7 +7,7 @@ import { useApi } from "../../api-context";
 import { Page } from "../../components/ui";
 import type { RestoreMappingDraft, RestoreStep } from "./restoreTypes";
 import { BackupChoiceStep, DestinationStep, ImpactSummary, RestoreStepper, ReviewStep, ScopeStep } from "./RestoreWizardSteps";
-import { getMissingPreserveTargetShards, getRequestedBackupId, getSourceShardOptions, getTargetShardOptions, restoreTargetTableName, validateRestoreRequest, validateStep } from "./restoreUtils";
+import { getMissingPreserveTargetShards, getRequestedBackupId, getSourceShardOptions, getTargetShardOptions, isBackupRestorable, restoreTargetTableName, validateRestoreRequest, validateStep } from "./restoreUtils";
 
 export function RestoreWizard() {
   const { api, showToast } = useApi();
@@ -29,7 +29,8 @@ export function RestoreWizard() {
     enabled: Boolean(request.targetClusterId)
   });
   const clusterById = useMemo(() => new Map((clusters.data ?? []).map((cluster) => [cluster.id, cluster])), [clusters.data]);
-  const selectedBackup = (backups.data ?? []).find((backup) => backup.id === request.backupId) ?? null;
+  const restorableBackups = useMemo(() => (backups.data ?? []).filter(isBackupRestorable), [backups.data]);
+  const selectedBackup = restorableBackups.find((backup) => backup.id === request.backupId) ?? null;
   const sourceShardOptions = useMemo(() => getSourceShardOptions(selectedBackup), [selectedBackup]);
   const targetShardOptions = useMemo(() => getTargetShardOptions(targetTopology.data?.shards), [targetTopology.data]);
   const isDifferentCluster = Boolean(selectedBackup && request.targetClusterId && selectedBackup.sourceClusterId !== request.targetClusterId);
@@ -44,10 +45,10 @@ export function RestoreWizard() {
   const stepErrors = validateStep(step, request, mappings, selectedSourceShards, sourceShardOptions.length, selectedTargetShards, targetShardOptions.length, preserveLayoutError);
 
   useEffect(() => {
-    if (!requestedBackupId || request.backupId || !(backups.data ?? []).some((backup) => backup.id === requestedBackupId)) return;
+    if (!requestedBackupId || request.backupId || !restorableBackups.some((backup) => backup.id === requestedBackupId)) return;
     setRequest((current) => ({ ...current, backupId: requestedBackupId }));
     setStep(1);
-  }, [backups.data, request.backupId, requestedBackupId]);
+  }, [request.backupId, requestedBackupId, restorableBackups]);
 
   useEffect(() => {
     if (!selectedBackup) {
@@ -126,7 +127,7 @@ export function RestoreWizard() {
         <div className="restore-main panel">
           <RestoreStepper step={step} errors={restoreErrors} onStep={setStep} />
           <div className="restore-step-body">
-            {step === 0 && <BackupChoiceStep backups={backups.data ?? []} selectedBackupId={request.backupId} onSelect={(backupId) => setRequest({ ...request, backupId })} clusterName={(clusterId) => clusterById.get(clusterId)?.name ?? clusterId} />}
+            {step === 0 && <BackupChoiceStep backups={restorableBackups} selectedBackupId={request.backupId} onSelect={(backupId) => setRequest({ ...request, backupId })} clusterName={(clusterId) => clusterById.get(clusterId)?.name ?? clusterId} />}
             {step === 1 && <DestinationStep request={request} onChange={setRequest} clusters={clusters.data ?? []} targetShardOptions={targetShardOptions} selectedTargetShards={selectedTargetShards} onTargetShardsChange={setSelectedTargetShards} targetShardsLoading={targetTopology.isFetching} preserveLayoutDisabled={preserveLayoutDisabled} preserveLayoutReason={preserveLayoutReason} />}
             {step === 2 && <ScopeStep backup={selectedBackup} mappings={mappings} onMappingsChange={setMappings} sourceShardOptions={sourceShardOptions} selectedSourceShards={selectedSourceShards} onSourceShardsChange={setSelectedSourceShards} />}
             {step === 3 && <ReviewStep backup={selectedBackup} targetClusterName={clusterById.get(request.targetClusterId)?.name ?? request.targetClusterId} request={request} mappings={selectedMappings} sourceShardOptions={sourceShardOptions} selectedSourceShards={selectedSourceShards} targetShardOptions={targetShardOptions} selectedTargetShards={selectedTargetShards} errors={restoreErrors} />}
@@ -143,4 +144,5 @@ export function RestoreWizard() {
     </Page>
   );
 }
+
 

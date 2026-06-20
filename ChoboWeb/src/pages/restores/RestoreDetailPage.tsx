@@ -1,15 +1,16 @@
 import { useMemo } from "react";
 import { Link, useParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, RefreshCw } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowLeft, Ban, RefreshCw } from "lucide-react";
 import { useApi } from "../../api-context";
 import { DataTable, Detail, Empty, Page, Status } from "../../components/ui";
-import { formatTime } from "../../utils/format";
+import { formatCompletionTime, formatTime } from "../../utils/format";
 import { formatRestoreLayout, formatTableOptions, formatTimeSeconds, isRestoreInExecutionPhase } from "./restoreUtils";
 
 export function RestoreDetailPage() {
-  const { api } = useApi();
+  const { api, showToast } = useApi();
   const { restoreId = "" } = useParams();
+  const queryClient = useQueryClient();
   const clusters = useQuery({ queryKey: ["clusters"], queryFn: () => api.clusters() });
   const backups = useQuery({ queryKey: ["backups"], queryFn: () => api.backups() });
   const restore = useQuery({
@@ -37,9 +38,14 @@ export function RestoreDetailPage() {
   const active = isRestoreInExecutionPhase(current?.status);
   const logs = relatedLogs.data?.items ?? [];
   const audits = relatedAudits.data?.items ?? [];
+  const cancelRestore = useMutation({
+    mutationFn: () => api.cancelRestore(restoreId),
+    onSuccess: () => { restore.refetch(); queryClient.invalidateQueries({ queryKey: ["restores"] }); showToast({ kind: "success", text: "Restore canceled." }); },
+    onError: (error) => showToast({ kind: "error", text: String(error) })
+  });
 
   return (
-    <Page title="Restore details" action={<div className="actions"><Link className="secondary" to="/restores"><ArrowLeft size={16} /> History</Link><button className="secondary" disabled={restore.isFetching || relatedLogs.isFetching || relatedAudits.isFetching} onClick={() => { restore.refetch(); relatedLogs.refetch(); relatedAudits.refetch(); }}><RefreshCw size={16} /> Refresh</button></div>}>
+    <Page title="Restore details" action={<div className="actions"><Link className="secondary" to="/restores"><ArrowLeft size={16} /> History</Link>{active && <button className="danger" disabled={cancelRestore.isPending} onClick={() => cancelRestore.mutate()}><Ban size={16} /> Cancel</button>}<button className="secondary" disabled={restore.isFetching || relatedLogs.isFetching || relatedAudits.isFetching} onClick={() => { restore.refetch(); relatedLogs.refetch(); relatedAudits.refetch(); }}><RefreshCw size={16} /> Refresh</button></div>}>
       {!current && restore.isLoading && <section className="panel"><Empty text="Loading restore details." /></section>}
       {!current && restore.error && <section className="panel"><Empty text={String(restore.error)} /></section>}
       {current && <>
@@ -53,10 +59,11 @@ export function RestoreDetailPage() {
           </div>
           <div className="detail-list restore-review-details">
             <Detail label="Restore id" value={current.id} />
-            <Detail label="Backup" value={backup ? `${backup.backupType} · ${formatTime(backup.createdAt)}` : current.backupId} />
-            <Detail label="Target cluster" value={clusterById.get(current.targetClusterId)?.name ?? current.targetClusterId} />
+            <Detail label="Backup" value={<Link to={`/backups/${current.backupId}`}>{backup ? `${backup.backupType} · ${formatTime(backup.createdAt)}` : current.backupId}</Link>} />
+            <Detail label="Target cluster" value={<Link to={`/clusters/${current.targetClusterId}`}>{clusterById.get(current.targetClusterId)?.name ?? current.targetClusterId}</Link>} />
             <Detail label="Layout" value={formatRestoreLayout(current.layout)} />
             <Detail label="Requested by" value={current.requestedByName} />
+            <Detail label="Completion Time" value={formatCompletionTime(current.endedAt, current.startedAt, current.createdAt)} />
             <Detail label="Failure" value={current.failureReason ?? current.error ?? "none"} />
           </div>
         </section>
@@ -125,3 +132,17 @@ export function RestoreDetailPage() {
     </Page>
   );
 }
+
+function restoreCompletionType(status: string) {
+  switch (status) {
+    case "Succeeded": return "Succeeded";
+    case "PartiallySucceeded": return "Partial";
+    case "Failed": return "Failed";
+    case "Canceled": return "Canceled";
+    case "Queued": return "Pending";
+    case "Running": return "Running";
+    default: return status;
+  }
+}
+
+

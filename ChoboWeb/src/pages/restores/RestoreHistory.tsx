@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { RotateCcw } from "lucide-react";
 import { useApi } from "../../api-context";
 import { DataTable, Page, Status } from "../../components/ui";
-import { formatTime } from "../../utils/format";
+import { formatCompletionTime, formatTime } from "../../utils/format";
 import { formatRestoreLayout } from "./restoreUtils";
 
 export function RestoreHistory() {
@@ -22,13 +22,15 @@ export function RestoreHistory() {
             <p>Queued and completed restores stay here for status, affected tables, failures, logs, and audit follow-up.</p>
           </div>
         </div>
-        <DataTable headers={["Status", "Created", "Backup", "Target", "Layout", "Tables", "Failure", "Actions"]}>
+        <DataTable headers={["Status", "Completion Time", "Requested by", "Created", "Backup", "Target", "Layout", "Tables", "Failure", "Actions"]}>
           {(restores.data ?? []).map((restore) => (
             <tr key={restore.id}>
               <td><Status value={restore.status} /></td>
+              <td>{formatCompletionTime(restore.endedAt, restore.startedAt, restore.createdAt)}</td>
+              <td>{restore.requestedByName}</td>
               <td>{formatTime(restore.createdAt)}</td>
-              <td>{restore.backupId}</td>
-              <td>{clusterById.get(restore.targetClusterId)?.name ?? restore.targetClusterId}</td>
+              <td><Link to={`/backups/${restore.backupId}`}>{restore.backupId}</Link></td>
+              <td><Link to={`/clusters/${restore.targetClusterId}`}>{clusterById.get(restore.targetClusterId)?.name ?? restore.targetClusterId}</Link></td>
               <td>{formatRestoreLayout(restore.layout)}</td>
               <td>{restore.tables.length}</td>
               <td>{restore.failureReason ?? ""}</td>
@@ -40,3 +42,4 @@ export function RestoreHistory() {
     </Page>
   );
 }
+
