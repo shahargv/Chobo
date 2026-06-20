@@ -8,9 +8,10 @@ public sealed class BackupEntity
     public BackupTriggerType TriggerType { get; set; }
     public BackupRunStatus Status { get; set; } = BackupRunStatus.Queued;
     public BackupType BackupType { get; set; } = BackupType.Full;
+    public BackupContentMode ContentMode { get; set; } = BackupContentMode.SchemaAndData;
     public Guid SourceClusterId { get; set; }
     public ClickHouseClusterEntity? SourceCluster { get; set; }
-    public Guid TargetId { get; set; }
+    public Guid? TargetId { get; set; }
     public BackupTargetEntity? Target { get; set; }
     public Guid? PolicyId { get; set; }
     public BackupPolicyEntity? Policy { get; set; }
@@ -37,3 +38,4 @@ public sealed class BackupEntity
     public int DeletionAttemptCount { get; set; }
     public List<BackupTableEntity> Tables { get; set; } = [];
 }
+

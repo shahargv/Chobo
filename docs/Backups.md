@@ -101,6 +101,14 @@ With failed-backup garbage collection:
 ChoboCli policies add --name nightly-prod --source-cluster-id <cluster-id> --target-id <target-id> --selector-file .\policy-selector.json --full-retention-minutes 43200 --incremental-retention-minutes 10080 --min-backups-to-keep 7 --min-full-backups-to-keep 2 --failed-backup-retention-mode DeleteByGarbageCollectorAfterFailure
 ```
 
+Schema-only policies do not require backup storage and always run as full schema captures:
+
+```powershell
+ChoboCli policies add --name daily-schema --source-cluster-id <cluster-id> --schema-only
+```
+
+When a cluster is created, Chobo also creates a reserved daily UTC schema-only policy and schedule for that cluster. This default keeps schema history available from the start, is visible as a system default, and is ignored by the dashboard onboarding checklist.
+
 Evaluate a selector against a known inventory:
 
 ```powershell
@@ -123,7 +131,7 @@ Every six hours:
 ChoboCli schedules add --name six-hour-prod --policy-id <policy-id> --backup-type Full --cron "0 0 */6 * * ?" --timezone UTC
 ```
 
-Use `--backup-type Full` for periodic base backups and `--backup-type Incremental` for cumulative incrementals based on the latest successful full backup for the policy.
+Use `--backup-type Full` for periodic base backups and `--backup-type Incremental` for cumulative incrementals based on the latest successful full backup for the policy. Schema-only policies do not support incremental schedules; they always run as full schema captures.
 
 Manage schedules:
 
@@ -140,6 +148,7 @@ ChoboCli schedules remove --id <schedule-id>
 ```powershell
 ChoboCli backup manual --cluster-id <cluster-id> --target-id <target-id> --selector-file .\policy-selector.json
 ChoboCli backup manual --policy-id <policy-id> --backup-type Incremental
+ChoboCli backup manual --policy-id <schema-only-policy-id>
 ```
 
 The command returns a run record immediately. Wait for completion:
@@ -159,9 +168,11 @@ ChoboCli backups list --status PartiallySucceeded
 
 ## What Chobo Backs Up
 
-For each selected table, Chobo preserves the table definition so the backup can be inspected and used for restore planning later. Tables that contain ClickHouse-managed data also have their data captured as part of the backup run.
+For each selected table, Chobo preserves the table definition so the backup can be inspected and used for restore planning later.
 
-For tables that do not have backupable table data, Chobo records the table definition and marks the backup table as schema-only.
+Schema+data backups submit ClickHouse `BACKUP TABLE` only for `*MergeTree` engines, including replicated MergeTree variants. Selected tables with other engines, such as `Log` and `Join`, keep schema metadata only and are marked with `dataBackedUp = false`.
+
+Schema-only backups never submit table data backup work, never write storage manifests, and do not require or use an S3 target. In cluster mode, schema-only capture queries every source node and dedupes objects by `database.table`, choosing the first schema from deterministic shard, replica, host, and port ordering.
 
 For clustered sources, Chobo:
 
@@ -172,6 +183,19 @@ For clustered sources, Chobo:
 
 Chobo does not use ClickHouse `BACKUP ... ON CLUSTER`.
 
+## Browse Captured Schema
+
+Schema browsing reads Chobo metadata only; it does not connect to ClickHouse or S3.
+
+```powershell
+ChoboCli schema backups
+ChoboCli schema show --backup-id <backup-id>
+ChoboCli schema show --backup-id <backup-id> --database sales --table orders
+ChoboCli schema export --backup-id <backup-id>
+ChoboCli schema export --backup-id <backup-id> --database sales
+```
+
+The GUI has a Schema Browser tab with a backup selector, database/table tree, SQL viewer, and export buttons for all schema SQL or a single database.
 ## Backup Paths
 
 Backup object paths use this logical structure:
@@ -192,7 +216,7 @@ If the S3 target has `--path-prefix`, Chobo prepends it to the ClickHouse S3 URL
 
 ## Storage Metadata Manifests
 
-Each backup writes a Chobo metadata manifest into storage so backup metadata can be recovered even if local SQLite state is lost. The manifest is stored as:
+Each schema+data backup writes a Chobo metadata manifest into storage so backup metadata can be recovered even if local SQLite state is lost. Schema-only backups do not create storage objects or manifests. The manifest is stored as:
 
 ```text
 <backup table or shard path>/_chobo/backup-metadata.v1.json
@@ -240,4 +264,6 @@ Important backup statuses:
 - `BackupExpiredDeleted`
 
 When a backup is `PartiallySucceeded`, inspect the table and shard arrays in `backups show`.
+
+
 

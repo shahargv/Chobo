@@ -49,6 +49,22 @@
             )
         }
         @{
+            Name = 'default-schema-policy-created'
+            Type = 'Cli'
+            Args = @('policies', 'list')
+            ExpectJson = @(
+                @{ Path = '$'; ContainsObject = @{ name = 'Daily schema snapshot - source'; contentMode = 'SchemaOnly'; isSystemDefault = $true } }
+            )
+        }
+        @{
+            Name = 'default-schema-schedule-created'
+            Type = 'Cli'
+            Args = @('schedules', 'list')
+            ExpectJson = @(
+                @{ Path = '$'; ContainsObject = @{ name = 'Daily schema snapshot - source'; backupType = 'Full'; isSystemDefault = $true } }
+            )
+        }
+        @{
             Name = 'add-restore-cluster'
             Type = 'Cli'
             Args = @('clusters', 'add', '--name', 'restore', '--mode', 'SingleInstance', '--host', '{restore.Host}', '--backup-restore-maxdop', '1')
@@ -66,6 +82,66 @@
                 @{ Path = 'name'; Equals = 'minio' }
             )
             ExpectTextNotContains = @('{backupStore.SecretKey}')
+        }
+        @{
+            Name = 'add-user-schema-only-policy'
+            Type = 'Cli'
+            Args = @('policies', 'add', '--name', 'schema-only-all', '--source-cluster-id', '{sourceCluster.id}', '--schema-only')
+            SaveJsonAs = 'schemaOnlyPolicy'
+            ExpectJson = @(
+                @{ Path = 'contentMode'; Equals = 'SchemaOnly' }
+                @{ Path = 'isSystemDefault'; Equals = $false }
+            )
+        }
+        @{
+            Name = 'schema-only-incremental-schedule-rejected'
+            Type = 'Cli'
+            Args = @('schedules', 'add', '--name', 'bad-schema-incremental', '--policy-id', '{schemaOnlyPolicy.id}', '--backup-type', 'Incremental', '--cron', '0 0 3 * * ?', '--timezone', 'UTC')
+            ExpectExitCode = 1
+            ExpectTextContains = 'Schema-only policies cannot use incremental schedules.'
+        }
+        @{
+            Name = 'start-schema-only-policy-backup'
+            Type = 'Cli'
+            Args = @('backup', 'manual', '--policy-id', '{schemaOnlyPolicy.id}')
+            SaveJsonAs = 'schemaOnlyBackup'
+            ExpectJson = @(
+                @{ Path = 'id'; NotEmpty = $true }
+                @{ Path = 'contentMode'; Equals = 'SchemaOnly' }
+                @{ Path = 'backupType'; Equals = 'Full' }
+            )
+        }
+        @{
+            Name = 'wait-schema-only-policy-backup'
+            Type = 'Cli'
+            Args = @('backups', 'wait', '--id', '{schemaOnlyBackup.id}', '--timeout-seconds', '30', '--poll-seconds', '1')
+            SaveJsonAs = 'schemaOnlyBackupDone'
+            ExpectJson = @(
+                @{ Path = 'status'; Equals = 'Succeeded' }
+                @{ Path = 'contentMode'; Equals = 'SchemaOnly' }
+                @{ Path = 'tables'; Count = 5 }
+                @{ Path = 'tables'; ContainsObject = @{ table = 'orders'; dataBackedUp = $false; status = 'Succeeded' } }
+            )
+        }
+        @{
+            Name = 'schema-browser-lists-schema-only-backup'
+            Type = 'Cli'
+            Args = @('schema', 'backups')
+            ExpectJson = @(
+                @{ Path = '$'; ContainsObject = @{ id = '{schemaOnlyBackup.id}'; contentMode = 'SchemaOnly'; tableCount = 5 } }
+            )
+        }
+        @{
+            Name = 'schema-browser-show-table'
+            Type = 'Cli'
+            Args = @('schema', 'show', '--backup-id', '{schemaOnlyBackup.id}', '--database', 'backup_core_source', '--table', 'orders')
+            ExpectTextContains = @('backup_core_source', 'orders', 'CREATE TABLE')
+        }
+        @{
+            Name = 'schema-browser-export-database'
+            Type = 'Cli'
+            Args = @('schema', 'export', '--backup-id', '{schemaOnlyBackup.id}', '--database', 'backup_core_source')
+            ExpectTextContains = @('Database: backup_core_source', 'CREATE TABLE backup_core_source.orders')
         }
         @{
             Name = 'start-manual-backup'
@@ -518,3 +594,6 @@
 
     Cleanup = @()
 }
+
+
+

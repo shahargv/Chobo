@@ -104,6 +104,8 @@
             Name = 'manual-run-backup-gc'
             Type = 'Cli'
             Args = @('gc', 'run')
+            RetryTimeoutSeconds = 20
+            RetryIntervalSeconds = 1
             ExpectJson = @( @{ Path = 'lastCompletedAt'; NotEmpty = $true } )
         }
         @{
@@ -166,6 +168,7 @@
     Verify = @()
     Cleanup = @()
 }
+
 
 
 

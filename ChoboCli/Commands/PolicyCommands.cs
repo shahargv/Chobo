@@ -41,12 +41,20 @@ public sealed class PolicyCommands : CliSubject
 
     private static UpsertPolicyRequest Request(OptionBag options)
     {
-        var required = options.Require("--name", "--source-cluster-id", "--target-id");
+        var required = options.Require("--name", "--source-cluster-id");
+        var contentMode = options.Has("--schema-only") ? BackupContentMode.SchemaOnly : BackupContentMode.SchemaAndData;
+        var targetId = options.Optional("--target-id") is { } rawTargetId ? Guid.Parse(rawTargetId) : (Guid?)null;
+        if (contentMode == BackupContentMode.SchemaAndData && targetId is null)
+        {
+            throw new InvalidOperationException("--target-id is required for schema+data policies.");
+        }
+
         return new UpsertPolicyRequest(
             required["--name"],
             Guid.Parse(required["--source-cluster-id"]),
-            Guid.Parse(required["--target-id"]),
+            targetId,
             CommandHelpers.PolicySelectorFromOption(options),
+            contentMode,
             Retention(options),
             options.Optional("--failed-backup-retention-mode") is { } mode
                 ? Enum.Parse<FailedBackupRetentionMode>(mode, ignoreCase: true)
@@ -69,3 +77,7 @@ public sealed class PolicyCommands : CliSubject
             options.Optional("--min-full-backups-to-keep") is { } minFullBackupsToKeep ? int.Parse(minFullBackupsToKeep) : 0);
     }
 }
+
+
+
+

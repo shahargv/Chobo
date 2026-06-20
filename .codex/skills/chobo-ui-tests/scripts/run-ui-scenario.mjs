@@ -35,7 +35,7 @@ const plans = {
   details: ['bootstrap', 'cluster', 'storage', 'policy', 'backup', 'restore', 'details'],
   'logs-audit': ['bootstrap', 'cluster', 'storage', 'policy', 'backup', 'restore', 'logs-audit'],
   failure: ['bootstrap', 'failure'],
-  full: ['bootstrap', 'cluster', 'storage', 'policy', 'schedule-edit', 'backup', 'restore', 'logs-audit']
+  full: ['bootstrap', 'cluster', 'storage', 'policy', 'schedule-edit', 'backup', 'schema-browser', 'restore', 'logs-audit']
 };
 
 function parseArgs(argv) {
@@ -118,7 +118,7 @@ async function main() {
   } catch {
     browser = await chromium.launch({ headless: !args.headed });
   }
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, acceptDownloads: true });
   const page = await context.newPage();
   page.on('console', (msg) => consoleEntries.push(`[${msg.type()}] ${msg.text()}`));
   page.on('response', (response) => {
@@ -197,7 +197,17 @@ async function main() {
   }
 
   async function expectText(text, timeout = 15000) {
-    await page.getByText(text, { exact: false }).first().waitFor({ timeout });
+    const deadline = Date.now() + timeout;
+    let lastCount = 0;
+    while (Date.now() < deadline) {
+      const matches = page.getByText(text, { exact: false });
+      lastCount = await matches.count().catch(() => 0);
+      for (let i = 0; i < lastCount; i++) {
+        if (await matches.nth(i).isVisible().catch(() => false)) return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    throw new Error(`Timed out waiting for visible text ${text}. Last match count: ${lastCount}`);
   }
 
   async function waitForStatus(pathName, status, timeoutMs = 90000) {
@@ -369,6 +379,31 @@ async function main() {
     await screenshot('backup-details', 'Backup detail drawer exposes status, table/shard information, related logs, and audit sections.');
   }
 
+
+  async function runSchemaBrowser() {
+    if (!state.backupId) throw new Error('Schema Browser scenario requires a completed backup id.');
+    await go('/schema');
+    await expectText(/Schema Browser|Backup/i, 30000);
+    await screenshot('schema-browser-empty-or-loading', 'Schema Browser tab is reachable and shows the backup selector before a backup is selected.');
+    const backupSelect = await controlByLabel('Backup', 'select');
+    await backupSelect.selectOption(state.backupId);
+    await expectText(data.policy.database, 30000);
+    await expectText(data.policy.table, 30000);
+    await page.getByRole('button', { name: new RegExp(data.policy.table) }).first().click();
+    await expectText('CREATE TABLE', 30000);
+    await screenshot('schema-browser-table-sql', 'Schema Browser shows a database/table tree and the captured CREATE TABLE SQL for the selected backup.');
+
+    const allDownload = page.waitForEvent('download');
+    await page.getByRole('button', { name: /Export all/i }).click();
+    const all = await allDownload;
+    if (!all.suggestedFilename().includes(state.backupId)) throw new Error(`Unexpected all-schema export file name: ${all.suggestedFilename()}`);
+
+    const databaseDownload = page.waitForEvent('download');
+    await page.getByRole('button', { name: /Export database/i }).click();
+    const database = await databaseDownload;
+    if (!database.suggestedFilename().includes(data.policy.database)) throw new Error(`Unexpected database schema export file name: ${database.suggestedFilename()}`);
+    notes.push({ status: 'pass', text: 'Schema Browser export buttons produced downloadable SQL files for all schema and the selected database.' });
+  }
   async function runRestore() {
     await go('/restores/start');
     await page.locator('input[type="radio"]').first().check();
@@ -455,6 +490,7 @@ async function main() {
       else if (step === 'policy') await runPolicy();
       else if (step === 'schedule-edit') await runSchedule();
       else if (step === 'backup') await runBackup();
+      else if (step === 'schema-browser') await runSchemaBrowser();
       else if (step === 'restore') await runRestore();
       else if (step === 'details') await runDetails();
       else if (step === 'logs-audit') await runLogsAudit();
@@ -509,6 +545,9 @@ main().catch((error) => {
   console.error(error.stack ?? error.message);
   process.exitCode = 1;
 });
+
+
+
 
 
 

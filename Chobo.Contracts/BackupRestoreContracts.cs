@@ -31,8 +31,9 @@ public sealed record BackupDto(
     BackupTriggerType TriggerType,
     BackupRunStatus Status,
     BackupType BackupType,
+    BackupContentMode ContentMode,
     Guid SourceClusterId,
-    Guid TargetId,
+    Guid? TargetId,
     Guid? PolicyId,
     Guid? ScheduleId,
     Guid? RequestedByUserId,
@@ -65,7 +66,7 @@ public sealed record BackupTableDto(
     string Table,
     string Engine,
     bool DataBackedUp,
-    Guid SchemaDefinitionId,
+    Guid? SchemaDefinitionId,
     string S3Path,
     BackupTableStatus Status,
     string? ClickHouseOperationId,
@@ -97,11 +98,19 @@ public sealed record BackupTableShardDto(
 
 public sealed record ManualBackupRequest(
     Guid ClusterId,
-    Guid TargetId,
+    Guid? TargetId,
     PolicySelector Selector,
     BackupType BackupType = BackupType.Full,
     Guid? PolicyId = null,
     bool SchemaOnly = false);
+
+public sealed record SchemaBackupSummaryDto(Guid Id, BackupRunStatus Status, BackupContentMode ContentMode, BackupType BackupType, Guid SourceClusterId, string SourceClusterName, Guid? PolicyId, DateTimeOffset CreatedAt, DateTimeOffset? EndedAt, int TableCount);
+
+public sealed record SchemaBackupDto(Guid BackupId, BackupRunStatus Status, BackupContentMode ContentMode, IReadOnlyList<SchemaDatabaseDto> Databases);
+
+public sealed record SchemaDatabaseDto(string Database, IReadOnlyList<SchemaTableDto> Tables);
+
+public sealed record SchemaTableDto(Guid BackupTableId, string Database, string Table, string Engine, bool DataBackedUp, string CreateTableSql, string ColumnsJson);
 
 public sealed record BackupListRequest(Guid? PolicyId, string? ClusterName, string? TableName, BackupRunStatus? Status);
 
@@ -202,5 +211,6 @@ public sealed record RestoreTableMappingRequest(
     bool? Append = null,
     bool? AllowSchemaMismatch = null,
     bool? SchemaOnly = null);
+
 
 

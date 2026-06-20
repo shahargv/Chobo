@@ -82,10 +82,23 @@ public sealed class RestoreRunnerService(
         catch (Exception ex)
         {
             _logger.Error(ex, "Restore {RestoreId} failed.", restoreId);
+            var now = DateTimeOffset.UtcNow;
             restore.Status = RestoreRunStatus.Failed;
             restore.Error = ex.Message;
             restore.FailureReason = ex.Message;
-            restore.CompletedAt = DateTimeOffset.UtcNow;
+            restore.CompletedAt = now;
+            foreach (var table in restore.Tables.Where(x => x.Status is RestoreTableStatus.Queued or RestoreTableStatus.Running))
+            {
+                table.Status = RestoreTableStatus.Failed;
+                table.Error = ex.Message;
+                table.CompletedAt ??= now;
+                foreach (var shard in table.Shards.Where(x => x.Status is RestoreTableStatus.Queued or RestoreTableStatus.Running))
+                {
+                    shard.Status = RestoreTableStatus.Failed;
+                    shard.Error = ex.Message;
+                    shard.CompletedAt ??= now;
+                }
+            }
             await db.SaveChangesAsync(CancellationToken.None);
             await audit.RecordAsync("failed", AuditEntityType.Restore, restore.Id.ToString(), new { error = ex.Message, restore.FailureReason });
         }
@@ -265,6 +278,7 @@ public sealed class RestoreRunnerService(
             table.Status = RestoreTableStatus.Failed;
             table.Error = ex.Message;
             table.CompletedAt = DateTimeOffset.UtcNow;
+            await FailPendingRestoreShardsAsync(table, ex.Message, scopedAudit);
             await scopedDb.SaveChangesAsync(CancellationToken.None);
             await scopedAudit.RecordAsync("table-failed", AuditEntityType.RestoreTable, table.Id.ToString(), new { error = ex.Message });
         }
@@ -300,6 +314,17 @@ public sealed class RestoreRunnerService(
             })
             .ToList();
 
+    private static async Task FailPendingRestoreShardsAsync(RestoreTableEntity table, string error, IAuditService audit)
+    {
+        var now = DateTimeOffset.UtcNow;
+        foreach (var shard in table.Shards.Where(x => x.Status is RestoreTableStatus.Queued or RestoreTableStatus.Running))
+        {
+            shard.Status = RestoreTableStatus.Failed;
+            shard.Error = error;
+            shard.CompletedAt ??= now;
+            await audit.RecordAsync("shard-failed", AuditEntityType.RestoreTableShard, shard.Id.ToString(), new { error, sourceShard = shard.SourceShardNumber, targetShard = shard.TargetShardNumber });
+        }
+    }
     private static async Task PollRestoreAsync(IClickHouseAdapter adapter, ClickHouseClusterEntity cluster, RestoreTableEntity table, ClickHouseOperationStatus current, TimeSpan interval, CancellationToken cancellationToken)
     {
         while (true)

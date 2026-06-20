@@ -12,6 +12,8 @@ public enum FailedBackupRetentionMode
     DeleteByGarbageCollectorAfterFailure
 }
 
+public enum BackupContentMode { SchemaAndData, SchemaOnly }
+
 public sealed record BackupRetentionDto(
     int? FullRetentionMinutes,
     int? IncrementalRetentionMinutes,
@@ -40,11 +42,13 @@ public sealed record BackupPolicyDto(
     Guid Id,
     string Name,
     Guid SourceClusterId,
-    Guid TargetId,
+    Guid? TargetId,
+    BackupContentMode ContentMode,
     int SelectorJsonVersion,
     PolicySelector Selector,
     BackupRetentionDto? Retention,
     FailedBackupRetentionMode FailedBackupRetentionMode,
+    bool IsSystemDefault,
     bool IsDeleted,
     DateTimeOffset CreatedAt,
     DateTimeOffset? UpdatedAt);
@@ -52,8 +56,9 @@ public sealed record BackupPolicyDto(
 public sealed record UpsertPolicyRequest(
     string Name,
     Guid SourceClusterId,
-    Guid TargetId,
+    Guid? TargetId,
     PolicySelector Selector,
+    BackupContentMode ContentMode = BackupContentMode.SchemaAndData,
     BackupRetentionDto? Retention = null,
     FailedBackupRetentionMode FailedBackupRetentionMode = FailedBackupRetentionMode.KeepAndExcludeFromMinBackupsToKeep);
 
@@ -83,3 +88,4 @@ public sealed record PolicyEvaluationDto(Guid PolicyId, string PolicyName, Guid 
 public sealed record PolicySimulationRequest(Guid SourceClusterId, PolicySelector Selector);
 
 public sealed record PolicySimulationDto(Guid SourceClusterId, PolicySelector Selector, IReadOnlyList<PolicyInventoryTable> Inventory, IReadOnlyList<PolicyInventoryTable> Tables);
+

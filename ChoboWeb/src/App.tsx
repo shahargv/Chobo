@@ -12,6 +12,7 @@ import { Audit, Logs } from "./pages/EntriesPages";
 import { RestoreDetailPage, RestoreHistory, RestoreWizard } from "./pages/RestoresPage";
 import { Policies } from "./pages/PoliciesPage";
 import { Schedules } from "./pages/SchedulesPage";
+import { SchemaBrowserPage } from "./pages/SchemaBrowserPage";
 import { Clusters } from "./pages/ClustersPage";
 import { Targets } from "./pages/TargetsPage";
 import { UsersPage } from "./pages/UsersPage";
@@ -95,6 +96,7 @@ export function App() {
           <Route path="/policies" element={<Policies />} />
           <Route path="/policies/:policyId" element={<Policies />} />
           <Route path="/schedules" element={<Schedules />} />
+          <Route path="/schema" element={<SchemaBrowserPage />} />
           <Route path="/schedules/:scheduleId" element={<Schedules />} />
           <Route path="/clusters" element={<Clusters />} />
           <Route path="/clusters/:clusterId" element={<Clusters />} />
@@ -110,3 +112,4 @@ export function App() {
     </ApiContext.Provider>
   );
 }
+

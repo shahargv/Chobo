@@ -10,7 +10,8 @@ public sealed class ClusterApplicationService(
     IUnitOfWork unitOfWork,
     ICredentialProtector protector,
     IClickHouseAdapter clickHouse,
-    IAuditService audit)
+    IAuditService audit,
+    SystemDefaultBackupPolicyService systemDefaults)
 {
     public async Task<IReadOnlyList<ClusterDto>> ListAsync() =>
         (await clusters.ListActiveAsync()).Select(ToDto).ToList();
@@ -68,6 +69,7 @@ public sealed class ClusterApplicationService(
 
         var current = ToDto(cluster);
         await audit.RecordAsync("create", AuditEntityType.Cluster, cluster.Id.ToString(), AuditDetails.Change(null, current));
+        await systemDefaults.EnsureForClusterAsync(cluster);
         return current;
     }
 
@@ -226,4 +228,6 @@ public sealed class ClusterApplicationService(
     private static string? NormalizeClusterName(string? clusterName) =>
         string.IsNullOrWhiteSpace(clusterName) ? null : clusterName.Trim();
 }
+
+
 

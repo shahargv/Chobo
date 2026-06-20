@@ -157,9 +157,14 @@ public sealed class ScheduleApplicationService(
             throw new ArgumentException("TimeZoneId is invalid.");
         }
 
-        if (!await schedules.PolicyExistsAsync(request.PolicyId))
+        var policy = await schedules.FindActivePolicyAsync(request.PolicyId);
+        if (policy is null)
         {
             throw new ArgumentException("PolicyId does not reference an active policy.");
+        }
+        if (policy.ContentMode == BackupContentMode.SchemaOnly && request.BackupType == BackupType.Incremental)
+        {
+            throw new ArgumentException("Schema-only policies cannot use incremental schedules.");
         }
     }
 
@@ -174,7 +179,11 @@ public sealed class ScheduleApplicationService(
             x.IsEnabled,
             x.MissedRunGracePeriod,
             x.Description,
+            x.IsSystemDefault,
             x.IsDeleted,
             x.CreatedAt,
             x.UpdatedAt);
 }
+
+
+

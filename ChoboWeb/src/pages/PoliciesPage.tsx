@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import { CalendarClock, ListFilter, Play, Save } from "lucide-react";
-import type { BackupPolicyDto, FailedBackupRetentionMode, PolicyMatchKind, PolicySelector, PolicySelectorAction, PolicySelectorRule, UpsertPolicyRequest } from "../api/generated";
+import type { BackupContentMode, BackupPolicyDto, FailedBackupRetentionMode, PolicyMatchKind, PolicySelector, PolicySelectorAction, PolicySelectorRule, UpsertPolicyRequest } from "../api/generated";
 import { useApi } from "../api-context";
 import { DataTable, Input, Page, Select } from "../components/ui";
 import { emptySelector } from "../policies";
@@ -18,12 +18,12 @@ export function Policies() {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<BackupPolicyDto | null>(null);
   const [createdPolicy, setCreatedPolicy] = useState<BackupPolicyDto | null>(null);
-  const defaultPolicyDraft = (): UpsertPolicyRequest => ({ name: "", sourceClusterId: "", targetId: "", selector: emptySelector, retention: { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 }, failedBackupRetentionMode: "KeepAndExcludeFromMinBackupsToKeep" });
+  const defaultPolicyDraft = (): UpsertPolicyRequest => ({ name: "", sourceClusterId: "", targetId: "", selector: emptySelector, contentMode: "SchemaAndData", retention: { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 }, failedBackupRetentionMode: "KeepAndExcludeFromMinBackupsToKeep" });
   const [draft, setDraft] = useState<UpsertPolicyRequest>(() => defaultPolicyDraft());
   const editPolicy = (policy: BackupPolicyDto) => {
     setEditing(policy);
     setCreatedPolicy(null);
-    setDraft({ name: policy.name, sourceClusterId: policy.sourceClusterId, targetId: policy.targetId, selector: policy.selector, retention: policy.retention ?? { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 }, failedBackupRetentionMode: policy.failedBackupRetentionMode });
+    setDraft({ name: policy.name, sourceClusterId: policy.sourceClusterId, targetId: policy.targetId ?? "", selector: policy.selector, contentMode: policy.contentMode, retention: policy.retention ?? { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 }, failedBackupRetentionMode: policy.failedBackupRetentionMode });
     setShowForm(true);
   };
   useEffect(() => {
@@ -44,7 +44,7 @@ export function Policies() {
     setDraft(defaultPolicyDraft());
   };
   const save = useMutation({
-    mutationFn: () => editing ? api.updatePolicy(editing.id, draft) : api.addPolicy(draft),
+    mutationFn: () => editing ? api.updatePolicy(editing.id, normalizedPolicyDraft(draft)) : api.addPolicy(normalizedPolicyDraft(draft)),
     onSuccess: (policy) => {
       showToast({ kind: "success", text: "Policy saved." });
       policies.refetch();
@@ -56,11 +56,11 @@ export function Policies() {
   const executePolicy = useMutation({
     mutationFn: (policy: BackupPolicyDto) => api.manualBackup({
       clusterId: policy.sourceClusterId,
-      targetId: policy.targetId,
+      targetId: policy.contentMode === "SchemaOnly" ? (null as unknown as string) : policy.targetId,
       selector: policy.selector,
       backupType: "Full",
       policyId: policy.id,
-      schemaOnly: false
+      schemaOnly: policy.contentMode === "SchemaOnly"
     }),
     onSuccess: () => {
       showToast({ kind: "success", text: "Backup queued." });
@@ -77,12 +77,13 @@ export function Policies() {
       setShowForm(true);
     }}><Save size={16} /> Add policy</button>}>
       <section className="panel">
-        <DataTable headers={["Name", "Source", "Backup Storage", "Rules", "Retention", "Actions"]}>
+        <DataTable headers={["Name", "Mode", "Source", "Backup Storage", "Rules", "Retention", "Actions"]}>
           {(policies.data ?? []).map((policy) => (
             <tr key={policy.id}>
-              <td>{policy.name}</td>
+              <td>{policy.name}{policy.isSystemDefault && <span className="chip">system</span>}</td>
+              <td>{policy.contentMode === "SchemaOnly" ? "Schema only" : "Schema + data"}</td>
               <td>{nameOf(clusters.data, policy.sourceClusterId)}</td>
-              <td>{nameOf(targets.data, policy.targetId)}</td>
+              <td>{policy.targetId ? nameOf(targets.data, policy.targetId) : "none"}</td>
               <td>{policy.selector.rules.length}</td>
               <td>{policy.retention ? `${policy.retention.minBackupsToKeep} backups` : "default"}</td>
               <td className="actions"><button className="ghost" onClick={() => editPolicy(policy)}>Edit</button><button className="ghost" disabled={executePolicy.isPending} onClick={() => executePolicy.mutate(policy)}><Play size={14} /> Execute now</button></td>
@@ -108,7 +109,8 @@ export function Policies() {
         <div className="form-grid">
           <Input label="Name" value={draft.name} onChange={(value) => setDraft({ ...draft, name: value })} />
           <Select label="Source cluster" value={draft.sourceClusterId} onChange={(value) => setDraft({ ...draft, sourceClusterId: value })} options={(clusters.data ?? []).map((cluster) => [cluster.id, cluster.name])} />
-          <Select label="Backup storage" value={draft.targetId} onChange={(value) => setDraft({ ...draft, targetId: value })} options={(targets.data ?? []).map((target) => [target.id, target.name])} />
+          <Select label="Backup mode" value={draft.contentMode} onChange={(value) => setDraft({ ...draft, contentMode: value as BackupContentMode, targetId: value === "SchemaOnly" ? "" : draft.targetId })} options={[["SchemaAndData", "Schema + data"], ["SchemaOnly", "Schema only"]]} />
+          {draft.contentMode === "SchemaAndData" && <Select label="Backup storage" value={draft.targetId} onChange={(value) => setDraft({ ...draft, targetId: value })} options={(targets.data ?? []).map((target) => [target.id, target.name])} />}
           <Select label="Failed backups" value={draft.failedBackupRetentionMode} onChange={(value) => setDraft({ ...draft, failedBackupRetentionMode: value as FailedBackupRetentionMode })} options={[["KeepAndExcludeFromMinBackupsToKeep", "Keep"], ["DeleteByGarbageCollectorAfterFailure", "Garbage collect failed backups"]]} />
         </div>
         <SelectorBuilder selector={draft.selector} hasSource={draft.sourceClusterId.length > 0} inventory={simulation.data?.inventory ?? []} selected={simulation.data?.tables ?? []} isLoading={simulation.isFetching} error={simulation.error ? String(simulation.error) : null} onChange={(selector) => setDraft({ ...draft, selector })} />
@@ -191,12 +193,22 @@ function RetentionEditor({ value, onChange }: { value: NonNullable<UpsertPolicyR
   );
 }
 
+function normalizedPolicyDraft(draft: UpsertPolicyRequest): UpsertPolicyRequest {
+  return {
+    ...draft,
+    targetId: draft.contentMode === "SchemaOnly" ? (null as unknown as string) : draft.targetId
+  };
+}
 function validatePolicyDraft(draft: UpsertPolicyRequest) {
   const errors: string[] = [];
   if (!draft.name.trim()) errors.push("Policy name is required.");
   if (!draft.sourceClusterId) errors.push("Choose a source cluster.");
-  if (!draft.targetId) errors.push("Choose backup storage.");
+  if (draft.contentMode === "SchemaAndData" && !draft.targetId) errors.push("Choose backup storage.");
   if (draft.selector.rules.length === 0) errors.push("Add at least one selector rule.");
   return errors;
 }
+
+
+
+
 
