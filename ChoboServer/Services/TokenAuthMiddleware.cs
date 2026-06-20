@@ -7,7 +7,7 @@ public sealed class TokenAuthMiddleware(RequestDelegate next)
     public async Task InvokeAsync(HttpContext context, ITokenService tokenService, ActorContext actor, Serilog.ILogger logger)
     {
         var log = logger.ForContext<TokenAuthMiddleware>();
-        if (!context.Request.Path.StartsWithSegments("/api"))
+        if (!context.Request.Path.StartsWithSegments("/api") || IsAnonymousSetupEndpoint(context))
         {
             await next(context);
             return;
@@ -48,5 +48,17 @@ public sealed class TokenAuthMiddleware(RequestDelegate next)
         }
 
         await next(context);
+    }
+
+    private static bool IsAnonymousSetupEndpoint(HttpContext context)
+    {
+        var path = context.Request.Path.Value ?? string.Empty;
+        if (string.Equals(path, "/api/v1/server/install/status", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return string.Equals(path, "/api/v1/server/install", StringComparison.OrdinalIgnoreCase)
+            && HttpMethods.IsPost(context.Request.Method);
     }
 }

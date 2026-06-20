@@ -12,8 +12,9 @@ public interface IDatabaseBootstrap
     Task EnsureDatabaseObjectsAsync(CancellationToken cancellationToken = default);
     Task EnsureSchemaStateAsync(CancellationToken cancellationToken = default);
     Task TryInitializeFromOptionsAsync(CancellationToken cancellationToken = default);
-    Task BootstrapFirstStartupAsync(CancellationToken cancellationToken = default);
-    Task<bool> InitializeAsync(string adminUser, string accessToken, CancellationToken cancellationToken = default);
+    Task<InstallStatusDto> GetInstallStatusAsync(CancellationToken cancellationToken = default);
+    Task<InstallResponse> InstallAsync(string? adminUser, CancellationToken cancellationToken = default);
+    Task<InstallResponse?> InitializeAsync(string adminUser, string accessToken, CancellationToken cancellationToken = default);
 }
 
 public sealed class DatabaseBootstrap(
@@ -31,7 +32,6 @@ public sealed class DatabaseBootstrap(
         await VerifySchemaCompatibilityBeforeMigrationAsync(cancellationToken);
         await db.Database.MigrateAsync(cancellationToken);
     }
-
 
     private async Task VerifySchemaCompatibilityBeforeMigrationAsync(CancellationToken cancellationToken)
     {
@@ -77,6 +77,7 @@ public sealed class DatabaseBootstrap(
             }
         }
     }
+
     public async Task EnsureSchemaStateAsync(CancellationToken cancellationToken = default)
     {
         if (!await db.SchemaStates.AnyAsync(cancellationToken))
@@ -109,35 +110,46 @@ public sealed class DatabaseBootstrap(
         var token = options.AccessToken ?? TokenService.GenerateToken();
         _logger.Information("Initial admin configuration detected for user {AdminUser}; access token configured: {HasAccessToken}.", user, options.AccessToken is not null);
 
-        await InitializeAsync(user, token, cancellationToken);
-    }
-
-    public async Task BootstrapFirstStartupAsync(CancellationToken cancellationToken = default)
-    {
-        var options = initOptions.Value;
-        var adminUser = string.IsNullOrWhiteSpace(options.AdminUser) ? "admin" : options.AdminUser;
-        var token = options.AccessToken ?? TokenService.GenerateToken();
-
-        if (await InitializeAsync(adminUser, token, cancellationToken))
+        var result = await InitializeAsync(user, token, cancellationToken);
+        if (result is not null && options.AccessToken is not null)
         {
-            Console.WriteLine(token);
-            var dataDirectory = ChoboPaths.GetDataDirectory(storageOptions.Value.DataDirectory);
-            Directory.CreateDirectory(dataDirectory);
-            await File.WriteAllTextAsync(Path.Combine(dataDirectory, "_initialized"), DateTimeOffset.UtcNow.ToString("O"), cancellationToken);
+            Console.WriteLine("Chobo initialized from configured CHOBO_INIT_ADMIN_USER and CHOBO_INIT_ACCESS_TOKEN.");
         }
     }
 
-    public async Task<bool> InitializeAsync(string adminUser, string accessToken, CancellationToken cancellationToken = default)
+    public async Task<InstallStatusDto> GetInstallStatusAsync(CancellationToken cancellationToken = default)
+    {
+        var requiresInstallation = !await db.Users.AnyAsync(cancellationToken);
+        var message = requiresInstallation
+            ? "Chobo is waiting for first-time installation. Use the web UI or run: ChoboCli install --server-url <url>"
+            : "Chobo installation is complete. Sign in with an existing access token.";
+        return new InstallStatusDto(requiresInstallation, message);
+    }
+
+    public async Task<InstallResponse> InstallAsync(string? adminUser, CancellationToken cancellationToken = default)
+    {
+        var userName = string.IsNullOrWhiteSpace(adminUser) ? "admin" : adminUser.Trim();
+        var token = TokenService.GenerateToken();
+        var result = await InitializeAsync(userName, token, cancellationToken);
+        if (result is null)
+        {
+            throw new InvalidOperationException("Chobo installation has already been finalized. Create additional tokens from an authenticated session.");
+        }
+
+        return result;
+    }
+
+    public async Task<InstallResponse?> InitializeAsync(string adminUser, string accessToken, CancellationToken cancellationToken = default)
     {
         await EnsureDatabaseObjectsAsync(cancellationToken);
         await EnsureSchemaStateAsync(cancellationToken);
         if (await db.Users.AnyAsync(cancellationToken))
         {
             _logger.Information("Skipping initial admin creation because users already exist.");
-            return false;
+            return null;
         }
 
-        var user = new UserEntity { UserName = adminUser };
+        var user = new UserEntity { UserName = adminUser.Trim() };
         db.Users.Add(user);
         await db.SaveChangesAsync(cancellationToken);
 
@@ -151,9 +163,15 @@ public sealed class DatabaseBootstrap(
             Details = "{}"
         });
         await db.SaveChangesAsync(cancellationToken);
-        _logger.Information("Initialized Chobo admin user {AdminUser} ({UserId}) and initial access token.", adminUser, user.Id);
-        return true;
+        await WriteInitializedMarkerAsync(cancellationToken);
+        _logger.Information("Initialized Chobo admin user {AdminUser} ({UserId}) and initial access token.", user.UserName, user.Id);
+        return new InstallResponse(user.Id, user.UserName, accessToken);
+    }
+
+    private async Task WriteInitializedMarkerAsync(CancellationToken cancellationToken)
+    {
+        var dataDirectory = ChoboPaths.GetDataDirectory(storageOptions.Value.DataDirectory);
+        Directory.CreateDirectory(dataDirectory);
+        await File.WriteAllTextAsync(Path.Combine(dataDirectory, "_initialized"), DateTimeOffset.UtcNow.ToString("O"), cancellationToken);
     }
 }
-
-

@@ -726,3 +726,28 @@ pre, .token-box {
 .restore-detail-logs table { min-width: 1280px; }
 .restore-detail-audit table { min-width: 1420px; }
 
+
+.install-panel {
+  gap: 16px;
+}
+.install-token {
+  width: 100%;
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  user-select: all;
+}
+.install-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.install-note {
+  font-size: 12px;
+  line-height: 1.45;
+}
+@media (max-width: 520px) {
+  .install-actions { grid-template-columns: 1fr; }
+}
