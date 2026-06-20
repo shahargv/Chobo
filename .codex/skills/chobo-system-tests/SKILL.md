@@ -113,3 +113,8 @@ Normal test SQL should create its own databases explicitly, using test-owned dat
 Keep SQL readable. Prefer one explicit SQL file per resource/table shape over conditional placeholder-heavy SQL.
 
 Use custom `Test.ps1` only when declarative steps cannot express the test. In custom tests, use shared helpers from `TestingSuite/Infra`, especially `Invoke-ChoboClickHouseQuery` and `Assert-ChoboCsvEquals`.
+
+## Import/export system tests
+
+When adding import/export coverage, assert data export/import includes operational backup/restore metadata, excludes audit/log history, appends a local import audit record, and leaves imported ClickHouse/S3 credentials empty until the operator updates them.
+

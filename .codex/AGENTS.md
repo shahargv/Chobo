@@ -44,3 +44,12 @@ The product has 3 main parts: ChoboServer, ChoboCli (CLI used to execute command
 - Run `dotnet build Upendi.sln -v minimal`, `.\scripts\Test-DirectUdp.ps1`, and `.\scripts\Test-UpendiPath.ps1` after product-path changes.
 - The CLI should be COMPLETE. Meaning, if you add feature to a controller or web ui, it should also be added to the CLI
 - Any backend changes (in ChoboServer) requires running unit-tests (dotnet test) and relevant system tests from the system test suite (see relevant skill)
+## Import/export contract
+
+`/api/v1/data/export` must export all restorable Chobo metadata except audit entries and application logs. This includes users, access tokens, clusters, backup targets, policies, schedules, schema definitions, backup runs, backup tables/shards, restores, and restore tables/shards.
+
+`/api/v1/data/import` must restore the same exportable metadata and must not overwrite or import audit entries or application logs. It should append its own import audit record.
+
+`/api/v1/config/export` and `/api/v1/config/import` remain configuration-only. Config import must not silently destroy backup/restore history.
+
+Export envelopes may carry encrypted credential fields for compatibility, but import must treat ClickHouse and S3 credentials as empty. Operators must re-enter credentials after import so they are encrypted with the current server key. Never import raw access tokens, decrypted credentials, or local AES key material.

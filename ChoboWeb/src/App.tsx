@@ -29,9 +29,10 @@ export function App() {
       () => {
         clearAuth();
         setAuth(null);
+        queryClient.clear();
       }
     ),
-    [auth]
+    [auth, queryClient]
   );
 
   if (!auth) {
@@ -80,6 +81,7 @@ export function App() {
     </ApiContext.Provider>
   );
 }
+
 
 
 

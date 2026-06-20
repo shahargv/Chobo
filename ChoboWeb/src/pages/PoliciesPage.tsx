@@ -70,7 +70,7 @@ export function Policies() {
     onError: (error) => showToast({ kind: "error", text: String(error) })
   });
   return (
-    <Page title="Policies" action={<button className="primary" onClick={() => {
+    <Page title="Policies" subtitle="Define which ClickHouse tables are backed up and how long backup history is retained." action={<button className="primary" onClick={() => {
       setEditing(null);
       setCreatedPolicy(null);
       setDraft({ ...defaultPolicyDraft(), sourceClusterId: clusters.data?.[0]?.id ?? "", targetId: targets.data?.[0]?.id ?? "" });

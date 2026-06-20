@@ -45,7 +45,7 @@ export function RestoreDetailPage() {
   });
 
   return (
-    <Page title="Restore details" action={<div className="actions"><Link className="secondary" to="/restores"><ArrowLeft size={16} /> History</Link>{active && <button className="danger" disabled={cancelRestore.isPending} onClick={() => cancelRestore.mutate()}><Ban size={16} /> Cancel</button>}<button className="secondary" disabled={restore.isFetching || relatedLogs.isFetching || relatedAudits.isFetching} onClick={() => { restore.refetch(); relatedLogs.refetch(); relatedAudits.refetch(); }}><RefreshCw size={16} /> Refresh</button></div>}>
+    <Page title="Restore details" subtitle="Inspect restore progress, table and shard results, and related logs or audit entries." action={<div className="actions"><Link className="secondary" to="/restores"><ArrowLeft size={16} /> History</Link>{active && <button className="danger" disabled={cancelRestore.isPending} onClick={() => cancelRestore.mutate()}><Ban size={16} /> Cancel</button>}<button className="secondary" disabled={restore.isFetching || relatedLogs.isFetching || relatedAudits.isFetching} onClick={() => { restore.refetch(); relatedLogs.refetch(); relatedAudits.refetch(); }}><RefreshCw size={16} /> Refresh</button></div>}>
       {!current && restore.isLoading && <section className="panel"><Empty text="Loading restore details." /></section>}
       {!current && restore.error && <section className="panel"><Empty text={String(restore.error)} /></section>}
       {current && <>

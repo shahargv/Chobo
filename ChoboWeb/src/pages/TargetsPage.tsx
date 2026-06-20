@@ -21,7 +21,7 @@ export function Targets() {
     onSuccess: () => { showToast({ kind: "success", text: "Backup storage saved." }); targets.refetch(); reset(); },
     onError: (error) => showToast({ kind: "error", text: String(error) })
   });
-  return <CrudPage title="Backup Storage" showForm={showForm} onAdd={() => { reset(); setShowForm(true); }} formTitle={editing ? "Edit backup storage" : "Create backup storage"} saveLabel={editing ? "Update storage" : "Save storage"} onCancel={reset} onSave={() => save.mutate()} form={<>
+  return <CrudPage title="Backup Storage" subtitle="Manage S3-compatible backup storage targets and connection settings." showForm={showForm} onAdd={() => { reset(); setShowForm(true); }} formTitle={editing ? "Edit backup storage" : "Create backup storage"} saveLabel={editing ? "Update storage" : "Save storage"} onCancel={reset} onSave={() => save.mutate()} form={<>
     <Input label="Name" value={draft.name} onChange={(value) => setDraft({ ...draft, name: value })} />
     <Input label="Endpoint" value={draft.endpoint} onChange={(value) => setDraft({ ...draft, endpoint: value })} />
     <Input label="Bucket" value={draft.bucket} onChange={(value) => setDraft({ ...draft, bucket: value })} />

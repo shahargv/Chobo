@@ -14,12 +14,12 @@ import {
 } from "@tanstack/react-table";
 import { ArrowDown, ArrowUp, ArrowUpDown, Save, Search, X } from "lucide-react";
 
-export function Page({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
-  return <div className="page"><div className="page-head"><div><h1>{title}</h1><p>Manage Chobo operations and configuration.</p></div>{action}</div>{children}</div>;
+export function Page({ title, subtitle, action, children }: { title: string; subtitle: string; action?: ReactNode; children: ReactNode }) {
+  return <div className="page"><div className="page-head"><div><h1>{title}</h1><p>{subtitle}</p></div>{action}</div>{children}</div>;
 }
 
-export function CrudPage({ title, showForm, onAdd, formTitle, saveLabel = "Save", form, table, onSave, onCancel }: { title: string; showForm: boolean; onAdd: () => void; formTitle?: string; saveLabel?: string; form: ReactNode; table: ReactNode; onSave: () => void; onCancel?: () => void }) {
-  return <Page title={title} action={!showForm ? <button className="primary" onClick={onAdd}><Save size={16} /> Add</button> : undefined}><section className="panel">{table}</section>{showForm && <section className="panel form-panel"><div className="section-head">{formTitle && <h2>{formTitle}</h2>}{onCancel && <button className="ghost" onClick={onCancel}>Cancel</button>}</div><div className="form-grid">{form}</div><div className="actions"><button className="primary" onClick={onSave}><Save size={16} /> {saveLabel}</button></div></section>}</Page>;
+export function CrudPage({ title, subtitle, showForm, onAdd, formTitle, saveLabel = "Save", form, table, onSave, onCancel }: { title: string; subtitle: string; showForm: boolean; onAdd: () => void; formTitle?: string; saveLabel?: string; form: ReactNode; table: ReactNode; onSave: () => void; onCancel?: () => void }) {
+  return <Page title={title} subtitle={subtitle} action={!showForm ? <button className="primary" onClick={onAdd}><Save size={16} /> Add</button> : undefined}><section className="panel">{table}</section>{showForm && <section className="panel form-panel"><div className="section-head">{formTitle && <h2>{formTitle}</h2>}{onCancel && <button className="ghost" onClick={onCancel}>Cancel</button>}</div><div className="form-grid">{form}</div><div className="actions"><button className="primary" onClick={onSave}><Save size={16} /> {saveLabel}</button></div></section>}</Page>;
 }
 
 type ParsedCell = { node: ReactNode; text: string; className?: string };

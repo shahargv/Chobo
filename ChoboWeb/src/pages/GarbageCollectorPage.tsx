@@ -33,7 +33,7 @@ export function GarbageCollectorPage() {
     (entry.entityType === "backup" && cleanupActions.some((action) => entry.action.includes(action))));
 
   return (
-    <Page title="Backup GC" action={<div className="actions"><button className="secondary" disabled={status.isFetching || audits.isFetching} onClick={() => { status.refetch(); audits.refetch(); }}><RefreshCw size={16} /> Refresh</button><button className="primary" disabled={run.isPending || current?.isRunning} onClick={() => run.mutate()}><Play size={16} /> Manual Execute</button></div>}>
+    <Page title="Backup GC" subtitle="Review garbage-collector activity and run cleanup for expired or failed backup remains." action={<div className="actions"><button className="secondary" disabled={status.isFetching || audits.isFetching} onClick={() => { status.refetch(); audits.refetch(); }}><RefreshCw size={16} /> Refresh</button><button className="primary" disabled={run.isPending || current?.isRunning} onClick={() => run.mutate()}><Play size={16} /> Manual Execute</button></div>}>
       <section className="panel">
         <div className="section-head">
           <div>

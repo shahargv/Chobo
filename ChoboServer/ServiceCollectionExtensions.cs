@@ -91,15 +91,13 @@ public static class ServiceCollectionExtensions
         services.AddDbContext<ChoboDbContext>((serviceProvider, options) =>
         {
             var storage = serviceProvider.GetRequiredService<IOptions<ChoboStorageOptions>>().Value;
-            var dataDirectory = ChoboPaths.GetDataDirectory(storage.DataDirectory);
-            Directory.CreateDirectory(dataDirectory);
-            var dbPath = Path.Combine(dataDirectory, "chobo.db");
-            options.UseSqlite(new SqliteConnectionStringBuilder
-            {
-                DataSource = dbPath,
-                DefaultTimeout = 60
-            }.ToString());
+            ConfigureChoboSqlite(options, storage);
         });
+        services.AddDbContextFactory<ChoboDbContext>((serviceProvider, options) =>
+        {
+            var storage = serviceProvider.GetRequiredService<IOptions<ChoboStorageOptions>>().Value;
+            ConfigureChoboSqlite(options, storage);
+        }, ServiceLifetime.Scoped);
         services.AddScoped<ActorContext>();
         services.AddScoped<IActorContext>(serviceProvider => serviceProvider.GetRequiredService<ActorContext>());
         services.AddScoped<ITokenService, TokenService>();
@@ -150,6 +148,18 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
+
+    private static void ConfigureChoboSqlite(DbContextOptionsBuilder options, ChoboStorageOptions storage)
+    {
+        var dataDirectory = ChoboPaths.GetDataDirectory(storage.DataDirectory);
+        Directory.CreateDirectory(dataDirectory);
+        var dbPath = Path.Combine(dataDirectory, "chobo.db");
+        options.UseSqlite(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            DefaultTimeout = 60
+        }.ToString());
+    }
     public static async Task InitializeChoboDatabaseAsync(this IServiceProvider services, bool firstStartup, bool missingDatabaseAfterInitialized = false)
     {
         using var scope = services.CreateScope();
@@ -173,4 +183,5 @@ public static class ServiceCollectionExtensions
         }
     }
 }
+
 
