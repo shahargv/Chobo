@@ -123,11 +123,13 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IScheduleRepository, ScheduleRepository>();
         services.AddScoped<UserApplicationService>();
         services.AddScoped<ClusterApplicationService>();
+        services.AddScoped<SystemDefaultBackupPolicyService>();
         services.AddScoped<TargetApplicationService>();
         services.AddScoped<PolicySelectorEvaluationService>();
         services.AddScoped<PolicyApplicationService>();
         services.AddScoped<ScheduleApplicationService>();
         services.AddScoped<DashboardApplicationService>();
+        services.AddScoped<SchemaBrowserApplicationService>();
         services.AddScoped<BackupApplicationService>();
         services.AddScoped<IBackupStorageManifestService, BackupStorageManifestService>();
         services.AddScoped<RestoreApplicationService>();
@@ -176,3 +178,5 @@ public static class ServiceCollectionExtensions
         }
     }
 }
+
+

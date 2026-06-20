@@ -1,154 +1,214 @@
 # Production Setup
 
-This guide describes a production-oriented Chobo deployment. For local development with Docker-hosted ClickHouse and MinIO, see [Local debugging instructions](DebuggingInstructions.MD).
+This guide describes a production-oriented Chobo deployment using the published Docker images. For local development with Docker-hosted ClickHouse and MinIO, see [Local debugging instructions](DebuggingInstructions.MD).
 
-## Components
+## Deployment Shape
 
-A production deployment has four moving pieces:
+A production deployment has these moving pieces:
 
-- `ChoboServer`: the HTTP API and background worker host.
-- `ChoboCli`: the operator CLI.
-- SQLite metadata database: stored by ChoboServer under the configured data directory.
-- ClickHouse and S3-compatible storage: external systems that Chobo backs up from, restores into, and writes backup objects to.
+- ChoboServer: the HTTP API, web GUI, scheduler, background workers, audit, logs, and SQLite metadata database.
+- ChoboCli: the operator CLI, usually run on demand from an admin workstation, automation host, or short-lived container.
+- Persistent Chobo data directory: stores `chobo.db`, initialization state, and SQLite-backed operational logs.
+- ClickHouse and S3-compatible storage: the systems Chobo backs up from, restores into, and writes backup objects to.
 
-ChoboServer owns scheduling, retention, audit records, application logs, backup execution, restore execution, and deletion of expired or manually deleted backup objects.
+Run ChoboServer close enough to ClickHouse and S3 that it can test connections, submit work, poll status, and clean up expired backup objects. ClickHouse nodes also need their own network path to the S3 endpoint, because ClickHouse performs the actual `BACKUP ... TO S3(...)` and `RESTORE ... FROM S3(...)` operations.
 
-## Requirements
+## Ports And Network Access
 
-- .NET 10 runtime for framework-dependent binaries, or the self-contained release artifacts built by `scripts/Build-Artifacts.ps1`.
-- Network access from ChoboServer to ClickHouse HTTP(S) endpoints. Chobo uses the official `ClickHouse.Driver` ADO.NET package; configured native-default ports are mapped internally from `9000` to `8123`, and from TLS `9440` to `8443`.
-- Network access from ClickHouse nodes to the configured S3 endpoint, because ClickHouse itself performs the `BACKUP ... TO S3(...)` and `RESTORE ... FROM S3(...)` calls.
-- Network access from ChoboServer to the S3 endpoint for backup deletion during retention, failed-backup cleanup, and manual delete.
-- Persistent storage for the Chobo data directory.
-- A stable 32-byte encryption key encoded as Base64.
+Expose ChoboServer to operators on port `8080` unless you intentionally choose another port. By default, the web GUI and `/api/v1/*` API are served from the same HTTP listener.
 
-## Build Artifacts
+| Direction | Port | Purpose |
+| --- | --- | --- |
+| Browser or CLI to ChoboServer | `8080/tcp` | Web GUI, API, `/health`, and metrics endpoint. |
+| Browser to ChoboServer | `8081/tcp` | Optional GUI-only port when `CHOBO_WEB_GUI_PORT=8081` is configured. |
+| ChoboServer to ClickHouse | `8123/tcp` or `8443/tcp` | ClickHouse HTTP or HTTPS endpoint. Chobo also accepts `9000` and maps it to `8123`, and accepts TLS `9440` and maps it to `8443`. |
+| ClickHouse nodes to S3 | provider-specific, commonly `443/tcp` or `9000/tcp` | ClickHouse writes and reads backup objects directly. |
+| ChoboServer to S3 | provider-specific, commonly `443/tcp` or `9000/tcp` | Retention cleanup, failed-backup cleanup, manual delete, and metadata recovery. |
 
-From the repository root:
+Put ChoboServer behind your normal TLS termination layer for production. Chobo uses bearer-token authentication for the API and GUI, but production traffic should still be protected with TLS.
 
-```powershell
-.\scripts\Build-Artifacts.ps1 -Configuration Release
-```
+## Run ChoboServer With Docker
 
-The script publishes self-contained binaries under:
-
-```text
-.artifacts/build/Release/
-```
-
-It creates these binary directories:
-
-- `cli-win-x64`
-- `cli-linux-x64`
-- `server-win-x64`
-- `server-linux-x64`
-
-It also builds local Docker images:
-
-```text
-choboserver:local
-chobocli:local
-```
-
-The server and CLI Dockerfiles build from source inside Docker.
-
-## Initialize Server State
-
-ChoboServer creates and upgrades its SQLite database on startup. On first startup, when `chobo.db` and `_initialized` are both absent from the data directory, it creates the first admin user and access token automatically.
-
-Provide init settings on first server startup when you need deterministic credentials:
-
-```powershell
-$env:CHOBO_INIT_ADMIN_USER = "admin"
-$env:CHOBO_INIT_ACCESS_TOKEN = "<long-random-token>"
-```
-
-When `CHOBO_INIT_ACCESS_TOKEN` is omitted, ChoboServer generates a token and prints it once directly to stdout during first startup. Store that value securely.
-
-## Run ChoboServer
-
-Set production configuration through environment variables or an appsettings file. A minimal Windows example:
-
-```powershell
-$env:ASPNETCORE_URLS = "http://0.0.0.0:8080"
-$env:CHOBO_DATA_DIRECTORY = "C:\ProgramData\Chobo"
-$env:CHOBO_ENCRYPTION_KEY_BASE64 = "<base64-32-byte-key>"
-.\ChoboServer.exe
-```
-
-A minimal Linux example:
+Pull the server image:
 
 ```bash
-ASPNETCORE_URLS=http://0.0.0.0:8080 \
-CHOBO_DATA_DIRECTORY=/var/lib/chobo \
-CHOBO_ENCRYPTION_KEY_BASE64=<base64-32-byte-key> \
-./ChoboServer
+docker pull shahargv/chobo:server-latest
 ```
 
-The server exposes:
+Create a stable 32-byte encryption key encoded as Base64 and keep it for the lifetime of the deployment. This key protects stored ClickHouse and S3 credentials; changing it makes existing encrypted credentials unreadable.
 
-- `GET /health` without authentication.
-- `/api/v1/*` with bearer-token authentication.
-- `GET /api/v1/server/version` with bearer-token authentication.
-- `/openapi/*` only in the Development environment.
+Generate a cryptographically random 32-byte key and Base64-encode it:
 
-Put ChoboServer behind your normal TLS termination layer. Chobo's API authentication is bearer-token based, but production traffic should still be protected by TLS.
+```bash
+openssl rand -base64 32
+```
 
-## Authenticate The CLI
-
-Persist the server URL and access token once:
+On Windows PowerShell:
 
 ```powershell
-ChoboCli server auth --server-url https://chobo.example.com --access-token <token>
+[Convert]::ToBase64String([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
 ```
 
-The CLI profile is stored at:
+Run the server with a persistent data volume:
 
-```text
-%USERPROFILE%\.chobo\config.json
+```bash
+docker volume create chobo-data
+
+docker run -d \
+  --name chobo-server \
+  --restart unless-stopped \
+  -p 8080:8080 \
+  --mount type=volume,source=chobo-data,target=/var/lib/chobo \
+  -e ASPNETCORE_URLS=http://0.0.0.0:8080 \
+  -e CHOBO_DATA_DIRECTORY=/var/lib/chobo \
+  -e CHOBO_ENCRYPTION_KEY_BASE64=<base64-32-byte-key> \
+  shahargv/chobo:server-latest
 ```
 
-You can also pass `--server-url` and `--access-token` per command when automation should avoid a persisted profile.
+The `/var/lib/chobo` mount is required for production. It contains the SQLite metadata database, initialization marker, and local operational state. If you provide an external appsettings file, mount that separately and set `CHOBO_APPSETTINGS_PATH`, for example:
 
-## Configure Resources
-
-Add a ClickHouse source cluster. For a single node:
-
-```powershell
-ChoboCli clusters add --name prod-single --mode SingleInstance --host clickhouse-1.example.com --port 9000 --username default --password <password>
+```bash
+--mount type=bind,source=/etc/chobo,target=/etc/chobo,readonly \
+-e CHOBO_APPSETTINGS_PATH=/etc/chobo/appsettings.Production.json
 ```
 
-For a ClickHouse cluster:
+If you want the GUI on a separate port from the API, set `CHOBO_WEB_GUI_PORT=8081` and publish both ports:
 
-```powershell
-ChoboCli clusters add --name prod-cluster --mode Cluster --node ch1:9000,ch2:9000,ch3:9000 --username default --password <password> --backup-restore-maxdop 3 --clickhouse-cluster-name prod_cluster
+```bash
+-p 8080:8080 -p 8081:8081 -e CHOBO_WEB_GUI_PORT=8081
 ```
 
-For `Cluster` mode, `--clickhouse-cluster-name` should match the value in ClickHouse `system.clusters.cluster`. If it is omitted, Chobo can auto-discover the cluster name only when `system.clusters` contains exactly one cluster definition.
+## Docker Compose Example
 
-Chobo accepts the usual ClickHouse native-default ports in CLI commands for compatibility. Internally, the server talks to ClickHouse over HTTP(S): `9000` maps to `8123`, and TLS `9440` maps to `8443`. If your deployment exposes custom HTTP(S) ports, pass those ports directly.
+A minimal production-style Compose file for ChoboServer:
 
-Add an S3-compatible target:
+```yaml
+services:
+  chobo-server:
+    image: shahargv/chobo:server-latest
+    container_name: chobo-server
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      ASPNETCORE_URLS: http://0.0.0.0:8080
+      CHOBO_DATA_DIRECTORY: /var/lib/chobo
+      CHOBO_ENCRYPTION_KEY_BASE64: ${CHOBO_ENCRYPTION_KEY_BASE64}
+    volumes:
+      - chobo-data:/var/lib/chobo
 
-```powershell
-ChoboCli targets add-s3 --name prod-s3 --endpoint https://s3.example.com --region us-east-1 --bucket chobo-backups --path-prefix prod --access-key <key> --secret-key <secret>
+volumes:
+  chobo-data:
 ```
 
-Use `--force-path-style` when required by your S3-compatible service.
+Run it with:
 
-Credentials are write-only in the API and CLI output.
+```bash
+CHOBO_ENCRYPTION_KEY_BASE64=<base64-32-byte-key> docker compose up -d
+```
+
+Add `"8081:8081"` to `ports` and `CHOBO_WEB_GUI_PORT: 8081` to `environment` only when you want a separate GUI listener.
+
+## First Web GUI Setup
+
+Open the GUI at `http://<server-host>:8080`. On a fresh data directory, Chobo starts in initialization mode.
+
+![Initial Chobo install screen](assets/production-setup/00-install.png)
+
+Use the install screen to create the first admin token. Chobo shows that token once; store it in a password manager before leaving the page.
+
+After signing in, the dashboard is the starting point for setup and daily operation.
+
+![Chobo dashboard after sign-in](assets/production-setup/01-dashboard.png)
+
+## Configure ClickHouse Sources
+
+Go to **Clusters** and add the ClickHouse source you want Chobo to protect.
+
+![Add ClickHouse cluster in the web GUI](assets/production-setup/02-add-cluster.png)
+
+For a single node, enter the ClickHouse host, port, credentials, TLS choice, and backup/restore parallelism. For a ClickHouse cluster, choose cluster mode and provide access nodes plus the ClickHouse cluster name when auto-discovery is not enough.
+
+Chobo uses ClickHouse HTTP(S). If your team normally thinks in native ports, Chobo accepts `9000` and maps it to HTTP `8123`, and accepts TLS `9440` and maps it to HTTPS `8443`. If your deployment exposes custom HTTP(S) ports, enter those ports directly.
+
+## Configure Backup Storage
+
+Go to **Backup Storage** and add an S3-compatible target.
+
+![Add S3-compatible backup storage in the web GUI](assets/production-setup/03-add-storage.png)
+
+The S3 endpoint must be reachable from the ClickHouse nodes, not only from ChoboServer. Use path-style access when required by MinIO or another S3-compatible provider. Access keys and secret keys are write-only after save.
+
+## Create Policies And Schedules
+
+Go to **Policies** and create a backup policy that connects a ClickHouse source, backup target, table selector, backup mode, and retention settings.
+
+![Create a backup policy in the web GUI](assets/production-setup/04-add-policy.png)
+
+Use include and exclude rules to describe the tables a DBA wants protected. Schema-only policies are useful when the goal is DDL history rather than data backup.
+
+Then go to **Schedules** and create recurring backup work for the policy.
+
+![Create a backup schedule in the web GUI](assets/production-setup/05-add-schedule.png)
+
+Schedules use Quartz-style cron expressions and a timezone. Keep the missed-run grace period tight enough that an old scheduled run does not surprise operators after an outage.
+
+## Run And Inspect Backups
+
+After resources are configured, use the GUI to run manual backups, inspect scheduled runs, browse captured schema, and start restores. Backup and restore detail pages include table and shard-level status, related logs, and audit entries.
+
+Use the dashboard for active work and upcoming schedules. Use Logs and Audit when diagnosing failures, configuration changes, retention cleanup, or restore decisions.
+
+## Pull And Use The CLI
+
+After the web GUI is installed and the first access token is stored, pull the CLI image:
+
+```bash
+docker pull shahargv/chobo:cli-latest
+```
+
+Use the CLI from an admin machine or automation host. You can pass the server URL and access token per command:
+
+```bash
+docker run --rm shahargv/chobo:cli-latest \
+  server version \
+  --server-url https://chobo.example.com \
+  --access-token <token>
+```
+
+For repeated interactive use, mount a local CLI profile directory and authenticate once:
+
+```bash
+mkdir -p ~/.chobo
+
+docker run --rm -it \
+  --mount type=bind,source=$HOME/.chobo,target=/root/.chobo \
+  shahargv/chobo:cli-latest \
+  server auth --server-url https://chobo.example.com --access-token <token>
+```
+
+Then reuse the same mounted profile for other CLI commands:
+
+```bash
+docker run --rm -it \
+  --mount type=bind,source=$HOME/.chobo,target=/root/.chobo \
+  shahargv/chobo:cli-latest \
+  dashboard --next-hours 12
+```
+
+The CLI checks `/api/v1/server/version` before normal commands and should be upgraded with the server image.
 
 ## Operational Checks
 
 Check health:
 
-```powershell
-Invoke-RestMethod https://chobo.example.com/health
+```bash
+curl -fsS https://chobo.example.com/health
 ```
 
-Check configured resources:
+Check configured resources with the CLI:
 
-```powershell
+```bash
 ChoboCli clusters list
 ChoboCli targets list
 ChoboCli policies list
@@ -157,18 +217,17 @@ ChoboCli schedules list
 
 Check active work and upcoming schedules:
 
-```powershell
+```bash
 ChoboCli dashboard --next-hours 12
 ChoboCli metrics show
 ```
 
 Review audit and application logs:
 
-```powershell
+```bash
 ChoboCli audit show --last 200
 ChoboCli logs show --last 500
 ```
-
 
 ## Import And Export
 
@@ -179,18 +238,20 @@ Import does not restore audit entries or application logs. The importing server 
 Imported ClickHouse and S3 credentials are intentionally empty. After importing, update cluster credentials and backup target credentials before running connection tests, backups, restores, cleanup, or metadata recovery that needs those resources. The next save encrypts the credentials with the current server key.
 
 Use config export/import only for configuration-only moves. Config import is not a way to preserve existing backup/restore history; use data export/import for full metadata recovery.
+
 ## Upgrade Notes
 
 Chobo tracks separate API, export, product/server, and SQLite schema versions. The current API path is `/api/v1`.
 
 On startup, ChoboServer checks the SQLite schema version. It rejects databases newer than the server-supported schema and applies registered schema upgrade steps for older supported databases.
 
-ChoboCli checks `/api/v1/server/version` before normal commands and fails when the server API version does not match the API version the CLI was built for. Upgrade the server and CLI together.
-
 Before upgrading production:
 
 - Back up the Chobo data directory, including `chobo.db`.
 - Keep the same `CHOBO_ENCRYPTION_KEY_BASE64`; changing it makes stored credentials unreadable.
+- Pull the matching server and CLI images.
 - Verify the new server can reach ClickHouse and S3.
-- Check `/health`, `server auth`, `dashboard`, and `audit show` after startup.
+- Check `/health`, the dashboard, and `audit show` after startup.
+
+
 

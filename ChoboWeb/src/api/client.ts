@@ -34,6 +34,8 @@ import type {
   RecoverBackupMetadataScanRequest,
   RestoreDto,
   ServerVersionDto,
+  SchemaBackupDto,
+  SchemaBackupSummaryDto,
   StorageConnectionTestResult,
   UpsertClusterRequest,
   UpsertPolicyRequest,
@@ -120,6 +122,10 @@ export class ChoboApiClient {
   backupGarbageCollectorStatus() { return this.get<BackupGarbageCollectorStatusDto>("backups/garbage-collector/status"); }
   runBackupGarbageCollector() { return this.post<BackupGarbageCollectorStatusDto>("backups/garbage-collector/run", {}); }
 
+  schemaBackups(filters: { from?: string; to?: string } = {}) { return this.get<SchemaBackupSummaryDto[]>(`schema/backups${query(filters)}`); }
+  backupSchema(id: string) { return this.get<SchemaBackupDto>(`schema/backups/${id}`); }
+  exportBackupSchema(id: string, database?: string) { return this.requestText(`schema/backups/${id}/export${query({ database })}`, { accept: "text/plain" }); }
+
   restores() { return this.get<RestoreDto[]>("restores"); }
   restore(id: string) { return this.get<RestoreDto>(`restores/${id}`); }
   initiateRestore(request: InitiateRestoreRequest) { return this.post<RestoreDto>("restores/initiate", request); }
@@ -183,3 +189,6 @@ function query(values: Record<string, string | number | undefined | null>) {
   const text = params.toString();
   return text ? `?${text}` : "";
 }
+
+
+

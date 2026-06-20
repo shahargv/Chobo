@@ -19,8 +19,9 @@ public sealed record BackupStorageManifestRunV1(
     BackupTriggerType TriggerType,
     BackupRunStatus Status,
     BackupType BackupType,
+    BackupContentMode ContentMode,
     Guid SourceClusterId,
-    Guid TargetId,
+    Guid? TargetId,
     Guid? PolicyId,
     Guid? ScheduleId,
     Guid? RequestedByUserId,
@@ -69,7 +70,8 @@ public sealed record BackupStorageManifestPolicyV1(
     Guid Id,
     string Name,
     Guid SourceClusterId,
-    Guid TargetId,
+    Guid? TargetId,
+    BackupContentMode ContentMode,
     int SelectorJsonVersion,
     PolicySelector Selector,
     BackupRetentionDto? Retention,
@@ -89,6 +91,7 @@ public sealed record BackupStorageManifestScheduleV1(
     bool IsEnabled,
     TimeSpan? MissedRunGracePeriod,
     string? Description,
+    bool IsSystemDefault,
     bool IsDeleted,
     DateTimeOffset CreatedAt,
     DateTimeOffset? UpdatedAt,
@@ -114,7 +117,7 @@ public sealed record BackupStorageManifestTableV1(
     string Table,
     string Engine,
     bool DataBackedUp,
-    Guid SchemaDefinitionId,
+    Guid? SchemaDefinitionId,
     string S3Path,
     BackupTableStatus Status,
     string? ClickHouseOperationId,
@@ -165,3 +168,5 @@ public sealed record BackupMetadataRecoveryItem(
     string Message);
 
 public sealed record UpdateClusterCredentialsRequest(string? UserName, string? Password);
+
+

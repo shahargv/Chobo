@@ -43,17 +43,19 @@ public sealed class ExportImportService(ChoboDbContext db, IActorContext actor) 
                 x.Name,
                 x.SourceClusterId,
                 x.TargetId,
+                x.ContentMode,
                 x.SelectorJsonVersion,
                 JsonSerializer.Deserialize<PolicySelector>(x.SelectorJson, JsonOptions)!,
                 x.FullRetentionMinutes is null && x.IncrementalRetentionMinutes is null ? null : new BackupRetentionDto(x.FullRetentionMinutes, x.IncrementalRetentionMinutes, x.MinBackupsToKeep, x.MinFullBackupsToKeep),
                 x.FailedBackupRetentionMode,
+                x.IsSystemDefault,
                 x.IsDeleted,
                 x.CreatedAt,
                 x.UpdatedAt,
                 x.DeletedAt)).ToList(),
-            schedules.Select(x => new BackupScheduleExport(x.Id, x.Name, x.PolicyId, x.BackupType, x.CronExpression, x.TimeZoneId, x.IsEnabled, x.MissedRunGracePeriod, x.Description, x.IsDeleted, x.CreatedAt, x.UpdatedAt, x.DeletedAt)).ToList(),
+            schedules.Select(x => new BackupScheduleExport(x.Id, x.Name, x.PolicyId, x.BackupType, x.CronExpression, x.TimeZoneId, x.IsEnabled, x.MissedRunGracePeriod, x.Description, x.IsSystemDefault, x.IsDeleted, x.CreatedAt, x.UpdatedAt, x.DeletedAt)).ToList(),
             schemaDefinitions.Select(x => new SchemaDefinitionExport(x.Id, x.SchemaHash, x.Database, x.Table, x.Engine, x.CreateTableSql, x.ColumnsJson, x.CreatedAt)).ToList(),
-            backups.Select(x => new BackupExport(x.Id, x.TriggerType, x.Status, x.BackupType, x.SourceClusterId, x.TargetId, x.PolicyId, x.ScheduleId, x.ManualRequestJson, x.RequestedByUserId, x.RequestedByName, x.CreatedAt, x.QueuedAt, x.StartedAt, x.CompletedAt, x.Error, x.FailureReason, x.IsPinned, x.PinnedAt, x.PinnedByUserId, x.PinnedByName, x.DeletionReason, x.DeletionRequestedAt, x.DeletionStartedAt, x.DeletedAt, x.DeletionError, x.DeletionAttemptCount)).ToList(),
+            backups.Select(x => new BackupExport(x.Id, x.TriggerType, x.Status, x.BackupType, x.ContentMode, x.SourceClusterId, x.TargetId, x.PolicyId, x.ScheduleId, x.ManualRequestJson, x.RequestedByUserId, x.RequestedByName, x.CreatedAt, x.QueuedAt, x.StartedAt, x.CompletedAt, x.Error, x.FailureReason, x.IsPinned, x.PinnedAt, x.PinnedByUserId, x.PinnedByName, x.DeletionReason, x.DeletionRequestedAt, x.DeletionStartedAt, x.DeletedAt, x.DeletionError, x.DeletionAttemptCount)).ToList(),
             backupTables.Select(x => new BackupTableExport(x.Id, x.BackupId, x.EffectiveBackupType, x.ParentFullBackupId, x.ParentFullBackupTableId, x.Database, x.Table, x.Engine, x.DataBackedUp, x.SchemaDefinitionId, x.S3Path, x.Status, x.ClickHouseOperationId, x.ClickHouseStatus, x.StartedAt, x.CompletedAt, x.Error)).ToList(),
             backupTableShards.Select(x => new BackupTableShardExport(x.Id, x.BackupTableId, x.EffectiveBackupType, x.ParentFullBackupId, x.ParentFullBackupTableShardId, x.SourceShardNumber, x.SourceShardName, x.ReplicaNumber, x.Host, x.Port, x.UseTls, x.S3Path, x.Status, x.ClickHouseOperationId, x.ClickHouseStatus, x.StartedAt, x.CompletedAt, x.Error)).ToList(),
             restores.Select(x => new RestoreExport(x.Id, x.BackupId, x.TargetClusterId, x.Status, x.Append, x.AllowSchemaMismatch, x.Layout, x.SourceShard, x.TargetShard, x.RequestJson, x.RequestedByUserId, x.RequestedByName, x.CreatedAt, x.QueuedAt, x.StartedAt, x.CompletedAt, x.Error, x.FailureReason)).ToList(),
@@ -130,6 +132,7 @@ public sealed class ExportImportService(ChoboDbContext db, IActorContext actor) 
                 Name = x.Name,
                 SourceClusterId = x.SourceClusterId,
                 TargetId = x.TargetId,
+                ContentMode = x.ContentMode,
                 SelectorJsonVersion = x.SelectorJsonVersion,
                 SelectorJson = JsonSerializer.Serialize(x.Selector, JsonOptions),
                 FullRetentionMinutes = x.Retention?.FullRetentionMinutes,
@@ -137,17 +140,18 @@ public sealed class ExportImportService(ChoboDbContext db, IActorContext actor) 
                 MinBackupsToKeep = x.Retention?.MinBackupsToKeep ?? 0,
                 MinFullBackupsToKeep = x.Retention?.MinFullBackupsToKeep ?? 0,
                 FailedBackupRetentionMode = x.FailedBackupRetentionMode,
+                IsSystemDefault = x.IsSystemDefault,
                 IsDeleted = x.IsDeleted,
                 CreatedAt = x.CreatedAt,
                 UpdatedAt = x.UpdatedAt,
                 DeletedAt = x.DeletedAt
             }));
-            db.BackupSchedules.AddRange(envelope.Data.BackupSchedules.Select(x => new BackupScheduleEntity { Id = x.Id, Name = x.Name, PolicyId = x.PolicyId, BackupType = x.BackupType, CronExpression = x.CronExpression, TimeZoneId = x.TimeZoneId, IsEnabled = x.IsEnabled, MissedRunGracePeriod = x.MissedRunGracePeriod, Description = x.Description, IsDeleted = x.IsDeleted, CreatedAt = x.CreatedAt, UpdatedAt = x.UpdatedAt, DeletedAt = x.DeletedAt }));
+            db.BackupSchedules.AddRange(envelope.Data.BackupSchedules.Select(x => new BackupScheduleEntity { Id = x.Id, Name = x.Name, PolicyId = x.PolicyId, BackupType = x.BackupType, CronExpression = x.CronExpression, TimeZoneId = x.TimeZoneId, IsEnabled = x.IsEnabled, MissedRunGracePeriod = x.MissedRunGracePeriod, Description = x.Description, IsSystemDefault = x.IsSystemDefault, IsDeleted = x.IsDeleted, CreatedAt = x.CreatedAt, UpdatedAt = x.UpdatedAt, DeletedAt = x.DeletedAt }));
 
             if (!configOnly)
             {
                 db.SchemaDefinitions.AddRange(envelope.Data.SchemaDefinitions.Select(x => new SchemaDefinitionEntity { Id = x.Id, SchemaHash = x.SchemaHash, Database = x.Database, Table = x.Table, Engine = x.Engine, CreateTableSql = x.CreateTableSql, ColumnsJson = x.ColumnsJson, CreatedAt = x.CreatedAt }));
-                db.Backups.AddRange(envelope.Data.Backups.Select(x => new BackupEntity { Id = x.Id, TriggerType = x.TriggerType, Status = NormalizeBackupRunStatus(x.Status), BackupType = x.BackupType, SourceClusterId = x.SourceClusterId, TargetId = x.TargetId, PolicyId = x.PolicyId, ScheduleId = x.ScheduleId, ManualRequestJson = x.ManualRequestJson, RequestedByUserId = x.RequestedByUserId, RequestedByName = x.RequestedByName, CreatedAt = x.CreatedAt, QueuedAt = x.QueuedAt, StartedAt = x.StartedAt, CompletedAt = NormalizeCompletedAt(x.Status is BackupRunStatus.Queued or BackupRunStatus.Running, x.CompletedAt, importedAt), Error = x.Error, FailureReason = NormalizeFailureReason(x.Status is BackupRunStatus.Queued or BackupRunStatus.Running, x.FailureReason), IsPinned = x.IsPinned, PinnedAt = x.PinnedAt, PinnedByUserId = x.PinnedByUserId, PinnedByName = x.PinnedByName, DeletionReason = x.DeletionReason, DeletionRequestedAt = x.DeletionRequestedAt, DeletionStartedAt = x.DeletionStartedAt, DeletedAt = x.DeletedAt, DeletionError = x.DeletionError, DeletionAttemptCount = x.DeletionAttemptCount }));
+                db.Backups.AddRange(envelope.Data.Backups.Select(x => new BackupEntity { Id = x.Id, TriggerType = x.TriggerType, Status = NormalizeBackupRunStatus(x.Status), BackupType = x.BackupType, ContentMode = x.ContentMode, SourceClusterId = x.SourceClusterId, TargetId = x.TargetId, PolicyId = x.PolicyId, ScheduleId = x.ScheduleId, ManualRequestJson = x.ManualRequestJson, RequestedByUserId = x.RequestedByUserId, RequestedByName = x.RequestedByName, CreatedAt = x.CreatedAt, QueuedAt = x.QueuedAt, StartedAt = x.StartedAt, CompletedAt = NormalizeCompletedAt(x.Status is BackupRunStatus.Queued or BackupRunStatus.Running, x.CompletedAt, importedAt), Error = x.Error, FailureReason = NormalizeFailureReason(x.Status is BackupRunStatus.Queued or BackupRunStatus.Running, x.FailureReason), IsPinned = x.IsPinned, PinnedAt = x.PinnedAt, PinnedByUserId = x.PinnedByUserId, PinnedByName = x.PinnedByName, DeletionReason = x.DeletionReason, DeletionRequestedAt = x.DeletionRequestedAt, DeletionStartedAt = x.DeletionStartedAt, DeletedAt = x.DeletedAt, DeletionError = x.DeletionError, DeletionAttemptCount = x.DeletionAttemptCount }));
                 db.BackupTables.AddRange(envelope.Data.BackupTables.Select(x => new BackupTableEntity { Id = x.Id, BackupId = x.BackupId, EffectiveBackupType = x.EffectiveBackupType, ParentFullBackupId = x.ParentFullBackupId, ParentFullBackupTableId = x.ParentFullBackupTableId, Database = x.Database, Table = x.Table, Engine = x.Engine, DataBackedUp = x.DataBackedUp, SchemaDefinitionId = x.SchemaDefinitionId, S3Path = x.S3Path, Status = NormalizeBackupTableStatus(x.Status), ClickHouseOperationId = x.ClickHouseOperationId, ClickHouseStatus = x.ClickHouseStatus, StartedAt = x.StartedAt, CompletedAt = NormalizeCompletedAt(x.Status is BackupTableStatus.Queued or BackupTableStatus.Running, x.CompletedAt, importedAt), Error = NormalizeError(x.Status is BackupTableStatus.Queued or BackupTableStatus.Running, x.Error) }));
                 db.BackupTableShards.AddRange(envelope.Data.BackupTableShards.Select(x => new BackupTableShardEntity { Id = x.Id, BackupTableId = x.BackupTableId, EffectiveBackupType = x.EffectiveBackupType, ParentFullBackupId = x.ParentFullBackupId, ParentFullBackupTableShardId = x.ParentFullBackupTableShardId, SourceShardNumber = x.SourceShardNumber, SourceShardName = x.SourceShardName, ReplicaNumber = x.ReplicaNumber, Host = x.Host, Port = x.Port, UseTls = x.UseTls, S3Path = x.S3Path, Status = NormalizeBackupTableStatus(x.Status), ClickHouseOperationId = x.ClickHouseOperationId, ClickHouseStatus = x.ClickHouseStatus, StartedAt = x.StartedAt, CompletedAt = NormalizeCompletedAt(x.Status is BackupTableStatus.Queued or BackupTableStatus.Running, x.CompletedAt, importedAt), Error = NormalizeError(x.Status is BackupTableStatus.Queued or BackupTableStatus.Running, x.Error) }));
                 db.Restores.AddRange(envelope.Data.Restores.Select(x => new RestoreEntity { Id = x.Id, BackupId = x.BackupId, TargetClusterId = x.TargetClusterId, Status = NormalizeRestoreRunStatus(x.Status), Append = x.Append, AllowSchemaMismatch = x.AllowSchemaMismatch, Layout = x.Layout, SourceShard = x.SourceShard, TargetShard = x.TargetShard, RequestJson = x.RequestJson, RequestedByUserId = x.RequestedByUserId, RequestedByName = x.RequestedByName, CreatedAt = x.CreatedAt, QueuedAt = x.QueuedAt, StartedAt = x.StartedAt, CompletedAt = NormalizeCompletedAt(x.Status is RestoreRunStatus.Queued or RestoreRunStatus.Running, x.CompletedAt, importedAt), Error = x.Error, FailureReason = NormalizeFailureReason(x.Status is RestoreRunStatus.Queued or RestoreRunStatus.Running, x.FailureReason) }));
@@ -254,7 +258,11 @@ public sealed class ExportImportService(ChoboDbContext db, IActorContext actor) 
         foreach (var policy in data.BackupPolicies)
         {
             EnsureReference(clusterIds, policy.SourceClusterId, $"backup policy {policy.Id} source cluster");
-            EnsureReference(targetIds, policy.TargetId, $"backup policy {policy.Id} target");
+            EnsureOptionalReference(targetIds, policy.TargetId, $"backup policy {policy.Id} target");
+            if (policy.ContentMode == BackupContentMode.SchemaAndData && policy.TargetId is null)
+            {
+                throw new InvalidOperationException($"backup policy {policy.Id} target is required for schema+data policies.");
+            }
         }
 
         foreach (var schedule in data.BackupSchedules)
@@ -265,7 +273,11 @@ public sealed class ExportImportService(ChoboDbContext db, IActorContext actor) 
         foreach (var backup in data.Backups)
         {
             EnsureReference(clusterIds, backup.SourceClusterId, $"backup run {backup.Id} source cluster");
-            EnsureReference(targetIds, backup.TargetId, $"backup run {backup.Id} target");
+            EnsureOptionalReference(targetIds, backup.TargetId, $"backup run {backup.Id} target");
+            if (backup.ContentMode == BackupContentMode.SchemaAndData && backup.TargetId is null)
+            {
+                throw new InvalidOperationException($"backup run {backup.Id} target is required for schema+data backups.");
+            }
             EnsureOptionalReference(policyIds, backup.PolicyId, $"backup run {backup.Id} policy");
             EnsureOptionalReference(scheduleIds, backup.ScheduleId, $"backup run {backup.Id} schedule");
             EnsureOptionalReference(userIds, backup.RequestedByUserId, $"backup run {backup.Id} requested user");
@@ -275,7 +287,7 @@ public sealed class ExportImportService(ChoboDbContext db, IActorContext actor) 
         foreach (var table in data.BackupTables)
         {
             EnsureReference(backupIds, table.BackupId, $"backup table {table.Id} backup run");
-            EnsureReference(schemaDefinitionIds, table.SchemaDefinitionId, $"backup table {table.Id} schema definition");
+            EnsureOptionalReference(schemaDefinitionIds, table.SchemaDefinitionId, $"backup table {table.Id} schema definition");
             EnsureOptionalReference(backupIds, table.ParentFullBackupId, $"backup table {table.Id} parent full backup");
             EnsureOptionalReference(backupTableIds, table.ParentFullBackupTableId, $"backup table {table.Id} parent full backup table");
         }
@@ -354,3 +366,5 @@ public sealed class ExportImportService(ChoboDbContext db, IActorContext actor) 
         return options;
     }
 }
+
+

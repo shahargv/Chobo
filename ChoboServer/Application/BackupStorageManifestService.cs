@@ -439,6 +439,7 @@ public sealed class BackupStorageManifestService(
                 backup.TriggerType,
                 backup.Status,
                 backup.BackupType,
+                backup.ContentMode,
                 backup.SourceClusterId,
                 backup.TargetId,
                 backup.PolicyId,
@@ -482,6 +483,7 @@ public sealed class BackupStorageManifestService(
             policy.Name,
             policy.SourceClusterId,
             policy.TargetId,
+            policy.ContentMode,
             policy.SelectorJsonVersion,
             JsonSerializer.Deserialize<PolicySelector>(policy.SelectorJson, JsonOptions) ?? PolicySelector.Empty,
             policy.FullRetentionMinutes is null && policy.IncrementalRetentionMinutes is null
@@ -494,7 +496,7 @@ public sealed class BackupStorageManifestService(
             policy.DeletedAt);
 
     private static BackupStorageManifestScheduleV1 ToManifestSchedule(BackupScheduleEntity schedule) =>
-        new(schedule.Id, schedule.Name, schedule.PolicyId, schedule.BackupType, schedule.CronExpression, schedule.TimeZoneId, schedule.IsEnabled, schedule.MissedRunGracePeriod, schedule.Description, schedule.IsDeleted, schedule.CreatedAt, schedule.UpdatedAt, schedule.DeletedAt);
+        new(schedule.Id, schedule.Name, schedule.PolicyId, schedule.BackupType, schedule.CronExpression, schedule.TimeZoneId, schedule.IsEnabled, schedule.MissedRunGracePeriod, schedule.Description, schedule.IsSystemDefault, schedule.IsDeleted, schedule.CreatedAt, schedule.UpdatedAt, schedule.DeletedAt);
 
     private static BackupStorageManifestTableV1 ToManifestTable(BackupTableEntity table) =>
         new(
@@ -549,3 +551,6 @@ public sealed class BackupStorageManifestService(
         return options;
     }
 }
+
+
+

@@ -6,6 +6,7 @@ import {
   Archive,
   CalendarClock,
   Download,
+  FileCode2,
   FileClock,
   Github,
   HardDrive,
@@ -25,6 +26,7 @@ const navItems = [
   { to: "/restores", label: "Restores", icon: RotateCcw },
   { to: "/policies", label: "Policies", icon: Settings2 },
   { to: "/schedules", label: "Schedules", icon: CalendarClock },
+  { to: "/schema", label: "Schema Browser", icon: FileCode2 },
   { to: "/clusters", label: "ClickHouse Clusters", icon: Server },
   { to: "/targets", label: "Backup Storage", icon: HardDrive },
   { to: "/users", label: "Users", icon: Users },
@@ -81,5 +83,6 @@ function TopBar({ onLogout }: { onLogout: () => void }) {
     </header>
   );
 }
+
 
 

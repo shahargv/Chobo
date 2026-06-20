@@ -144,7 +144,9 @@ Chobo deletes the S3 prefixes recorded on the backup tables and shards. If the t
 
 For S3-compatible deletion, ChoboServer needs access to the target endpoint and the stored S3 credentials. Deletion requests are signed with AWS Signature Version 4.
 
-If a backup has shard paths, Chobo deletes each shard path. If a backup table has no shard paths, Chobo deletes the table path.
+If a backup has shard paths, Chobo deletes each shard path. If a backup table has no shard paths, Chobo deletes the table path. Schema-only backups have no S3 paths, so cleanup skips object deletion for them.
+
+Cleanup never removes the backup run record itself. For every deleted or expired backup, including schema+data and schema-only backups, Chobo clears the backup table schema references and deletes schema definition rows that are no longer referenced by any retained backup. Cleanup audit details include deleted S3 path count, cleared schema reference count, and deleted schema definition count.
 
 ## Auditing
 
@@ -199,4 +201,5 @@ Release it back to normal retention:
 ```powershell
 ChoboCli backups unpin --id <backup-id>
 ```
+
 

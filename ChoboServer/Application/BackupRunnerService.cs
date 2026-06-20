@@ -65,7 +65,10 @@ public sealed class BackupRunnerService(
             {
                 _logger.Information("Preparing backup tables for backup {BackupId}.", backup.Id);
                 await PrepareTablesAsync(backup, cancellationToken);
-                await TryWriteIntermediateManifestAsync(backup.Id, cancellationToken);
+                if (backup.ContentMode == BackupContentMode.SchemaAndData)
+                {
+                    await TryWriteIntermediateManifestAsync(backup.Id, cancellationToken);
+                }
             }
 
             var maxDop = EffectiveMaxDop(backup.SourceCluster!);
@@ -107,13 +110,16 @@ public sealed class BackupRunnerService(
                 : null;
             backup.Error = backup.FailureReason;
             await db.SaveChangesAsync(cancellationToken);
-            if (backup.Status == BackupRunStatus.Succeeded)
+            if (backup.ContentMode == BackupContentMode.SchemaAndData)
             {
-                await WriteFinalManifestOrFailAsync(backup, tableCount, cancellationToken);
-            }
-            else
-            {
-                await TryWriteFailedManifestAsync(backup.Id);
+                if (backup.Status == BackupRunStatus.Succeeded)
+                {
+                    await WriteFinalManifestOrFailAsync(backup, tableCount, cancellationToken);
+                }
+                else
+                {
+                    await TryWriteFailedManifestAsync(backup.Id);
+                }
             }
             _logger.Information("Backup {BackupId} finished with status {Status}. Failure reason: {FailureReason}.", backup.Id, backup.Status, backup.FailureReason);
             var auditAction = backup.Status == BackupRunStatus.Succeeded ? "succeeded" : backup.Status == BackupRunStatus.PartiallySucceeded ? "partially-succeeded" : "failed";
@@ -127,7 +133,10 @@ public sealed class BackupRunnerService(
             backup.FailureReason = ex.Message;
             backup.CompletedAt = DateTimeOffset.UtcNow;
             await db.SaveChangesAsync(CancellationToken.None);
-            await TryWriteFailedManifestAsync(backup.Id);
+            if (backup.ContentMode == BackupContentMode.SchemaAndData)
+            {
+                await TryWriteFailedManifestAsync(backup.Id);
+            }
             await audit.RecordAsync("failed", AuditEntityType.Backup, backup.Id.ToString(), new { error = ex.Message, backup.FailureReason });
         }
     }
@@ -244,11 +253,20 @@ public sealed class BackupRunnerService(
         var selector = backup.Policy is not null
             ? JsonSerializer.Deserialize<PolicySelector>(backup.Policy.SelectorJson, JsonOptions) ?? PolicySelector.Empty
             : manualRequest?.Selector ?? PolicySelector.Empty;
-        var schemaOnly = manualRequest?.SchemaOnly ?? false;
+        var schemaOnly = backup.ContentMode == BackupContentMode.SchemaOnly || (manualRequest?.SchemaOnly ?? false);
+        if (schemaOnly && backup.ContentMode != BackupContentMode.SchemaOnly)
+        {
+            backup.ContentMode = BackupContentMode.SchemaOnly;
+            backup.BackupType = BackupType.Full;
+            backup.TargetId = null;
+            await db.SaveChangesAsync(cancellationToken);
+        }
 
         var topology = await clickHouse.GetTopologyAsync(backup.SourceCluster!, cancellationToken);
         var representatives = SelectShardRepresentatives(topology);
-        var inventory = await clickHouse.GetTablesAsync(backup.SourceCluster!, cancellationToken);
+        var inventory = schemaOnly
+            ? await ReadClusterSchemaInventoryAsync(backup, topology, cancellationToken)
+            : await clickHouse.GetTablesAsync(backup.SourceCluster!, cancellationToken);
         _logger.Information("Backup {BackupId} inventory contains {InventoryCount} table(s).", backup.Id, inventory.Count);
         var selectableInventory = inventory
             .Where(x => !IsExcludedSystemDatabase(x.Database))
@@ -479,6 +497,47 @@ public sealed class BackupRunnerService(
         }
     }
 
+    private async Task<IReadOnlyList<ClickHouseTableInfo>> ReadClusterSchemaInventoryAsync(BackupEntity backup, IReadOnlyList<ClickHouseShardReplicaInfo> topology, CancellationToken cancellationToken)
+    {
+        var orderedNodes = topology
+            .OrderBy(x => x.ShardNumber)
+            .ThenBy(x => x.ReplicaNumber)
+            .ThenBy(x => x.Host, StringComparer.Ordinal)
+            .ThenBy(x => x.Port)
+            .ToList();
+        if (orderedNodes.Count == 0)
+        {
+            return await clickHouse.GetTablesAsync(backup.SourceCluster!, cancellationToken);
+        }
+
+        var byName = new Dictionary<string, ClickHouseTableInfo>(StringComparer.Ordinal);
+        var duplicateCount = 0;
+        foreach (var node in orderedNodes)
+        {
+            var tables = await clickHouse.GetTablesAsync(node.Endpoint, backup.SourceCluster!, cancellationToken);
+            foreach (var table in tables)
+            {
+                var key = ClickHouseBackupIdentity.Table(table.Database, table.Table);
+                if (byName.ContainsKey(key))
+                {
+                    duplicateCount++;
+                    continue;
+                }
+
+                byName[key] = table;
+            }
+        }
+
+        if (duplicateCount > 0)
+        {
+            await audit.RecordAsync("schema-inventory-deduplicated", AuditEntityType.Backup, backup.Id.ToString(), new { operationId = backup.Id, duplicateCount, nodeCount = orderedNodes.Count });
+        }
+
+        return byName.Values
+            .OrderBy(x => x.Database, StringComparer.Ordinal)
+            .ThenBy(x => x.Table, StringComparer.Ordinal)
+            .ToList();
+    }
     private async Task<string> GetBackupFailureReasonAsync(Guid backupId, CancellationToken cancellationToken)
     {
         var tableFailures = await db.BackupTables
@@ -566,17 +625,24 @@ public sealed class BackupRunnerService(
         {
             throw new InvalidOperationException("Incremental backups require a policy.");
         }
-        if (backup.SourceCluster is null || backup.Target is null)
+        if (backup.SourceCluster is null)
         {
-            throw new InvalidOperationException("Backup source cluster or target was not found.");
+            throw new InvalidOperationException("Backup source cluster was not found.");
+        }
+        if (backup.ContentMode == BackupContentMode.SchemaAndData && backup.Target is null)
+        {
+            throw new InvalidOperationException("Backup target was not found.");
+        }
+        if (backup.ContentMode == BackupContentMode.SchemaOnly && backup.BackupType == BackupType.Incremental)
+        {
+            throw new InvalidOperationException("Schema-only backups must be full backups.");
         }
     }
-
     private int EffectiveMaxDop(ClickHouseClusterEntity cluster) =>
         Math.Max(1, cluster.BackupRestoreMaxDop is > 0 ? cluster.BackupRestoreMaxDop.Value : options.Value.MaxDop <= 0 ? 3 : options.Value.MaxDop);
 
     private static bool IsMergeTreeDataEngine(string engine) =>
-        engine.Contains("MergeTree", StringComparison.OrdinalIgnoreCase);
+        engine.EndsWith("MergeTree", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsExcludedSystemDatabase(string database) =>
         string.Equals(database, "system", StringComparison.Ordinal) ||
@@ -703,3 +769,10 @@ public sealed class BackupRunnerService(
         return options;
     }
 }
+
+
+
+
+
+
+

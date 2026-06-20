@@ -25,6 +25,7 @@ public sealed class BackupApplicationService(
         var clusterId = request.ClusterId;
         var targetId = request.TargetId;
         var selector = request.Selector;
+        var contentMode = request.SchemaOnly ? BackupContentMode.SchemaOnly : BackupContentMode.SchemaAndData;
         if (request.PolicyId is { } policyId)
         {
             policy = await db.BackupPolicies.FirstOrDefaultAsync(x => x.Id == policyId && !x.IsDeleted, cancellationToken);
@@ -36,12 +37,13 @@ public sealed class BackupApplicationService(
             clusterId = policy.SourceClusterId;
             targetId = policy.TargetId;
             selector = JsonSerializer.Deserialize<PolicySelector>(policy.SelectorJson, JsonOptions) ?? PolicySelector.Empty;
+            contentMode = policy.ContentMode;
         }
         else if (request.BackupType == BackupType.Incremental)
         {
             throw new ArgumentException("Manual incremental backups require PolicyId.");
         }
-        if (request.SchemaOnly && request.BackupType == BackupType.Incremental)
+        if (contentMode == BackupContentMode.SchemaOnly && request.BackupType == BackupType.Incremental)
         {
             throw new ArgumentException("Schema-only backups must be full backups.");
         }
@@ -50,7 +52,7 @@ public sealed class BackupApplicationService(
         {
             throw new ArgumentException("Cluster id is required.");
         }
-        if (targetId == Guid.Empty)
+        if (contentMode == BackupContentMode.SchemaAndData && (targetId is null || targetId == Guid.Empty))
         {
             throw new ArgumentException("Target id is required.");
         }
@@ -62,19 +64,20 @@ public sealed class BackupApplicationService(
         {
             throw new ArgumentException("Cluster was not found.");
         }
-        if (!await db.BackupTargets.AnyAsync(x => x.Id == targetId && !x.IsDeleted, cancellationToken))
+        if (targetId is { } concreteTargetId && concreteTargetId != Guid.Empty && !await db.BackupTargets.AnyAsync(x => x.Id == concreteTargetId && !x.IsDeleted, cancellationToken))
         {
             throw new ArgumentException("Target was not found.");
         }
 
         var storedRequest = request.PolicyId is null
             ? request
-            : request with { ClusterId = clusterId, TargetId = targetId, Selector = selector };
+            : request with { ClusterId = clusterId, TargetId = targetId, Selector = selector, SchemaOnly = contentMode == BackupContentMode.SchemaOnly };
         var backup = new BackupEntity
         {
             TriggerType = BackupTriggerType.Manual,
             Status = BackupRunStatus.Queued,
-            BackupType = request.BackupType,
+            BackupType = contentMode == BackupContentMode.SchemaOnly ? BackupType.Full : request.BackupType,
+            ContentMode = contentMode,
             SourceClusterId = clusterId,
             TargetId = targetId,
             PolicyId = request.PolicyId,
@@ -85,15 +88,14 @@ public sealed class BackupApplicationService(
 
         db.Backups.Add(backup);
         await db.SaveChangesAsync(cancellationToken);
-        _logger.Information("Manual backup {BackupId} created by {ActorName} for cluster {ClusterId} target {TargetId} type {BackupType} schemaOnly={SchemaOnly}.", backup.Id, actor.ActorName, clusterId, targetId, backup.BackupType, request.SchemaOnly);
-        await audit.RecordAsync("created", AuditEntityType.Backup, backup.Id.ToString(), new { operationId = backup.Id, backup.TriggerType, backup.BackupType, backup.SourceClusterId, backup.TargetId, backup.PolicyId, request.SchemaOnly });
+        _logger.Information("Manual backup {BackupId} created by {ActorName} for cluster {ClusterId} target {TargetId} type {BackupType} contentMode={ContentMode}.", backup.Id, actor.ActorName, clusterId, targetId, backup.BackupType, backup.ContentMode);
+        await audit.RecordAsync("created", AuditEntityType.Backup, backup.Id.ToString(), new { operationId = backup.Id, backup.TriggerType, backup.BackupType, backup.ContentMode, backup.SourceClusterId, backup.TargetId, backup.PolicyId });
         await queues.QueueBackupAsync(backup.Id, cancellationToken);
         _logger.Information("Manual backup {BackupId} queued.", backup.Id);
         await audit.RecordAsync("queued", AuditEntityType.Backup, backup.Id.ToString(), new { operationId = backup.Id, reason = "manual" });
 
         return BackupRestoreMapping.ToDto(await LoadAsync(backup.Id, cancellationToken) ?? backup);
     }
-
     public async Task<IReadOnlyList<BackupDto>> ListAsync(Guid? policyId, string? clusterName, string? tableName, BackupRunStatus? status, CancellationToken cancellationToken = default)
     {
         var query = db.Backups
@@ -349,4 +351,5 @@ public sealed class BackupApplicationService(
         return options;
     }
 }
+
 
