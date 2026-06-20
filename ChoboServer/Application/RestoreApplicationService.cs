@@ -5,6 +5,7 @@ using Chobo.Contracts;
 using ChoboServer.Data;
 using ChoboServer.Services;
 using Microsoft.EntityFrameworkCore;
+using Serilog.Context;
 
 namespace ChoboServer.Application;
 
@@ -73,7 +74,27 @@ public sealed class RestoreApplicationService(
         {
             throw new ArgumentException("SourceShards must not contain duplicates.");
         }
+        if (request.TargetShards is { Count: > 0 } targetShards && targetShards.Any(x => x <= 0))
+        {
+            throw new ArgumentException("Shard numbers must be positive.");
+        }
+        if (request.TargetShards is { Count: 0 })
+        {
+            throw new ArgumentException("TargetShards must not be empty when provided.");
+        }
+        if (request.TargetShard is not null && request.TargetShards is not null)
+        {
+            throw new ArgumentException("Use either TargetShard or TargetShards, not both.");
+        }
+        if (request.TargetShards is { Count: > 0 } requestedTargetShards && requestedTargetShards.Distinct().Count() != requestedTargetShards.Count)
+        {
+            throw new ArgumentException("TargetShards must not contain duplicates.");
+        }
         var layout = request.Layout ?? RestoreLayout.Preserve;
+        if (request.TargetShards is not null && layout != RestoreLayout.Redistribute)
+        {
+            throw new ArgumentException("TargetShards can only be used with redistribute layout.");
+        }
         if (selected.Count > 1 && request.Tables is null or { Count: 0 } && (!string.IsNullOrWhiteSpace(request.TargetDatabase) || !string.IsNullOrWhiteSpace(request.TargetTable)))
         {
             throw new ArgumentException("Target database/table overrides are supported only for a single table restore.");
@@ -119,7 +140,7 @@ public sealed class RestoreApplicationService(
             };
             if (table.DataBackedUp && !restoreTable.SchemaOnly)
             {
-                var shardPlans = PlanShardRestores(layout, backupShards, targetRepresentatives, request.TargetShard);
+                var shardPlans = PlanShardRestores(layout, backupShards, targetRepresentatives, request.TargetShard, request.TargetShards);
                 var useTemporaryRestoreTables = restoreTable.Append || shardPlans.Count > 1;
                 foreach (var plan in shardPlans)
                 {
@@ -146,13 +167,16 @@ public sealed class RestoreApplicationService(
             restore.Tables.Add(restoreTable);
         }
 
+        using var operationCorrelationScope = OperationCorrelationContext.Push(restore.Id.ToString());
+        using var operationLogScope = LogContext.PushProperty("OperationId", restore.Id.ToString());
+
         db.Restores.Add(restore);
         await db.SaveChangesAsync(cancellationToken);
         _logger.Information("Restore {RestoreId} created by {ActorName} for backup {BackupId} into cluster {TargetClusterId} with {TableCount} table(s).", restore.Id, actor.ActorName, restore.BackupId, restore.TargetClusterId, restore.Tables.Count);
-        await audit.RecordAsync("created", AuditEntityType.Restore, restore.Id.ToString(), new { restore.BackupId, restore.TargetClusterId, tableCount = restore.Tables.Count, shardCount = restore.Tables.Sum(x => x.Shards.Count), layout, request.SourceShard, request.SourceShards, request.TargetShard, request.SchemaOnly, tableOptions = restore.Tables.Select(x => new { x.SourceDatabase, x.SourceTable, x.TargetDatabase, x.TargetTable, x.Append, x.AllowSchemaMismatch, x.SchemaOnly }).ToList() });
+        await audit.RecordAsync("created", AuditEntityType.Restore, restore.Id.ToString(), new { operationId = restore.Id, restore.BackupId, restore.TargetClusterId, tableCount = restore.Tables.Count, shardCount = restore.Tables.Sum(x => x.Shards.Count), layout, request.SourceShard, request.SourceShards, request.TargetShard, request.TargetShards, request.SchemaOnly, tableOptions = restore.Tables.Select(x => new { x.SourceDatabase, x.SourceTable, x.TargetDatabase, x.TargetTable, x.Append, x.AllowSchemaMismatch, x.SchemaOnly }).ToList() });
         await queues.QueueRestoreAsync(restore.Id, cancellationToken);
         _logger.Information("Restore {RestoreId} queued.", restore.Id);
-        await audit.RecordAsync("queued", AuditEntityType.Restore, restore.Id.ToString(), new { reason = "user" });
+        await audit.RecordAsync("queued", AuditEntityType.Restore, restore.Id.ToString(), new { operationId = restore.Id, reason = "user" });
         return BackupRestoreMapping.ToDto(await LoadAsync(restore.Id, cancellationToken) ?? restore);
     }
 
@@ -222,7 +246,7 @@ public sealed class RestoreApplicationService(
                 .First())
             .ToList();
 
-    private static IReadOnlyList<ShardRestorePlan> PlanShardRestores(RestoreLayout layout, IReadOnlyList<BackupTableShardEntity> backupShards, IReadOnlyList<ClickHouseShardReplicaInfo> targetRepresentatives, int? requestedTargetShard)
+    private static IReadOnlyList<ShardRestorePlan> PlanShardRestores(RestoreLayout layout, IReadOnlyList<BackupTableShardEntity> backupShards, IReadOnlyList<ClickHouseShardReplicaInfo> targetRepresentatives, int? requestedTargetShard, IReadOnlyList<int>? requestedTargetShards)
     {
         if (targetRepresentatives.Count == 0)
         {
@@ -232,6 +256,17 @@ public sealed class RestoreApplicationService(
         if (requestedTargetShard is { } targetShard && !targetRepresentatives.Any(x => x.ShardNumber == targetShard))
         {
             throw new ArgumentException($"Target shard {targetShard} was not found.");
+        }
+        var targetPool = targetRepresentatives;
+        if (requestedTargetShards is { Count: > 0 })
+        {
+            var missing = requestedTargetShards.Where(x => !targetRepresentatives.Any(t => t.ShardNumber == x)).Distinct().ToList();
+            if (missing.Count > 0)
+            {
+                throw new ArgumentException($"Target shard {missing[0]} was not found.");
+            }
+
+            targetPool = targetRepresentatives.Where(x => requestedTargetShards.Contains(x.ShardNumber)).ToList();
         }
 
         var plans = new List<ShardRestorePlan>();
@@ -251,7 +286,7 @@ public sealed class RestoreApplicationService(
             }
             else if (layout == RestoreLayout.Redistribute)
             {
-                target = targetRepresentatives[i % targetRepresentatives.Count];
+                target = targetPool[i % targetPool.Count];
             }
             else
             {
@@ -280,3 +315,4 @@ public sealed class RestoreApplicationService(
         return options;
     }
 }
+

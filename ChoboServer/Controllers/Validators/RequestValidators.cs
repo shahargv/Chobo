@@ -247,6 +247,8 @@ public sealed class InitiateRestoreRequestValidator : AbstractValidator<Initiate
         RuleFor(x => x.SourceShards).Must(x => x is null || x.Count > 0).WithMessage("SourceShards must not be empty when provided.");
         RuleForEach(x => x.SourceShards).GreaterThan(0).When(x => x.SourceShards is not null);
         RuleFor(x => x.TargetShard).GreaterThan(0).When(x => x.TargetShard is not null);
+        RuleFor(x => x.TargetShards).Must(x => x is null || x.Count > 0).WithMessage("TargetShards must not be empty when provided.");
+        RuleForEach(x => x.TargetShards).GreaterThan(0).When(x => x.TargetShards is not null);
         RuleFor(x => x.Tables).Must(x => x is null || x.Count > 0).WithMessage("Tables must not be empty when provided.");
         RuleForEach(x => x.Tables).SetValidator(new RestoreTableMappingRequestValidator()).When(x => x.Tables is not null);
         RuleFor(x => x)
@@ -255,6 +257,15 @@ public sealed class InitiateRestoreRequestValidator : AbstractValidator<Initiate
         RuleFor(x => x)
             .Must(x => x.SourceShards is null || x.SourceShards.Distinct().Count() == x.SourceShards.Count)
             .WithMessage("SourceShards must not contain duplicates.");
+        RuleFor(x => x)
+            .Must(x => x.TargetShard is null || x.TargetShards is null)
+            .WithMessage("Use either TargetShard or TargetShards, not both.");
+        RuleFor(x => x)
+            .Must(x => x.TargetShards is null || x.TargetShards.Distinct().Count() == x.TargetShards.Count)
+            .WithMessage("TargetShards must not contain duplicates.");
+        RuleFor(x => x)
+            .Must(x => x.TargetShards is null || x.Layout == RestoreLayout.Redistribute)
+            .WithMessage("TargetShards can only be used with redistribute layout.");
         RuleFor(x => x)
             .Must(x => string.IsNullOrWhiteSpace(x.TargetDatabase) == string.IsNullOrWhiteSpace(x.TargetTable))
             .WithMessage("TargetDatabase and TargetTable must be provided together.");
@@ -487,3 +498,4 @@ internal static class ValidationRuleExtensions
     public static IRuleBuilderOptions<T, string> ValidTimeZone<T>(this IRuleBuilder<T, string> rule) =>
         rule.NotEmpty().Must(value => TimeZoneInfo.TryFindSystemTimeZoneById(value, out _)).WithMessage("TimeZoneId is invalid.");
 }
+

@@ -359,3 +359,4 @@ internal static class QuartzCronProjection
                 : int.Parse(value);
     }
 }
+

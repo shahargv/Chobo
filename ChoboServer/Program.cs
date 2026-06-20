@@ -3,6 +3,7 @@ using ChoboServer.Options;
 using ChoboServer.Services;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Options;
+using OpenTelemetry.Metrics;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -32,6 +33,10 @@ if (webOptions.IsGuiEnabled && webOptions.GuiPort is { } guiPort)
 }
 
 builder.Services.AddChoboServer(builder.Configuration);
+builder.Services.AddOpenTelemetry()
+    .WithMetrics(metrics => metrics
+        .AddMeter("System.Runtime", "Microsoft.AspNetCore.Hosting", "Microsoft.AspNetCore.Server.Kestrel")
+        .AddPrometheusExporter());
 
 Log.Logger = new LoggerConfiguration()
     .Enrich.FromLogContext()
@@ -63,6 +68,7 @@ if (app.Services.GetRequiredService<IOptions<ChoboWebOptions>>().Value.IsGuiEnab
     app.UseStaticFiles(new StaticFileOptions { FileProvider = guiFiles });
 }
 app.UseMiddleware<TokenAuthMiddleware>();
+app.MapPrometheusScrapingEndpoint("/api/v1/metrics/prometheus");
 app.MapControllers();
 if (app.Services.GetRequiredService<IOptions<ChoboWebOptions>>().Value.IsGuiEnabled)
 {
@@ -118,3 +124,4 @@ static void AddUrlPorts(List<int> ports, string? value)
 }
 
 public partial class Program;
+

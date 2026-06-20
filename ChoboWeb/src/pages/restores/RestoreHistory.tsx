@@ -1,0 +1,42 @@
+import { useMemo } from "react";
+import { Link } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
+import { RotateCcw } from "lucide-react";
+import { useApi } from "../../api-context";
+import { DataTable, Page, Status } from "../../components/ui";
+import { formatTime } from "../../utils/format";
+import { formatRestoreLayout } from "./restoreUtils";
+
+export function RestoreHistory() {
+  const { api } = useApi();
+  const restores = useQuery({ queryKey: ["restores"], queryFn: () => api.restores() });
+  const clusters = useQuery({ queryKey: ["clusters"], queryFn: () => api.clusters() });
+  const clusterById = useMemo(() => new Map((clusters.data ?? []).map((cluster) => [cluster.id, cluster])), [clusters.data]);
+
+  return (
+    <Page title="Restores" action={<Link className="primary" to="/restores/start"><RotateCcw size={16} /> Start restore</Link>}>
+      <section className="panel restore-history-panel">
+        <div className="section-head">
+          <div>
+            <h2>Restore history</h2>
+            <p>Queued and completed restores stay here for status, affected tables, failures, logs, and audit follow-up.</p>
+          </div>
+        </div>
+        <DataTable headers={["Status", "Created", "Backup", "Target", "Layout", "Tables", "Failure", "Actions"]}>
+          {(restores.data ?? []).map((restore) => (
+            <tr key={restore.id}>
+              <td><Status value={restore.status} /></td>
+              <td>{formatTime(restore.createdAt)}</td>
+              <td>{restore.backupId}</td>
+              <td>{clusterById.get(restore.targetClusterId)?.name ?? restore.targetClusterId}</td>
+              <td>{formatRestoreLayout(restore.layout)}</td>
+              <td>{restore.tables.length}</td>
+              <td>{restore.failureReason ?? ""}</td>
+              <td className="actions"><Link className="ghost" to={`/restores/${restore.id}`}>Details</Link></td>
+            </tr>
+          ))}
+        </DataTable>
+      </section>
+    </Page>
+  );
+}
