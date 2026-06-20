@@ -2,9 +2,9 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Ban, Play, RefreshCw, RotateCcw } from "lucide-react";
-import type { BackupDto, BackupRunStatus } from "../api/generated";
+import type { BackupDto, BackupPolicyDto, BackupRunStatus, BackupType } from "../api/generated";
 import { useApi } from "../api-context";
-import { DataTable, Detail, Drawer, Empty, Page, Status } from "../components/ui";
+import { DataTable, Detail, Drawer, Empty, Page, Select, Status } from "../components/ui";
 import { formatCompletionTime, formatTime } from "../utils/format";
 import { isBackupStatusRestorable } from "./restores/restoreUtils";
 
@@ -13,6 +13,7 @@ export function Backups() {
   const { backupId } = useParams();
   const navigate = useNavigate();
   const [selectedBackupId, setSelectedBackupId] = useState<string | null>(backupId ?? null);
+  const [showManual, setShowManual] = useState(false);
   const backups = useQuery({ queryKey: ["backups"], queryFn: () => api.backups() });
   const schedules = useQuery({ queryKey: ["schedules"], queryFn: () => api.schedules() });
   const policies = useQuery({ queryKey: ["policies"], queryFn: () => api.policies() });
@@ -28,7 +29,8 @@ export function Backups() {
     onError: (error) => showToast({ kind: "error", text: String(error) })
   });
   return (
-    <Page title="Backups" subtitle="Start manual backups, review backup history, and inspect table or shard results." action={<ManualBackupButton />}>
+    <Page title="Backups" subtitle="Start manual backups, review backup history, and inspect table or shard results." action={<button className="primary" onClick={() => setShowManual(!showManual)}><Play size={16} /> Manual backup</button>}>
+      {showManual && <ManualBackupPanel policies={policies.data ?? []} onQueued={() => { setShowManual(false); backups.refetch(); }} />}
       <section className="panel">
         <DataTable headers={["Status", "Completion Time", "Type", "Initiated by", "Created", "Policy", "Tables", "Pinned", "Actions"]}>
           {(backups.data ?? []).map((backup) => (
@@ -172,11 +174,37 @@ function backupInitiator(backup: BackupDto, scheduleById: Map<string, { name: st
   return backup.requestedByName || "manual";
 }
 
-function ManualBackupButton() {
-  const navigate = useNavigate();
-  return <button className="primary" onClick={() => navigate("/policies")}><Play size={16} /> Manual backup</button>;
-}
+function ManualBackupPanel({ policies, onQueued }: { policies: BackupPolicyDto[]; onQueued: () => void }) {
+  const { api, showToast } = useApi();
+  const [policyId, setPolicyId] = useState(policies[0]?.id ?? "");
+  const policy = policies.find((item) => item.id === policyId);
+  const [backupType, setBackupType] = useState<BackupType>("Full");
+  const canIncremental = policy?.contentMode === "SchemaAndData";
+  const manual = useMutation({
+    mutationFn: () => {
+      if (!policy) throw new Error("Choose a policy.");
+      return api.manualBackup({
+        clusterId: policy.sourceClusterId,
+        targetId: policy.contentMode === "SchemaOnly" ? (null as unknown as string) : policy.targetId,
+        selector: policy.selector,
+        backupType: policy.contentMode === "SchemaOnly" ? "Full" : backupType,
+        policyId: policy.id,
+        schemaOnly: policy.contentMode === "SchemaOnly"
+      });
+    },
+    onSuccess: () => { showToast({ kind: "success", text: "Manual backup queued." }); onQueued(); },
+    onError: (error) => showToast({ kind: "error", text: String(error) })
+  });
 
+  return <section className="panel form-panel">
+    <div className="section-head"><h2>Manual backup</h2><span className="hint">Schema-only policies always run as full schema captures.</span></div>
+    <div className="form-grid">
+      <Select label="Policy" value={policyId} onChange={(value) => { setPolicyId(value); const selected = policies.find((item) => item.id === value); if (selected?.contentMode === "SchemaOnly") setBackupType("Full"); }} options={policies.map((item) => [item.id, `${item.name} (${item.contentMode === "SchemaOnly" ? "schema only" : "schema + data"})`])} />
+      <Select label="Backup type" value={policy?.contentMode === "SchemaOnly" ? "Full" : backupType} onChange={(value) => setBackupType(value as BackupType)} options={canIncremental ? [["Full", "Full"], ["Incremental", "Incremental"]] : [["Full", "Full"]]} />
+    </div>
+    <div className="actions"><button className="primary" disabled={!policy || manual.isPending} onClick={() => manual.mutate()}><Play size={16} /> Queue backup</button></div>
+  </section>;
+}
 function isBackupInExecutionPhase(status: BackupRunStatus | undefined) {
   return status === "Queued" || status === "Running";
 }
@@ -193,5 +221,7 @@ function formatTimeSeconds(value?: string | null) {
     second: "2-digit"
   });
 }
+
+
 
 

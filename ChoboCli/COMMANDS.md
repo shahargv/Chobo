@@ -68,12 +68,13 @@ S3 credentials are write-only.
 ChoboCli policies list
 ChoboCli policies add --name all --source-cluster-id <cluster-id> --target-id <target-id>
 ChoboCli policies add --name filtered --source-cluster-id <cluster-id> --target-id <target-id> --selector-file .\policy-selector.json
+ChoboCli policies add --name daily-schema --source-cluster-id <cluster-id> --schema-only
 ChoboCli policies update --id <policy-id> --name filtered --source-cluster-id <cluster-id> --target-id <target-id> --selector-file .\policy-selector.json --full-retention-minutes 43200 --incremental-retention-minutes 10080 --min-backups-to-keep 7 --min-full-backups-to-keep 2
 ChoboCli policies evaluate --id <policy-id> --inventory-file .\inventory.json
 ChoboCli policies remove --id <policy-id>
 ```
 
-The source cluster is configured on the policy itself. Selector files only decide which database tables in that source cluster should be backed up.
+The source cluster is configured on the policy itself. Selector files only decide which database tables in that source cluster should be backed up. Use `--schema-only` for policies that store only captured DDL; schema-only policies do not take `--target-id` and do not support incremental backups.
 
 Selector file with ordered include and exclude rules:
 
@@ -165,12 +166,16 @@ The same server surface also exposes flat general metrics at `/api/v1/metrics`, 
 ```powershell
 ChoboCli backup manual --cluster-id <cluster-id> --target-id <target-id> --selector-file .\policy-selector.json
 ChoboCli backup manual --policy-id <policy-id> --backup-type Incremental
+ChoboCli backup manual --policy-id <schema-only-policy-id>
 ChoboCli backups list --policy-id <policy-id>
 ChoboCli backups list --cluster-name source --table-name orders
 ChoboCli backups show --id <backup-id>
 ChoboCli backups wait --id <backup-id> --timeout-seconds 300 --poll-seconds 2
 ChoboCli backups recover --target-id <target-id> --scan-root backups
 ChoboCli backups recover --target-id <target-id> --backup-path backups/full/policy-.../db/table/.../<backup-id>
+ChoboCli schema backups
+ChoboCli schema show --backup-id <backup-id> --database sales --table orders
+ChoboCli schema export --backup-id <backup-id> --database sales
 
 ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-id> --target-table restored_orders
 ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-id> --append
@@ -187,6 +192,8 @@ ChoboCli restores wait --id <restore-id> --timeout-seconds 300 --poll-seconds 2
 Backup and restore commands return run records immediately. `wait` is a client-side polling helper. Run JSON includes `startedAt` and `endedAt`; `endedAt` is when the actual run process reached a terminal outcome, including success, partial success, failure, or cancellation, not the last metadata update time.
 
 `backups recover` rebuilds SQLite backup metadata from storage-side manifests after local database loss. Use `--scan-root` to scan a bucket/root for manifests, or `--backup-path` for one known backup/table/shard path. The supplied target provides S3 credentials; recovered ClickHouse clusters still need `clusters update-credentials` because manifests do not store ClickHouse credentials.
+
+Schema+data backups submit ClickHouse `BACKUP TABLE` only for `*MergeTree` engines. Other selected engines are captured as schema metadata only. Schema-only backups do not write S3 objects or manifests.
 
 For MergeTree-family tables in `Cluster` mode, one logical backup table contains one shard task for each source shard. Chobo does not run ClickHouse `BACKUP ... ON CLUSTER`; it queries topology, picks one representative replica per shard, runs the shard operations manually, and records the selected source node in the backup metadata. `backups show` and `backups wait` include per-table `shards` arrays with source shard number, selected node, S3 path, status, operation id, and error details.
 
@@ -227,4 +234,5 @@ ChoboCli config import --file .\chobo-config.json
 ```
 
 `data` includes logs and audits. `config` excludes logs and audits.
+
 

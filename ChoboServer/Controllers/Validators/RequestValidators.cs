@@ -108,9 +108,10 @@ public sealed class UpsertPolicyRequestValidator : AbstractValidator<UpsertPolic
     {
         RuleFor(x => x.Name).RequiredName(160);
         RuleFor(x => x.SourceClusterId).NotEmpty();
-        RuleFor(x => x.TargetId).NotEmpty();
+        RuleFor(x => x.TargetId).NotEmpty().When(x => x.ContentMode == BackupContentMode.SchemaAndData);
         RuleFor(x => x.Selector).NotNull().SetValidator(new PolicySelectorValidator());
         RuleFor(x => x.Retention).SetValidator(new BackupRetentionDtoValidator()!).When(x => x.Retention is not null);
+        RuleFor(x => x.ContentMode).IsInEnum();
         RuleFor(x => x.FailedBackupRetentionMode).IsInEnum();
     }
 }
@@ -223,7 +224,7 @@ public sealed class ManualBackupRequestValidator : AbstractValidator<ManualBacku
     {
         RuleFor(x => x.PolicyId).NotEmpty().When(x => x.PolicyId is not null);
         RuleFor(x => x.ClusterId).NotEmpty().When(x => x.PolicyId is null);
-        RuleFor(x => x.TargetId).NotEmpty().When(x => x.PolicyId is null);
+        RuleFor(x => x.TargetId).NotEmpty().When(x => x.PolicyId is null && !x.SchemaOnly);
         RuleFor(x => x.Selector).NotNull().SetValidator(new PolicySelectorValidator()).When(x => x.PolicyId is null);
         RuleFor(x => x.BackupType).IsInEnum();
         RuleFor(x => x)
@@ -444,10 +445,11 @@ public sealed class BackupPolicyExportValidator : AbstractValidator<BackupPolicy
         RuleFor(x => x.Id).NotEmpty();
         RuleFor(x => x.Name).RequiredName(160);
         RuleFor(x => x.SourceClusterId).NotEmpty();
-        RuleFor(x => x.TargetId).NotEmpty();
+        RuleFor(x => x.TargetId).NotEmpty().When(x => x.ContentMode == BackupContentMode.SchemaAndData);
         RuleFor(x => x.SelectorJsonVersion).Equal(1);
         RuleFor(x => x.Selector).NotNull().SetValidator(new PolicySelectorValidator());
         RuleFor(x => x.Retention).SetValidator(new BackupRetentionDtoValidator()!).When(x => x.Retention is not null);
+        RuleFor(x => x.ContentMode).IsInEnum();
         RuleFor(x => x.FailedBackupRetentionMode).IsInEnum();
         RuleFor(x => x.CreatedAt).NotEqual(default(DateTimeOffset));
     }
@@ -493,7 +495,7 @@ public sealed class BackupExportValidator : AbstractValidator<BackupExport>
         RuleFor(x => x.Status).IsInEnum();
         RuleFor(x => x.BackupType).IsInEnum();
         RuleFor(x => x.SourceClusterId).NotEmpty();
-        RuleFor(x => x.TargetId).NotEmpty();
+        RuleFor(x => x.TargetId).NotEmpty().When(x => x.ContentMode == BackupContentMode.SchemaAndData);
         RuleFor(x => x.PolicyId).NotEmpty().When(x => x.PolicyId is not null);
         RuleFor(x => x.ScheduleId).NotEmpty().When(x => x.ScheduleId is not null);
         RuleFor(x => x.ManualRequestJson).MaximumLength(200000).When(x => x.ManualRequestJson is not null);
@@ -522,8 +524,8 @@ public sealed class BackupTableExportValidator : AbstractValidator<BackupTableEx
         RuleFor(x => x.Database).NotEmpty().MaximumLength(512);
         RuleFor(x => x.Table).NotEmpty().MaximumLength(512);
         RuleFor(x => x.Engine).NotEmpty().MaximumLength(2048);
-        RuleFor(x => x.SchemaDefinitionId).NotEmpty();
-        RuleFor(x => x.S3Path).NotEmpty().MaximumLength(4096);
+        RuleFor(x => x.SchemaDefinitionId).NotEmpty().When(x => x.SchemaDefinitionId is not null);
+        RuleFor(x => x.S3Path).MaximumLength(4096);
         RuleFor(x => x.Status).IsInEnum();
         RuleFor(x => x.ClickHouseOperationId).MaximumLength(512).When(x => x.ClickHouseOperationId is not null);
         RuleFor(x => x.ClickHouseStatus).MaximumLength(128).When(x => x.ClickHouseStatus is not null);
@@ -545,7 +547,7 @@ public sealed class BackupTableShardExportValidator : AbstractValidator<BackupTa
         RuleFor(x => x.ReplicaNumber).GreaterThan(0);
         RuleFor(x => x.Host).NotEmpty().MaximumLength(512);
         RuleFor(x => x.Port).InclusiveBetween(1, 65535);
-        RuleFor(x => x.S3Path).NotEmpty().MaximumLength(4096);
+        RuleFor(x => x.S3Path).MaximumLength(4096);
         RuleFor(x => x.Status).IsInEnum();
         RuleFor(x => x.ClickHouseOperationId).MaximumLength(512).When(x => x.ClickHouseOperationId is not null);
         RuleFor(x => x.ClickHouseStatus).MaximumLength(128).When(x => x.ClickHouseStatus is not null);
@@ -649,5 +651,8 @@ internal static class ValidationRuleExtensions
     public static IRuleBuilderOptions<T, string> ValidTimeZone<T>(this IRuleBuilder<T, string> rule) =>
         rule.NotEmpty().Must(value => TimeZoneInfo.TryFindSystemTimeZoneById(value, out _)).WithMessage("TimeZoneId is invalid.");
 }
+
+
+
 
 

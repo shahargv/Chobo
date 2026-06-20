@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Activity, CheckCircle2, Circle, ShieldCheck } from "lucide-react";
 import { useApi } from "../api-context";
 import { DataTable, Empty, Page, Stat, Status } from "../components/ui";
-import { formatTime } from "../utils/format";
+import { formatCompletionTime, formatTime } from "../utils/format";
 
 export function Dashboard() {
   const { api } = useApi();
@@ -23,8 +23,8 @@ export function Dashboard() {
   const onboarding = buildOnboardingSteps({
     clusterCount: clusters.data?.filter((x) => !x.isDeleted).length ?? 0,
     targetCount: targets.data?.filter((x) => !x.isDeleted).length ?? 0,
-    policyCount: policies.data?.filter((x) => !x.isDeleted).length ?? 0,
-    scheduleCount: allSchedules.data?.filter((x) => !x.isDeleted).length ?? 0,
+    policyCount: policies.data?.filter((x) => !x.isDeleted && !x.isSystemDefault).length ?? 0,
+    scheduleCount: allSchedules.data?.filter((x) => !x.isDeleted && !x.isSystemDefault).length ?? 0,
     backupCount: backups.data?.length ?? 0,
     restoreCount: restores.data?.length ?? 0
   });
@@ -56,7 +56,7 @@ export function Dashboard() {
       <section className="panel two-col">
         <div>
           <h2>Latest backups</h2>
-          <DataTable headers={["Status", "Created", "Type", "Tables", "Failure"]}>
+          <DataTable headers={["Status", "Created", "Completed", "Type", "Tables", "Failure"]}>
             {latestBackups.map((backup) => (
               <tr key={backup.id}>
                 <td><Status value={backup.status} /></td>
@@ -196,3 +196,4 @@ function OnboardingComplete() {
     </section>
   );
 }
+

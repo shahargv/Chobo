@@ -14,8 +14,11 @@ public sealed class BackupScheduleEntity
     public bool IsEnabled { get; set; } = true;
     public TimeSpan? MissedRunGracePeriod { get; set; }
     public string? Description { get; set; }
+    public bool IsSystemDefault { get; set; }
     public bool IsDeleted { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? UpdatedAt { get; set; }
     public DateTimeOffset? DeletedAt { get; set; }
 }
+
+

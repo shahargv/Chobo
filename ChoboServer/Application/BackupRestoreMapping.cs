@@ -11,6 +11,7 @@ internal static class BackupRestoreMapping
             x.TriggerType,
             x.Status,
             x.BackupType,
+            x.ContentMode,
             x.SourceClusterId,
             x.TargetId,
             x.PolicyId,
@@ -142,3 +143,5 @@ internal static class BackupRestoreMapping
             x.CompletedAt,
             x.Error);
 }
+
+

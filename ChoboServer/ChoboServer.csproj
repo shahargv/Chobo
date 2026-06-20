@@ -44,6 +44,12 @@
     <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-2m69-gcr7-jv3q" />
   </ItemGroup>
 
+
+    <Target Name="BuildChoboWebForLocalDebug" BeforeTargets="Build" Condition="'$(Configuration)' == 'Debug' and Exists('..\ChoboWeb\package.json')">
+      <Message Text="Building ChoboWeb for local ChoboServer debug launch..." Importance="high" />
+      <Exec WorkingDirectory="..\ChoboWeb" Command="npm run build" />
+    </Target>
 </Project>
+
 
 

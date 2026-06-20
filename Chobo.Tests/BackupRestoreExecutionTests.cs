@@ -196,8 +196,106 @@ public sealed class BackupRestoreExecutionTests
         Assert.Equal("SCHEMA_ONLY", table.ClickHouseStatus);
         Assert.NotNull(table.SchemaDefinition);
         Assert.Empty(fixture.ClickHouse.BackupStartTables);
+        Assert.Empty(fixture.StorageDeletion.Objects);
     }
 
+    [Fact]
+    public async Task Schema_and_data_backup_only_starts_data_backup_for_merge_tree_engines()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        fixture.ClickHouse.Inventory.AddRange([
+            Table("sales", "orders", "MergeTree"),
+            Table("sales", "orders_replica", "ReplicatedMergeTree"),
+            Table("sales", "events_log", "Log"),
+            Table("sales", "lookup", "Join")
+        ]);
+
+        var backupId = await fixture.CreateManualBackupAsync();
+        await fixture.RunBackupAsync(backupId);
+
+        fixture.Db.ChangeTracker.Clear();
+        var tables = await fixture.Db.BackupTables.Where(x => x.BackupId == backupId).OrderBy(x => x.Table).ToListAsync();
+        Assert.True(tables.Single(x => x.Table == "orders").DataBackedUp);
+        Assert.True(tables.Single(x => x.Table == "orders_replica").DataBackedUp);
+        Assert.False(tables.Single(x => x.Table == "events_log").DataBackedUp);
+        Assert.False(tables.Single(x => x.Table == "lookup").DataBackedUp);
+        Assert.Equal(["orders", "orders_replica"], fixture.ClickHouse.BackupStartTables.Order(StringComparer.Ordinal).ToList());
+    }
+
+    [Fact]
+    public async Task Cluster_schema_only_inventory_queries_every_node_and_dedupes_by_name()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var cluster = await fixture.Db.ClickHouseClusters.Include(x => x.AccessNodes).SingleAsync(x => x.Id == fixture.SourceClusterId);
+        cluster.Mode = ClusterMode.Cluster;
+        fixture.ClickHouse.Topology.Clear();
+        fixture.ClickHouse.Topology.AddRange([
+            new ClickHouseShardReplicaInfo(2, "shard-2", 1, "source-s2", 9000, false, 0),
+            new ClickHouseShardReplicaInfo(1, "shard-1", 1, "source-s1", 9000, false, 0)
+        ]);
+        fixture.ClickHouse.InventoryByEndpoint["source-s1:9000:False"] = [Table("sales", "orders", "MergeTree", createSql: "CREATE TABLE sales.orders (id UInt64) ENGINE = MergeTree ORDER BY id")];
+        fixture.ClickHouse.InventoryByEndpoint["source-s2:9000:False"] = [Table("sales", "orders", "MergeTree", createSql: "CREATE TABLE sales.orders (id UInt64, shard UInt8) ENGINE = MergeTree ORDER BY id"), Table("sales", "events", "Log")];
+        await fixture.Db.SaveChangesAsync();
+
+        var backupId = await fixture.CreateManualBackupAsync(schemaOnly: true);
+        await fixture.RunBackupAsync(backupId);
+
+        fixture.Db.ChangeTracker.Clear();
+        Assert.Equal(["source-s1", "source-s2"], fixture.ClickHouse.GetTablesEndpoints.Select(x => x.Host).ToList());
+        var tables = await fixture.Db.BackupTables.Include(x => x.SchemaDefinition).Where(x => x.BackupId == backupId).OrderBy(x => x.Table).ToListAsync();
+        Assert.Equal(["events", "orders"], tables.Select(x => x.Table).ToList());
+        Assert.Equal("CREATE TABLE sales.orders (id UInt64) ENGINE = MergeTree ORDER BY id", tables.Single(x => x.Table == "orders").SchemaDefinition!.CreateTableSql);
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "schema-inventory-deduplicated" && x.EntityId == backupId.ToString()));
+    }
+
+    [Fact]
+    public async Task Schema_browser_returns_tree_and_exports_database_sql()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        fixture.ClickHouse.Inventory.AddRange([Table("sales", "orders", "MergeTree"), Table("audit", "events", "Log")]);
+        var backupId = await fixture.CreateManualBackupAsync(schemaOnly: true);
+        await fixture.RunBackupAsync(backupId);
+
+        var service = fixture.Services.GetRequiredService<SchemaBrowserApplicationService>();
+        var summaries = await service.ListBackupsAsync(DateTimeOffset.UtcNow.AddDays(-7), DateTimeOffset.UtcNow.AddDays(1));
+        Assert.Contains(summaries, x => x.Id == backupId && x.ContentMode == BackupContentMode.SchemaOnly && x.SourceClusterName == "source" && x.TableCount == 2);
+        var schema = await service.GetBackupSchemaAsync(backupId);
+        Assert.NotNull(schema);
+        Assert.Equal(["audit", "sales"], schema!.Databases.Select(x => x.Database).ToList());
+        var export = await service.ExportSqlAsync(backupId, "sales");
+        Assert.Contains("CREATE TABLE sales.orders", export);
+        Assert.DoesNotContain("audit.events", export);
+    }
+
+    [Fact]
+    public async Task Schema_browser_filters_by_range_and_hides_deleted_backups()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+        var visibleBackupId = await fixture.CreateManualBackupAsync(schemaOnly: true);
+        await fixture.RunBackupAsync(visibleBackupId);
+        var deletedBackupId = await fixture.CreateManualBackupAsync(schemaOnly: true);
+        await fixture.RunBackupAsync(deletedBackupId);
+        var oldBackupId = await fixture.CreateManualBackupAsync(schemaOnly: true);
+        await fixture.RunBackupAsync(oldBackupId);
+
+        var now = DateTimeOffset.UtcNow;
+        var visible = await fixture.Db.Backups.SingleAsync(x => x.Id == visibleBackupId);
+        visible.CompletedAt = now.AddDays(-2);
+        var deleted = await fixture.Db.Backups.SingleAsync(x => x.Id == deletedBackupId);
+        deleted.Status = BackupRunStatus.BackupExpiredDeleted;
+        deleted.CompletedAt = now.AddDays(-1);
+        var old = await fixture.Db.Backups.SingleAsync(x => x.Id == oldBackupId);
+        old.CompletedAt = now.AddDays(-20);
+        await fixture.Db.SaveChangesAsync();
+
+        var service = fixture.Services.GetRequiredService<SchemaBrowserApplicationService>();
+        var summaries = await service.ListBackupsAsync(now.AddDays(-7), now);
+
+        Assert.Contains(summaries, x => x.Id == visibleBackupId && x.SourceClusterName == "source");
+        Assert.DoesNotContain(summaries, x => x.Id == deletedBackupId);
+        Assert.DoesNotContain(summaries, x => x.Id == oldBackupId);
+    }
     [Fact]
     public async Task Incremental_backup_uses_parent_full_table_and_falls_back_to_full_for_new_table()
     {
@@ -1576,6 +1674,32 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Restore_table_failure_marks_pending_shards_failed()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Succeeded, "backup-op", true)
+        ], shardCount: 3);
+        var restore = await fixture.SeedRestoreAsync(backup, [
+            new SeedRestoreTable("sales", "orders", RestoreTableStatus.Queued, null)
+        ]);
+        fixture.ClickHouse.ExecuteException = new InvalidOperationException("Destination ClickHouse timed out before restore submission.");
+
+        await fixture.RunRestoreAsync(restore.Id);
+
+        fixture.Db.ChangeTracker.Clear();
+        var completed = await fixture.Db.Restores.Include(x => x.Tables).ThenInclude(x => x.Shards).SingleAsync(x => x.Id == restore.Id);
+        var table = Assert.Single(completed.Tables);
+        Assert.Equal(RestoreTableStatus.Failed, table.Status);
+        Assert.All(table.Shards, shard =>
+        {
+            Assert.Equal(RestoreTableStatus.Failed, shard.Status);
+            Assert.Contains("Destination ClickHouse timed out", shard.Error);
+            Assert.NotNull(shard.CompletedAt);
+        });
+    }
+
+    [Fact]
     public async Task Restore_storage_or_credential_failure_is_correlated_on_sharded_restore()
     {
         await using var fixture = await TestFixture.CreateAsync();
@@ -1619,8 +1743,8 @@ public sealed class BackupRestoreExecutionTests
         Assert.True(dto.CreatedAt <= DateTimeOffset.UtcNow);
     }
 
-    private static ClickHouseTableInfo Table(string database, string table, string engine, string columnsJson = "[]", string? schemaHash = null) =>
-        new(database, table, engine, $"CREATE TABLE {database}.{table} (id UInt64) ENGINE = {engine} ORDER BY id", columnsJson, schemaHash ?? $"{database}.{table}.{engine}.{columnsJson}");
+    private static ClickHouseTableInfo Table(string database, string table, string engine, string columnsJson = "[]", string? schemaHash = null, string? createSql = null) =>
+        new(database, table, engine, createSql ?? $"CREATE TABLE {database}.{table} (id UInt64) ENGINE = {engine} ORDER BY id", columnsJson, schemaHash ?? $"{database}.{table}.{engine}.{columnsJson}");
 
     private static void AssertAuditCorrelation(AuditEntryEntity entry, Guid backupId, string? clickHouseOperationId)
     {
@@ -1672,6 +1796,8 @@ public sealed class BackupRestoreExecutionTests
         public List<string?> BackupBasePaths { get; } = [];
         public List<string> RestoreStartTables { get; } = [];
         public List<string> ExecuteSql { get; } = [];
+        public List<ClickHouseNodeEndpoint> GetTablesEndpoints { get; } = [];
+        public Dictionary<string, List<ClickHouseTableInfo>> InventoryByEndpoint { get; } = new(StringComparer.OrdinalIgnoreCase);
         public List<string> KilledQueries { get; } = [];
         public List<ClickHouseNodeEndpoint> ExecuteEndpoints { get; } = [];
         public List<(ClickHouseNodeEndpoint Endpoint, string Sql)> EndpointExecuteSql { get; } = [];
@@ -1700,8 +1826,21 @@ public sealed class BackupRestoreExecutionTests
             return Task.FromResult<IReadOnlyList<ClickHouseTableInfo>>(Inventory.ToList());
         }
 
-        public Task<IReadOnlyList<string>> GetClusterNamesAsync(ClickHouseClusterEntity cluster, CancellationToken cancellationToken) =>
-            Task.FromResult<IReadOnlyList<string>>(["test_cluster"]);
+
+        public Task<IReadOnlyList<ClickHouseTableInfo>> GetTablesAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, CancellationToken cancellationToken)
+        {
+            GetTablesEndpoints.Add(endpoint);
+            if (InventoryByEndpoint.TryGetValue(EndpointKey(endpoint), out var inventory))
+            {
+                return Task.FromResult<IReadOnlyList<ClickHouseTableInfo>>(inventory.ToList());
+            }
+
+            return GetTablesAsync(cluster, cancellationToken);
+        }
+
+        private static string EndpointKey(ClickHouseNodeEndpoint endpoint) => $"{endpoint.Host}:{endpoint.Port}:{endpoint.UseTls}";
+
+        public Task<IReadOnlyList<string>> GetClusterNamesAsync(ClickHouseClusterEntity cluster, CancellationToken cancellationToken) =>Task.FromResult<IReadOnlyList<string>>(["test_cluster"]);
 
         public Task<ClickHouseTableInfo?> GetTableAsync(ClickHouseClusterEntity cluster, string database, string table, CancellationToken cancellationToken) =>
             Task.FromResult<ClickHouseTableInfo?>(null);
@@ -1918,6 +2057,8 @@ public sealed class BackupRestoreExecutionTests
                 .AddScoped<IUnitOfWork, EfUnitOfWork>()
                 .AddScoped<PolicyApplicationService>()
                 .AddScoped<ScheduleApplicationService>()
+                .AddScoped<SchemaBrowserApplicationService>()
+                .AddScoped<SystemDefaultBackupPolicyService>()
                 .AddScoped<IBackupStorageManifestService, BackupStorageManifestService>()
                 .AddScoped<RestoreApplicationService>()
                 .AddScoped<BackupRunnerService>()
@@ -2213,6 +2354,7 @@ public sealed class BackupRestoreExecutionTests
                 backup.TriggerType,
                 backup.Status,
                 backup.BackupType,
+                backup.ContentMode,
                 backup.SourceClusterId,
                 backup.TargetId,
                 backup.PolicyId,
@@ -2338,6 +2480,17 @@ public sealed class BackupRestoreExecutionTests
         public override DateTimeOffset GetUtcNow() => utcNow;
     }
 }
+
+
+
+
+
+
+
+
+
+
+
 
 
 
