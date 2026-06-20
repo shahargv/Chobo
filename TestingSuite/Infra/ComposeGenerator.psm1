@@ -463,8 +463,12 @@ function New-ChoboComposeEnvironment {
         $lines.Add("      context: `"$repoPath`"")
         $lines.Add('      dockerfile: ChoboServer/Dockerfile')
         $lines.Add('    environment:')
-        $lines.Add('      CHOBO_INIT_ADMIN_USER: admin')
-        $lines.Add('      CHOBO_INIT_ACCESS_TOKEN: static-test-token')
+        if (-not $plan.ChoboServerEnvironment.Contains('CHOBO_INIT_ADMIN_USER')) {
+            $lines.Add('      CHOBO_INIT_ADMIN_USER: admin')
+        }
+        if (-not $plan.ChoboServerEnvironment.Contains('CHOBO_INIT_ACCESS_TOKEN')) {
+            $lines.Add('      CHOBO_INIT_ACCESS_TOKEN: static-test-token')
+        }
         $lines.Add('      CHOBO_TEST_HOOKS_ENABLED: "true"')
         $lines.Add('      ASPNETCORE_ENVIRONMENT: SystemTest')
         $lines.Add('      Chobo__DataDirectory: /tmp/chobo-data')

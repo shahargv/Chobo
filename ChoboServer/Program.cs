@@ -49,6 +49,16 @@ var app = builder.Build();
 Console.WriteLine("Initializing Chobo SQLite database...");
 await app.Services.InitializeChoboDatabaseAsync(firstStartup, missingDatabaseAfterInitialized);
 Console.WriteLine("Chobo SQLite database is ready.");
+await using (var installScope = app.Services.CreateAsyncScope())
+{
+    var installStatus = await installScope.ServiceProvider.GetRequiredService<IDatabaseBootstrap>().GetInstallStatusAsync();
+    if (installStatus.RequiresInstallation)
+    {
+        Console.WriteLine("Chobo is running in initialization mode.");
+        Console.WriteLine("Use the web UI to install Chobo, or run: ChoboCli install --server-url http://<host>:8080");
+        Console.WriteLine("The initial access token will be shown once and cannot be recovered after installation.");
+    }
+}
 if (missingDatabaseAfterInitialized)
 {
     Log.Warning("Chobo SQLite database was missing at {DatabasePath} even though the data directory was already initialized. Started with a fresh SQLite database and fresh local encrypted credential state; use backup metadata recovery to rebuild backup metadata.", dbPath);
@@ -124,4 +134,3 @@ static void AddUrlPorts(List<int> ports, string? value)
 }
 
 public partial class Program;
-
