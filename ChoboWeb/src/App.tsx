@@ -15,6 +15,7 @@ import { Clusters } from "./pages/ClustersPage";
 import { Targets } from "./pages/TargetsPage";
 import { UsersPage } from "./pages/UsersPage";
 import { ImportExport } from "./pages/ImportExportPage";
+import { GarbageCollectorPage } from "./pages/GarbageCollectorPage";
 import { MonitoringPage } from "./pages/MonitoringPage";
 import { clearAuth, readStoredAuth, storeAuth } from "./auth";
 
@@ -57,21 +58,30 @@ export function App() {
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/backups" element={<Backups />} />
+          <Route path="/backups/:backupId" element={<Backups />} />
           <Route path="/restores" element={<RestoreHistory />} />
           <Route path="/restores/start" element={<RestoreWizard />} />
           <Route path="/restores/:restoreId" element={<RestoreDetailPage />} />
           <Route path="/policies" element={<Policies />} />
+          <Route path="/policies/:policyId" element={<Policies />} />
           <Route path="/schedules" element={<Schedules />} />
+          <Route path="/schedules/:scheduleId" element={<Schedules />} />
           <Route path="/clusters" element={<Clusters />} />
+          <Route path="/clusters/:clusterId" element={<Clusters />} />
           <Route path="/targets" element={<Targets />} />
           <Route path="/users" element={<UsersPage />} />
           <Route path="/logs" element={<Logs />} />
           <Route path="/audit" element={<Audit />} />
           <Route path="/import-export" element={<ImportExport />} />
           <Route path="/monitoring" element={<MonitoringPage />} />
+          <Route path="/gc" element={<GarbageCollectorPage />} />
         </Routes>
       </AppShell>
     </ApiContext.Provider>
   );
 }
+
+
+
+
 

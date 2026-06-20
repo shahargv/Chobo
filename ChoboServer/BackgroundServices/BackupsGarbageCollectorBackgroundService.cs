@@ -15,6 +15,16 @@ public sealed class BackupsGarbageCollectorBackgroundService(
     Serilog.ILogger logger) : BackgroundService
 {
     private readonly Serilog.ILogger _logger = logger.ForContext<BackupsGarbageCollectorBackgroundService>();
+    private readonly SemaphoreSlim _runLock = new(1, 1);
+    private bool _isRunning;
+    private string _currentRunReason = "between-runs";
+    private DateTimeOffset? _lastStartedAt;
+    private DateTimeOffset? _lastCompletedAt;
+    private string? _lastError;
+    private int _lastMarkedCount;
+    private int _lastPendingCleanupCount;
+    private int _lastCleanedCount;
+    private int _lastFailedCount;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -22,7 +32,11 @@ public sealed class BackupsGarbageCollectorBackgroundService(
         {
             try
             {
-                await RunOnceAsync(stoppingToken);
+                await RunOnceAsync("scheduled", stoppingToken);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -34,31 +48,115 @@ public sealed class BackupsGarbageCollectorBackgroundService(
         }
     }
 
-    public async Task RunOnceAsync(CancellationToken cancellationToken = default)
+    public BackupGarbageCollectorStatusDto GetStatus()
     {
-        List<Guid> pending;
+        lock (_runLock)
+        {
+            return ToStatus();
+        }
+    }
+
+    public Task<BackupGarbageCollectorStatusDto> RunOnceAsync(CancellationToken cancellationToken = default) =>
+        RunOnceAsync("manual", cancellationToken);
+
+    public async Task<BackupGarbageCollectorStatusDto> RunOnceAsync(string reason, CancellationToken cancellationToken = default)
+    {
+        if (!await _runLock.WaitAsync(0, cancellationToken))
+        {
+            return GetStatus();
+        }
+
+        try
+        {
+            _isRunning = true;
+            _currentRunReason = string.IsNullOrWhiteSpace(reason) ? "manual" : reason;
+            _lastStartedAt = timeProvider.GetUtcNow();
+            _lastCompletedAt = null;
+            _lastError = null;
+            _lastMarkedCount = 0;
+            _lastPendingCleanupCount = 0;
+            _lastCleanedCount = 0;
+            _lastFailedCount = 0;
+
+            try
+            {
+                var result = await RunCoreAsync(cancellationToken);
+                _lastMarkedCount = result.MarkedCount;
+                _lastPendingCleanupCount = result.PendingCleanupCount;
+                _lastCleanedCount = result.CleanedCount;
+                _lastFailedCount = result.FailedCount;
+            }
+            catch (Exception ex)
+            {
+                _lastError = ex.Message;
+                throw;
+            }
+            finally
+            {
+                _isRunning = false;
+                _currentRunReason = "between-runs";
+                _lastCompletedAt = timeProvider.GetUtcNow();
+            }
+
+            return ToStatus();
+        }
+        finally
+        {
+            _runLock.Release();
+        }
+    }
+
+    private async Task<BackupGarbageCollectorRunResult> RunCoreAsync(CancellationToken cancellationToken)
+    {
+        List<PendingBackupCleanup> pending;
+        int markedCount;
         using (var scope = services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
             var audit = scope.ServiceProvider.GetRequiredService<IAuditService>();
-            await MarkFailedBackupsAsync(db, audit, cancellationToken);
-            await MarkOrphanIncrementalBackupsAsync(db, audit, cancellationToken);
+            var failedMarked = await MarkFailedBackupsAsync(db, audit, cancellationToken);
+            var orphanedMarked = await MarkOrphanIncrementalBackupsAsync(db, audit, cancellationToken);
+            markedCount = failedMarked + orphanedMarked;
             pending = await db.Backups
-                .Where(x => x.Status == BackupRunStatus.FailedBackupDeleteRequested)
+                .Where(x => x.Status == BackupRunStatus.ManualDeleteRequested ||
+                            x.Status == BackupRunStatus.BackupExpiredDeleteStarted ||
+                            x.Status == BackupRunStatus.FailedBackupDeleteRequested ||
+                            (x.Status == BackupRunStatus.Canceled && x.DeletionReason == "canceled" && x.DeletedAt == null))
                 .OrderBy(x => x.DeletionRequestedAt ?? x.CreatedAt)
-                .Select(x => x.Id)
+                .Select(x => new PendingBackupCleanup(
+                    x.Id,
+                    x.Status == BackupRunStatus.ManualDeleteRequested ? BackupRunStatus.ManualDeleted :
+                    x.Status == BackupRunStatus.BackupExpiredDeleteStarted ? BackupRunStatus.BackupExpiredDeleted :
+                    x.Status == BackupRunStatus.Canceled ? BackupRunStatus.Canceled : BackupRunStatus.FailedBackupDeletedByGarbageCollector,
+                    x.Status == BackupRunStatus.ManualDeleteRequested ? "manual" :
+                    x.Status == BackupRunStatus.BackupExpiredDeleteStarted ? "retention" :
+                    x.Status == BackupRunStatus.Canceled ? "canceled-backup-garbage-collector" : "failed-backup-garbage-collector"))
                 .ToListAsync(cancellationToken);
         }
 
-        await ForEachAsync(pending, options.Value.MaxDop, async id =>
+        var cleanedCount = 0;
+        var failedCount = 0;
+        await ForEachAsync(pending, options.Value.MaxDop, async pendingCleanup =>
         {
-            using var scope = services.CreateScope();
-            await scope.ServiceProvider.GetRequiredService<BackupCleanupService>()
-                .CleanupAsync(id, BackupRunStatus.FailedBackupDeletedByGarbageCollector, "failed-backup-garbage-collector", cancellationToken);
+            try
+            {
+                using var scope = services.CreateScope();
+                var cleaned = await scope.ServiceProvider.GetRequiredService<BackupCleanupService>()
+                    .CleanupAsync(pendingCleanup.Id, pendingCleanup.FinalStatus, pendingCleanup.Reason, cancellationToken);
+                if (cleaned) Interlocked.Increment(ref cleanedCount);
+                else Interlocked.Increment(ref failedCount);
+            }
+            catch (Exception ex)
+            {
+                Interlocked.Increment(ref failedCount);
+                _logger.Warning(ex, "Backup cleanup failed during garbage collection for backup {BackupId}.", pendingCleanup.Id);
+            }
         }, cancellationToken);
+
+        return new BackupGarbageCollectorRunResult(markedCount, pending.Count, cleanedCount, failedCount);
     }
 
-    private async Task MarkFailedBackupsAsync(ChoboDbContext db, IAuditService audit, CancellationToken cancellationToken)
+    private async Task<int> MarkFailedBackupsAsync(ChoboDbContext db, IAuditService audit, CancellationToken cancellationToken)
     {
         var now = timeProvider.GetUtcNow();
         var backups = await db.Backups
@@ -68,19 +166,23 @@ public sealed class BackupsGarbageCollectorBackgroundService(
                         x.Policy.FailedBackupRetentionMode == FailedBackupRetentionMode.DeleteByGarbageCollectorAfterFailure)
             .ToListAsync(cancellationToken);
 
+        var markedCount = 0;
         foreach (var backup in backups)
         {
-            await MarkDependentIncrementalBackupsAsync(db, audit, backup.Id, now, "failed-parent-garbage-collector", cancellationToken);
+            markedCount += await MarkDependentIncrementalBackupsAsync(db, audit, backup.Id, now, "failed-parent-garbage-collector", cancellationToken);
             backup.Status = BackupRunStatus.FailedBackupDeleteRequested;
             backup.DeletionReason = "failed-backup-garbage-collector";
             backup.DeletionRequestedAt ??= now;
             backup.DeletionError = null;
             await db.SaveChangesAsync(cancellationToken);
             await audit.RecordAsync("failed-backup-garbage-collection-requested", AuditEntityType.Backup, backup.Id.ToString(), new { backup.PolicyId, backup.Status });
+            markedCount++;
         }
+
+        return markedCount;
     }
 
-    private static async Task MarkDependentIncrementalBackupsAsync(ChoboDbContext db, IAuditService audit, Guid fullBackupId, DateTimeOffset now, string reason, CancellationToken cancellationToken)
+    private static async Task<int> MarkDependentIncrementalBackupsAsync(ChoboDbContext db, IAuditService audit, Guid fullBackupId, DateTimeOffset now, string reason, CancellationToken cancellationToken)
     {
         var deletedStatuses = DeletedStatuses;
         var dependentIds = await db.BackupTables
@@ -102,9 +204,11 @@ public sealed class BackupsGarbageCollectorBackgroundService(
             dependent.DeletionError = null;
             await audit.RecordAsync("dependent-failed-backup-garbage-collection-requested", AuditEntityType.Backup, dependent.Id.ToString(), new { parentBackupId = fullBackupId, reason });
         }
+
+        return dependents.Count;
     }
 
-    private static async Task MarkOrphanIncrementalBackupsAsync(ChoboDbContext db, IAuditService audit, CancellationToken cancellationToken)
+    private static async Task<int> MarkOrphanIncrementalBackupsAsync(ChoboDbContext db, IAuditService audit, CancellationToken cancellationToken)
     {
         var now = DateTimeOffset.UtcNow;
         var deletedStatuses = DeletedStatuses;
@@ -129,10 +233,19 @@ public sealed class BackupsGarbageCollectorBackgroundService(
             orphan.DeletionError = null;
             await audit.RecordAsync("orphaned-incremental-garbage-collection-requested", AuditEntityType.Backup, orphan.Id.ToString(), new { reason = orphan.DeletionReason });
         }
+
+        return orphans.Count;
     }
+
+    private BackupGarbageCollectorStatusDto ToStatus() =>
+        new(_isRunning, _currentRunReason, _lastStartedAt, _lastCompletedAt, _lastError, _lastMarkedCount, _lastPendingCleanupCount, _lastCleanedCount, _lastFailedCount);
+
+    private sealed record PendingBackupCleanup(Guid Id, BackupRunStatus FinalStatus, string Reason);
+    private sealed record BackupGarbageCollectorRunResult(int MarkedCount, int PendingCleanupCount, int CleanedCount, int FailedCount);
 
     private static readonly BackupRunStatus[] DeletedStatuses =
     [
+        BackupRunStatus.Canceled,
         BackupRunStatus.ManualDeleteRequested,
         BackupRunStatus.ManualDeleted,
         BackupRunStatus.FailedBackupDeleteRequested,
@@ -141,7 +254,7 @@ public sealed class BackupsGarbageCollectorBackgroundService(
         BackupRunStatus.BackupExpiredDeleted
     ];
 
-    private static async Task ForEachAsync(IEnumerable<Guid> ids, int maxDop, Func<Guid, Task> action, CancellationToken cancellationToken)
+    private static async Task ForEachAsync<T>(IEnumerable<T> ids, int maxDop, Func<T, Task> action, CancellationToken cancellationToken)
     {
         using var semaphore = new SemaphoreSlim(Math.Max(1, maxDop));
         var tasks = ids.Select(async id =>
@@ -153,3 +266,5 @@ public sealed class BackupsGarbageCollectorBackgroundService(
         await Task.WhenAll(tasks);
     }
 }
+
+

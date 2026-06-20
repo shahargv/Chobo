@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { CalendarClock, ListFilter, Play, Save } from "lucide-react";
 import type { BackupPolicyDto, FailedBackupRetentionMode, PolicyMatchKind, PolicySelector, PolicySelectorAction, PolicySelectorRule, UpsertPolicyRequest } from "../api/generated";
 import { useApi } from "../api-context";
@@ -11,6 +11,7 @@ import { nameOf } from "../utils/format";
 export function Policies() {
   const { api, showToast } = useApi();
   const navigate = useNavigate();
+  const { policyId } = useParams();
   const policies = useQuery({ queryKey: ["policies"], queryFn: () => api.policies() });
   const clusters = useQuery({ queryKey: ["clusters"], queryFn: () => api.clusters() });
   const targets = useQuery({ queryKey: ["targets"], queryFn: () => api.targets() });
@@ -19,6 +20,17 @@ export function Policies() {
   const [createdPolicy, setCreatedPolicy] = useState<BackupPolicyDto | null>(null);
   const defaultPolicyDraft = (): UpsertPolicyRequest => ({ name: "", sourceClusterId: "", targetId: "", selector: emptySelector, retention: { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 }, failedBackupRetentionMode: "KeepAndExcludeFromMinBackupsToKeep" });
   const [draft, setDraft] = useState<UpsertPolicyRequest>(() => defaultPolicyDraft());
+  const editPolicy = (policy: BackupPolicyDto) => {
+    setEditing(policy);
+    setCreatedPolicy(null);
+    setDraft({ name: policy.name, sourceClusterId: policy.sourceClusterId, targetId: policy.targetId, selector: policy.selector, retention: policy.retention ?? { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 }, failedBackupRetentionMode: policy.failedBackupRetentionMode });
+    setShowForm(true);
+  };
+  useEffect(() => {
+    if (!policyId || !policies.data) return;
+    const policy = policies.data.find((item) => item.id === policyId);
+    if (policy) editPolicy(policy);
+  }, [policyId, policies.data]);
   const policyErrors = validatePolicyDraft(draft);
   const simulation = useQuery({
     queryKey: ["policy-simulation", draft.sourceClusterId, draft.selector],
@@ -73,12 +85,7 @@ export function Policies() {
               <td>{nameOf(targets.data, policy.targetId)}</td>
               <td>{policy.selector.rules.length}</td>
               <td>{policy.retention ? `${policy.retention.minBackupsToKeep} backups` : "default"}</td>
-              <td className="actions"><button className="ghost" onClick={() => {
-                setEditing(policy);
-                setCreatedPolicy(null);
-                setDraft({ name: policy.name, sourceClusterId: policy.sourceClusterId, targetId: policy.targetId, selector: policy.selector, retention: policy.retention ?? { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 }, failedBackupRetentionMode: policy.failedBackupRetentionMode });
-                setShowForm(true);
-              }}>Edit</button><button className="ghost" disabled={executePolicy.isPending} onClick={() => executePolicy.mutate(policy)}><Play size={14} /> Execute now</button></td>
+              <td className="actions"><button className="ghost" onClick={() => editPolicy(policy)}>Edit</button><button className="ghost" disabled={executePolicy.isPending} onClick={() => executePolicy.mutate(policy)}><Play size={14} /> Execute now</button></td>
             </tr>
           ))}
         </DataTable>
@@ -192,3 +199,4 @@ function validatePolicyDraft(draft: UpsertPolicyRequest) {
   if (draft.selector.rules.length === 0) errors.push("Add at least one selector rule.");
   return errors;
 }
+

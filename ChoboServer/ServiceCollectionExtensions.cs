@@ -143,7 +143,8 @@ public static class ServiceCollectionExtensions
         services.AddHostedService<RestoreExecutorBackgroundService>();
         services.AddHostedService<BackupSchedulerDispatcherBackgroundService>();
         services.AddHostedService<RetentionManagementBackgroundService>();
-        services.AddHostedService<BackupsGarbageCollectorBackgroundService>();
+        services.AddSingleton<BackupsGarbageCollectorBackgroundService>();
+        services.AddHostedService(serviceProvider => serviceProvider.GetRequiredService<BackupsGarbageCollectorBackgroundService>());
         services.AddHostedService<DataRetentionBackgroundService>();
         services.AddHostedService<SqliteSelfBackupBackgroundService>();
         return services;
@@ -172,3 +173,4 @@ public static class ServiceCollectionExtensions
         }
     }
 }
+
