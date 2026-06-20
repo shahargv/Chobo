@@ -27,6 +27,18 @@ internal static class CommandHelpers
         {
             query.Add($"endTime={Uri.EscapeDataString(end)}");
         }
+        if (options.Optional("--offset") is { } offset)
+        {
+            query.Add($"offset={Uri.EscapeDataString(offset)}");
+        }
+        if (options.Optional("--limit") is { } limit)
+        {
+            query.Add($"limit={Uri.EscapeDataString(limit)}");
+        }
+        if (options.Optional("--operation-id") is { } operationId)
+        {
+            query.Add($"operationId={Uri.EscapeDataString(operationId)}");
+        }
 
         return query.Count == 0 ? "" : "?" + string.Join("&", query);
     }

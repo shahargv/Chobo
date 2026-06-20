@@ -381,6 +381,42 @@ public sealed class ChoboFoundationTests
     }
 
     [Fact]
+    public async Task Backup_target_credentials_are_encrypted_and_hidden_from_api_and_key_export()
+    {
+        var dataDir = NewTestDataDirectory();
+        await using var factory = CreateFactory(dataDir);
+        var client = AuthenticatedClient(factory);
+        var created = await Post<BackupTargetDto>(client, "/api/v1/targets/s3", new UpsertS3TargetRequest(
+            "prod-minio",
+            "http://minio:9000",
+            "us-east-1",
+            "backup-bucket",
+            null,
+            true,
+            "raw-access-token",
+            "raw-secret-token"));
+
+        var json = await client.GetStringAsync("/api/v1/targets");
+        Assert.DoesNotContain("raw-access-token", json);
+        Assert.DoesNotContain("raw-secret-token", json);
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+        var stored = await db.BackupTargets.SingleAsync(x => x.Id == created.Id);
+        Assert.NotEqual("raw-access-token", stored.EncryptedAccessKey);
+        Assert.NotEqual("raw-secret-token", stored.EncryptedSecretKey);
+        Assert.NotNull(stored.EncryptedAccessKeyKeyId);
+        Assert.NotNull(stored.EncryptedSecretKeyKeyId);
+
+        var export = await client.GetFromJsonAsync<ExportEnvelope>("/api/v1/config/export", JsonOptions);
+        var exportJson = JsonSerializer.Serialize(export, JsonOptions);
+        Assert.DoesNotContain("raw-access-token", exportJson);
+        Assert.DoesNotContain("raw-secret-token", exportJson);
+        var keyFileContents = string.Join('\n', Directory.EnumerateFiles(Path.Combine(dataDir, "secrets", "aes-keys")).Select(File.ReadAllText));
+        Assert.DoesNotContain(keyFileContents, exportJson);
+    }
+
+    [Fact]
     public async Task Cluster_credentials_can_be_updated_without_changing_topology()
     {
         await using var factory = CreateFactory();
@@ -493,7 +529,7 @@ public sealed class ChoboFoundationTests
     }
 
     [Fact]
-    public async Task Mutating_actions_create_audit_records_and_config_export_excludes_logs_and_audits()
+    public async Task Mutating_actions_create_audit_records_and_config_export_excludes_operational_state()
     {
         await using var factory = CreateFactory();
         var client = AuthenticatedClient(factory);
@@ -506,8 +542,8 @@ public sealed class ChoboFoundationTests
         var config = await client.GetFromJsonAsync<ExportEnvelope>("/api/v1/config/export", JsonOptions);
         Assert.NotNull(config);
         Assert.Equal(ChoboApi.ProductVersion, config!.ProductVersion);
-        Assert.Empty(config.Data.Audits);
-        Assert.Empty(config.Data.Logs);
+        Assert.Empty(config.Data.Backups);
+        Assert.Empty(config.Data.Restores);
         Assert.Contains(config.Data.Users, x => x.UserName == "operator");
     }
 
@@ -528,6 +564,246 @@ public sealed class ChoboFoundationTests
         Assert.Contains(users!, x => x.UserName == "operator");
     }
 
+    [Fact]
+    public async Task Config_import_preserves_logs_and_audits_and_writes_import_audit()
+    {
+        await using var factory = CreateFactory();
+        var client = AuthenticatedClient(factory);
+        await Post<CreateUserResponse>(client, "/api/v1/users", new CreateUserRequest("operator"));
+        var export = await client.GetFromJsonAsync<ExportEnvelope>("/api/v1/config/export", JsonOptions);
+        Assert.NotNull(export);
+
+        using (var seedScope = factory.Services.CreateScope())
+        {
+            var db = seedScope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+            var timestamp = ToUnixMilliseconds(DateTimeOffset.Parse("2026-05-15T10:11:12+00:00"));
+            await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO AuditEntries (Timestamp, ActorName, Action, EntityType, Details) VALUES ({timestamp}, 'system', 'existing-config-import-audit', 'test', '{{}}');");
+            await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO ApplicationLogEntries (Timestamp, Level, Exception, RenderedMessage, Properties) VALUES ({timestamp}, 'Information', NULL, 'existing config import log', '{{}}');");
+        }
+
+        var response = await client.PostAsJsonAsync("/api/v1/config/import", export, JsonOptions);
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+
+        using var scope = factory.Services.CreateScope();
+        var dbAfter = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+        Assert.True(await dbAfter.AuditEntries.AnyAsync(x => x.Action == "existing-config-import-audit"));
+        Assert.True(await dbAfter.ApplicationLogEntries.AnyAsync(x => x.RenderedMessage == "existing config import log"));
+        var importAudit = await dbAfter.AuditEntries.SingleAsync(x => x.Action == "import" && x.EntityType == "config");
+        Assert.Contains("\"schemaVersion\"", importAudit.Details);
+    }
+
+    [Fact]
+    public async Task Config_import_treats_encrypted_credentials_as_empty()
+    {
+        await using var sourceFactory = CreateFactory();
+        var ids = await SeedFullExportGraphAsync(sourceFactory, includeCredentials: true);
+        var sourceClient = AuthenticatedClient(sourceFactory);
+        var export = await sourceClient.GetFromJsonAsync<ExportEnvelope>("/api/v1/config/export", JsonOptions);
+        Assert.NotNull(export);
+        Assert.NotNull(Assert.Single(export!.Data.Clusters).EncryptedPassword);
+        Assert.NotNull(Assert.Single(export.Data.BackupTargets).EncryptedSecretKey);
+
+        await using var targetFactory = CreateFactory();
+        var targetClient = AuthenticatedClient(targetFactory);
+        var response = await targetClient.PostAsJsonAsync("/api/v1/config/import", export, JsonOptions);
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        using var scope = targetFactory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+        var cluster = await db.ClickHouseClusters.SingleAsync(x => x.Id == ids.ClusterId);
+        var target = await db.BackupTargets.SingleAsync(x => x.Id == ids.TargetId);
+        Assert.Equal("prod_cluster", cluster.ClickHouseClusterName);
+        Assert.Null(cluster.EncryptedUserName);
+        Assert.Null(cluster.EncryptedUserNameKeyId);
+        Assert.Null(cluster.EncryptedPassword);
+        Assert.Null(cluster.EncryptedPasswordKeyId);
+        Assert.Null(target.EncryptedAccessKey);
+        Assert.Null(target.EncryptedAccessKeyKeyId);
+        Assert.Null(target.EncryptedSecretKey);
+        Assert.Null(target.EncryptedSecretKeyKeyId);
+        Assert.Empty(await db.Backups.ToListAsync());
+        var audit = await db.AuditEntries.SingleAsync(x => x.Action == "import" && x.EntityType == "config");
+        Assert.Contains("\"credentialsImportedAsEmpty\":true", audit.Details);
+    }
+    [Fact]
+    public async Task Data_import_export_round_trips_operational_metadata_without_audits_logs_or_credentials()
+    {
+        await using var sourceFactory = CreateFactory();
+        var sourceClient = AuthenticatedClient(sourceFactory);
+        var ids = await SeedFullExportGraphAsync(sourceFactory, includeCredentials: true);
+
+        using (var sourceScope = sourceFactory.Services.CreateScope())
+        {
+            var db = sourceScope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+            var timestamp = ToUnixMilliseconds(DateTimeOffset.Parse("2026-05-15T10:11:12+00:00"));
+            await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO AuditEntries (Timestamp, ActorName, Action, EntityType, Details) VALUES ({timestamp}, 'system', 'source-export-audit', 'test', '{{}}');");
+            await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO ApplicationLogEntries (Timestamp, Level, Exception, RenderedMessage, Properties) VALUES ({timestamp}, 'Information', NULL, 'source export log', '{{}}');");
+        }
+
+        var export = await sourceClient.GetFromJsonAsync<ExportEnvelope>("/api/v1/data/export", JsonOptions);
+        Assert.NotNull(export);
+        Assert.Single(export!.Data.SchemaDefinitions);
+        Assert.Single(export.Data.Backups);
+        Assert.Single(export.Data.BackupTables);
+        Assert.Single(export.Data.BackupTableShards);
+        Assert.Single(export.Data.Restores);
+        Assert.Single(export.Data.RestoreTables);
+        Assert.Single(export.Data.RestoreTableShards);
+        Assert.Equal("prod_cluster", Assert.Single(export.Data.Clusters, x => x.Id == ids.ClusterId).ClickHouseClusterName);
+
+        await using var targetFactory = CreateFactory();
+        var targetClient = AuthenticatedClient(targetFactory);
+        using (var targetScope = targetFactory.Services.CreateScope())
+        {
+            var db = targetScope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+            var timestamp = ToUnixMilliseconds(DateTimeOffset.Parse("2026-05-15T10:12:12+00:00"));
+            await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO AuditEntries (Timestamp, ActorName, Action, EntityType, Details) VALUES ({timestamp}, 'system', 'target-local-audit', 'test', '{{}}');");
+            await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO ApplicationLogEntries (Timestamp, Level, Exception, RenderedMessage, Properties) VALUES ({timestamp}, 'Information', NULL, 'target local log', '{{}}');");
+        }
+
+        var response = await targetClient.PostAsJsonAsync("/api/v1/data/import", export, JsonOptions);
+        var responseText = await response.Content.ReadAsStringAsync();
+        Assert.True(response.StatusCode == HttpStatusCode.NoContent, responseText);
+
+        using var verifyScope = targetFactory.Services.CreateScope();
+        var imported = verifyScope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+        var cluster = await imported.ClickHouseClusters.SingleAsync(x => x.Id == ids.ClusterId);
+        var target = await imported.BackupTargets.SingleAsync(x => x.Id == ids.TargetId);
+        Assert.Equal("prod_cluster", cluster.ClickHouseClusterName);
+        Assert.Null(cluster.EncryptedUserName);
+        Assert.Null(cluster.EncryptedUserNameKeyId);
+        Assert.Null(cluster.EncryptedPassword);
+        Assert.Null(cluster.EncryptedPasswordKeyId);
+        Assert.Null(target.EncryptedAccessKey);
+        Assert.Null(target.EncryptedAccessKeyKeyId);
+        Assert.Null(target.EncryptedSecretKey);
+        Assert.Null(target.EncryptedSecretKeyKeyId);
+        Assert.True(await imported.BackupPolicies.AnyAsync(x => x.Id == ids.PolicyId));
+        Assert.True(await imported.BackupSchedules.AnyAsync(x => x.Id == ids.ScheduleId));
+        Assert.True(await imported.SchemaDefinitions.AnyAsync(x => x.Id == ids.SchemaDefinitionId));
+        Assert.True(await imported.Backups.AnyAsync(x => x.Id == ids.BackupId && x.Status == BackupRunStatus.Succeeded));
+        Assert.True(await imported.BackupTables.AnyAsync(x => x.Id == ids.BackupTableId && x.SchemaDefinitionId == ids.SchemaDefinitionId));
+        Assert.True(await imported.BackupTableShards.AnyAsync(x => x.Id == ids.BackupTableShardId));
+        Assert.True(await imported.Restores.AnyAsync(x => x.Id == ids.RestoreId && x.Status == RestoreRunStatus.Succeeded));
+        Assert.True(await imported.RestoreTables.AnyAsync(x => x.Id == ids.RestoreTableId));
+        Assert.True(await imported.RestoreTableShards.AnyAsync(x => x.Id == ids.RestoreTableShardId));
+        Assert.True(await imported.AuditEntries.AnyAsync(x => x.Action == "target-local-audit"));
+        Assert.True(await imported.ApplicationLogEntries.AnyAsync(x => x.RenderedMessage == "target local log"));
+        Assert.False(await imported.AuditEntries.AnyAsync(x => x.Action == "source-export-audit"));
+        Assert.False(await imported.ApplicationLogEntries.AnyAsync(x => x.RenderedMessage == "source export log"));
+        var importAudit = await imported.AuditEntries.SingleAsync(x => x.Action == "import" && x.EntityType == "data");
+        Assert.Contains("\"credentialsImportedAsEmpty\":true", importAudit.Details);
+        Assert.Contains("\"importedBackups\":1", importAudit.Details);
+        Assert.Contains("\"importedRestores\":1", importAudit.Details);
+    }
+
+    [Theory]
+    [InlineData("sourceShardsEmpty", "SourceShards must not be empty")]
+    [InlineData("sourceShardsDuplicate", "SourceShards must not contain duplicates")]
+    [InlineData("sourceShardsNonPositive", "greater than '0'")]
+    [InlineData("targetShardsEmpty", "TargetShards must not be empty")]
+    [InlineData("targetShardsDuplicate", "TargetShards must not contain duplicates")]
+    [InlineData("targetShardsNonPositive", "greater than '0'")]
+    public async Task Restore_initiate_http_rejects_invalid_shard_selection_payloads(string shape, string expectedMessage)
+    {
+        await using var factory = CreateFactory();
+        var client = AuthenticatedClient(factory);
+        var request = shape switch
+        {
+            "sourceShardsEmpty" => new InitiateRestoreRequest(Guid.NewGuid(), Guid.NewGuid(), null, null, null, null, false, false, SourceShards: []),
+            "sourceShardsDuplicate" => new InitiateRestoreRequest(Guid.NewGuid(), Guid.NewGuid(), null, null, null, null, false, false, SourceShards: [1, 1]),
+            "sourceShardsNonPositive" => new InitiateRestoreRequest(Guid.NewGuid(), Guid.NewGuid(), null, null, null, null, false, false, SourceShards: [0]),
+            "targetShardsEmpty" => new InitiateRestoreRequest(Guid.NewGuid(), Guid.NewGuid(), null, null, null, null, false, false, Layout: RestoreLayout.Redistribute, TargetShards: []),
+            "targetShardsDuplicate" => new InitiateRestoreRequest(Guid.NewGuid(), Guid.NewGuid(), null, null, null, null, false, false, Layout: RestoreLayout.Redistribute, TargetShards: [2, 2]),
+            "targetShardsNonPositive" => new InitiateRestoreRequest(Guid.NewGuid(), Guid.NewGuid(), null, null, null, null, false, false, Layout: RestoreLayout.Redistribute, TargetShards: [0]),
+            _ => throw new ArgumentOutOfRangeException(nameof(shape), shape, null)
+        };
+
+        var response = await client.PostAsJsonAsync("/api/v1/restores/initiate", request, JsonOptions);
+        var text = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains(expectedMessage, text);
+    }
+    [Fact]
+    public async Task Data_import_marks_in_flight_backup_and_restore_rows_failed()
+    {
+        await using var sourceFactory = CreateFactory();
+        var sourceClient = AuthenticatedClient(sourceFactory);
+        var ids = await SeedFullExportGraphAsync(sourceFactory, includeCredentials: false);
+        var export = await sourceClient.GetFromJsonAsync<ExportEnvelope>("/api/v1/data/export", JsonOptions);
+        Assert.NotNull(export);
+
+        var inFlight = export! with
+        {
+            Data = export.Data with
+            {
+                Backups = [export.Data.Backups.Single() with { Status = BackupRunStatus.Running, CompletedAt = null, FailureReason = null }],
+                BackupTables = [export.Data.BackupTables.Single() with { Status = BackupTableStatus.Running, CompletedAt = null, Error = null }],
+                BackupTableShards = [export.Data.BackupTableShards.Single() with { Status = BackupTableStatus.Queued, CompletedAt = null, Error = null }],
+                Restores = [export.Data.Restores.Single() with { Status = RestoreRunStatus.Running, CompletedAt = null, FailureReason = null }],
+                RestoreTables = [export.Data.RestoreTables.Single() with { Status = RestoreTableStatus.Running, CompletedAt = null, Error = null }],
+                RestoreTableShards = [export.Data.RestoreTableShards.Single() with { Status = RestoreTableStatus.Queued, CompletedAt = null, Error = null }]
+            }
+        };
+
+        await using var targetFactory = CreateFactory();
+        var targetClient = AuthenticatedClient(targetFactory);
+        var response = await targetClient.PostAsJsonAsync("/api/v1/data/import", inFlight, JsonOptions);
+        var responseText = await response.Content.ReadAsStringAsync();
+        Assert.True(response.StatusCode == HttpStatusCode.NoContent, responseText);
+
+        using var verifyScope = targetFactory.Services.CreateScope();
+        var db = verifyScope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+        var backup = await db.Backups.SingleAsync(x => x.Id == ids.BackupId);
+        var backupTable = await db.BackupTables.SingleAsync(x => x.Id == ids.BackupTableId);
+        var backupShard = await db.BackupTableShards.SingleAsync(x => x.Id == ids.BackupTableShardId);
+        var restore = await db.Restores.SingleAsync(x => x.Id == ids.RestoreId);
+        var restoreTable = await db.RestoreTables.SingleAsync(x => x.Id == ids.RestoreTableId);
+        var restoreShard = await db.RestoreTableShards.SingleAsync(x => x.Id == ids.RestoreTableShardId);
+        Assert.Equal(BackupRunStatus.Failed, backup.Status);
+        Assert.Equal(BackupTableStatus.Failed, backupTable.Status);
+        Assert.Equal(BackupTableStatus.Failed, backupShard.Status);
+        Assert.Equal(RestoreRunStatus.Failed, restore.Status);
+        Assert.Equal(RestoreTableStatus.Failed, restoreTable.Status);
+        Assert.Equal(RestoreTableStatus.Failed, restoreShard.Status);
+        Assert.Contains("Imported in-flight operation", backup.FailureReason);
+        Assert.Contains("Imported in-flight operation", backupTable.Error);
+        Assert.Contains("Imported in-flight operation", restore.FailureReason);
+        Assert.NotNull(backup.CompletedAt);
+        Assert.NotNull(restore.CompletedAt);
+        var audit = await db.AuditEntries.SingleAsync(x => x.Action == "import" && x.EntityType == "data");
+        Assert.Contains("\"inFlightImportedAsFailed\":6", audit.Details);
+    }
+
+    [Fact]
+    public async Task Data_import_rejects_malformed_operational_references_before_deleting_existing_data()
+    {
+        await using var sourceFactory = CreateFactory();
+        var sourceClient = AuthenticatedClient(sourceFactory);
+        await SeedFullExportGraphAsync(sourceFactory, includeCredentials: false);
+        var export = await sourceClient.GetFromJsonAsync<ExportEnvelope>("/api/v1/data/export", JsonOptions);
+        Assert.NotNull(export);
+
+        var malformed = export! with
+        {
+            Data = export.Data with
+            {
+                BackupTables = [export.Data.BackupTables.Single() with { SchemaDefinitionId = Guid.NewGuid() }]
+            }
+        };
+
+        await using var targetFactory = CreateFactory();
+        var targetClient = AuthenticatedClient(targetFactory);
+        await Post<CreateUserResponse>(targetClient, "/api/v1/users", new CreateUserRequest("keep-me"));
+        var response = await targetClient.PostAsJsonAsync("/api/v1/data/import", malformed, JsonOptions);
+        var responseText = await response.Content.ReadAsStringAsync();
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("missing backup table", responseText);
+
+        var users = await targetClient.GetFromJsonAsync<List<UserDto>>("/api/v1/users", JsonOptions);
+        Assert.Contains(users!, x => x.UserName == "keep-me");
+    }
     [Fact]
     public void Backup_retention_contract_reads_legacy_retention_minutes()
     {
@@ -882,6 +1158,228 @@ public sealed class ChoboFoundationTests
         Assert.Contains(audits.Items, x => x.Action == "recent-time-window-audit");
         Assert.DoesNotContain(audits.Items, x => x.Action == "old-time-window-audit");
     }
+
+    private static async Task<FullExportGraphIds> SeedFullExportGraphAsync(WebApplicationFactory<Program> factory, bool includeCredentials)
+    {
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+        var user = await db.Users.SingleAsync(x => x.UserName == "admin");
+        var now = DateTimeOffset.Parse("2026-05-15T10:00:00+00:00");
+        var clusterId = Guid.NewGuid();
+        var targetId = Guid.NewGuid();
+        var policyId = Guid.NewGuid();
+        var scheduleId = Guid.NewGuid();
+        var schemaDefinitionId = Guid.NewGuid();
+        var backupId = Guid.NewGuid();
+        var backupTableId = Guid.NewGuid();
+        var backupTableShardId = Guid.NewGuid();
+        var restoreId = Guid.NewGuid();
+        var restoreTableId = Guid.NewGuid();
+        var restoreTableShardId = Guid.NewGuid();
+
+        db.ClickHouseClusters.Add(new ClickHouseClusterEntity
+        {
+            Id = clusterId,
+            Name = "prod",
+            Mode = ClusterMode.Cluster,
+            ClickHouseClusterName = "prod_cluster",
+            BackupRestoreMaxDop = 4,
+            EncryptedUserName = includeCredentials ? "encrypted-user" : null,
+            EncryptedUserNameKeyId = includeCredentials ? Guid.NewGuid() : null,
+            EncryptedPassword = includeCredentials ? "encrypted-password" : null,
+            EncryptedPasswordKeyId = includeCredentials ? Guid.NewGuid() : null,
+            CreatedAt = now,
+            AccessNodes =
+            [
+                new ClickHouseAccessNodeEntity { Id = Guid.NewGuid(), Host = "clickhouse-1", Port = 9000, UseTls = false },
+                new ClickHouseAccessNodeEntity { Id = Guid.NewGuid(), Host = "clickhouse-2", Port = 9440, UseTls = true }
+            ]
+        });
+        db.BackupTargets.Add(new BackupTargetEntity
+        {
+            Id = targetId,
+            Name = "minio",
+            Type = BackupTargetType.S3,
+            Endpoint = "http://minio:9000",
+            Region = "us-east-1",
+            Bucket = "backups",
+            PathPrefix = "prod",
+            ForcePathStyle = true,
+            EncryptedAccessKey = includeCredentials ? "encrypted-access" : null,
+            EncryptedAccessKeyKeyId = includeCredentials ? Guid.NewGuid() : null,
+            EncryptedSecretKey = includeCredentials ? "encrypted-secret" : null,
+            EncryptedSecretKeyKeyId = includeCredentials ? Guid.NewGuid() : null,
+            CreatedAt = now
+        });
+        db.BackupPolicies.Add(new BackupPolicyEntity
+        {
+            Id = policyId,
+            Name = "all-prod",
+            SourceClusterId = clusterId,
+            TargetId = targetId,
+            SelectorJsonVersion = 1,
+            SelectorJson = JsonSerializer.Serialize(PolicySelector.Empty, JsonOptions),
+            FullRetentionMinutes = 1440,
+            IncrementalRetentionMinutes = 240,
+            MinBackupsToKeep = 2,
+            MinFullBackupsToKeep = 1,
+            CreatedAt = now
+        });
+        db.BackupSchedules.Add(new BackupScheduleEntity
+        {
+            Id = scheduleId,
+            Name = "nightly",
+            PolicyId = policyId,
+            BackupType = BackupType.Full,
+            CronExpression = "0 0 2 * * ?",
+            TimeZoneId = "UTC",
+            MissedRunGracePeriod = TimeSpan.FromMinutes(30),
+            Description = "Nightly backup",
+            CreatedAt = now
+        });
+        db.SchemaDefinitions.Add(new SchemaDefinitionEntity
+        {
+            Id = schemaDefinitionId,
+            SchemaHash = "schema-hash-1",
+            Database = "sales",
+            Table = "orders",
+            Engine = "MergeTree",
+            CreateTableSql = "CREATE TABLE sales.orders (id UInt64) ENGINE = MergeTree ORDER BY id",
+            ColumnsJson = "[{\"name\":\"id\",\"type\":\"UInt64\"}]",
+            CreatedAt = now
+        });
+        db.Backups.Add(new BackupEntity
+        {
+            Id = backupId,
+            TriggerType = BackupTriggerType.Scheduled,
+            Status = BackupRunStatus.Succeeded,
+            BackupType = BackupType.Full,
+            SourceClusterId = clusterId,
+            TargetId = targetId,
+            PolicyId = policyId,
+            ScheduleId = scheduleId,
+            RequestedByUserId = user.Id,
+            RequestedByName = user.UserName,
+            CreatedAt = now,
+            QueuedAt = now,
+            StartedAt = now.AddMinutes(1),
+            CompletedAt = now.AddMinutes(2),
+            IsPinned = true,
+            PinnedAt = now.AddMinutes(3),
+            PinnedByUserId = user.Id,
+            PinnedByName = user.UserName
+        });
+        db.BackupTables.Add(new BackupTableEntity
+        {
+            Id = backupTableId,
+            BackupId = backupId,
+            EffectiveBackupType = BackupType.Full,
+            Database = "sales",
+            Table = "orders",
+            Engine = "MergeTree",
+            DataBackedUp = true,
+            SchemaDefinitionId = schemaDefinitionId,
+            S3Path = "s3://backups/sales/orders",
+            Status = BackupTableStatus.Succeeded,
+            ClickHouseOperationId = "backup-op-table",
+            ClickHouseStatus = "success",
+            StartedAt = now.AddMinutes(1),
+            CompletedAt = now.AddMinutes(2)
+        });
+        db.BackupTableShards.Add(new BackupTableShardEntity
+        {
+            Id = backupTableShardId,
+            BackupTableId = backupTableId,
+            EffectiveBackupType = BackupType.Full,
+            SourceShardNumber = 1,
+            SourceShardName = "shard1",
+            ReplicaNumber = 1,
+            Host = "clickhouse-1",
+            Port = 9000,
+            UseTls = false,
+            S3Path = "s3://backups/sales/orders/shard1",
+            Status = BackupTableStatus.Succeeded,
+            ClickHouseOperationId = "backup-op-shard",
+            ClickHouseStatus = "success",
+            StartedAt = now.AddMinutes(1),
+            CompletedAt = now.AddMinutes(2)
+        });
+        db.Restores.Add(new RestoreEntity
+        {
+            Id = restoreId,
+            BackupId = backupId,
+            TargetClusterId = clusterId,
+            Status = RestoreRunStatus.Succeeded,
+            Append = true,
+            AllowSchemaMismatch = true,
+            Layout = RestoreLayout.Preserve,
+            SourceShard = 1,
+            TargetShard = 1,
+            RequestJson = "{\"mode\":\"test\"}",
+            RequestedByUserId = user.Id,
+            RequestedByName = user.UserName,
+            CreatedAt = now,
+            QueuedAt = now,
+            StartedAt = now.AddMinutes(3),
+            CompletedAt = now.AddMinutes(4)
+        });
+        db.RestoreTables.Add(new RestoreTableEntity
+        {
+            Id = restoreTableId,
+            RestoreId = restoreId,
+            BackupTableId = backupTableId,
+            SourceDatabase = "sales",
+            SourceTable = "orders",
+            TargetDatabase = "sales_restore",
+            TargetTable = "orders_restore",
+            Append = true,
+            AllowSchemaMismatch = true,
+            Status = RestoreTableStatus.Succeeded,
+            ClickHouseOperationId = "restore-op-table",
+            ClickHouseStatus = "success",
+            Warning = "none",
+            StartedAt = now.AddMinutes(3),
+            CompletedAt = now.AddMinutes(4)
+        });
+        db.RestoreTableShards.Add(new RestoreTableShardEntity
+        {
+            Id = restoreTableShardId,
+            RestoreTableId = restoreTableId,
+            BackupTableShardId = backupTableShardId,
+            SourceShardNumber = 1,
+            TargetShardNumber = 1,
+            TargetShardName = "shard1",
+            TargetReplicaNumber = 1,
+            TargetHost = "clickhouse-1",
+            TargetPort = 9000,
+            TargetUseTls = false,
+            LayoutRole = "primary",
+            RestoreDatabase = "sales_restore",
+            RestoreTableName = "orders_restore",
+            Status = RestoreTableStatus.Succeeded,
+            ClickHouseOperationId = "restore-op-shard",
+            ClickHouseStatus = "success",
+            Warning = "none",
+            StartedAt = now.AddMinutes(3),
+            CompletedAt = now.AddMinutes(4)
+        });
+
+        await db.SaveChangesAsync();
+        return new FullExportGraphIds(clusterId, targetId, policyId, scheduleId, schemaDefinitionId, backupId, backupTableId, backupTableShardId, restoreId, restoreTableId, restoreTableShardId);
+    }
+
+    private sealed record FullExportGraphIds(
+        Guid ClusterId,
+        Guid TargetId,
+        Guid PolicyId,
+        Guid ScheduleId,
+        Guid SchemaDefinitionId,
+        Guid BackupId,
+        Guid BackupTableId,
+        Guid BackupTableShardId,
+        Guid RestoreId,
+        Guid RestoreTableId,
+        Guid RestoreTableShardId);
     private static WebApplicationFactory<Program> CreateFactory(string? dataDir = null, string adminUser = "admin", string accessToken = Token, IReadOnlyDictionary<string, string?>? extraConfiguration = null)
     {
         dataDir ??= NewTestDataDirectory();
@@ -1023,4 +1521,5 @@ public sealed class ChoboFoundationTests
         }
     }
 }
+
 

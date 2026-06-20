@@ -350,8 +350,13 @@ public sealed class ExportPayloadValidator : AbstractValidator<ExportPayload>
         RuleFor(x => x.BackupTargets).NotNull();
         RuleFor(x => x.BackupPolicies).NotNull();
         RuleFor(x => x.BackupSchedules).NotNull();
-        RuleFor(x => x.Audits).NotNull();
-        RuleFor(x => x.Logs).NotNull();
+        RuleFor(x => x.SchemaDefinitions).NotNull();
+        RuleFor(x => x.Backups).NotNull();
+        RuleFor(x => x.BackupTables).NotNull();
+        RuleFor(x => x.BackupTableShards).NotNull();
+        RuleFor(x => x.Restores).NotNull();
+        RuleFor(x => x.RestoreTables).NotNull();
+        RuleFor(x => x.RestoreTableShards).NotNull();
         RuleForEach(x => x.Users).SetValidator(new UserExportValidator());
         RuleForEach(x => x.AccessTokens).SetValidator(new AccessTokenExportValidator());
         RuleForEach(x => x.Clusters).SetValidator(new ClusterExportValidator());
@@ -464,6 +469,152 @@ public sealed class BackupScheduleExportValidator : AbstractValidator<BackupSche
     }
 }
 
+public sealed class SchemaDefinitionExportValidator : AbstractValidator<SchemaDefinitionExport>
+{
+    public SchemaDefinitionExportValidator()
+    {
+        RuleFor(x => x.Id).NotEmpty();
+        RuleFor(x => x.SchemaHash).NotEmpty().MaximumLength(256);
+        RuleFor(x => x.Database).NotEmpty().MaximumLength(512);
+        RuleFor(x => x.Table).NotEmpty().MaximumLength(512);
+        RuleFor(x => x.Engine).NotEmpty().MaximumLength(2048);
+        RuleFor(x => x.CreateTableSql).NotEmpty().MaximumLength(200000);
+        RuleFor(x => x.ColumnsJson).NotEmpty().MaximumLength(200000);
+        RuleFor(x => x.CreatedAt).NotEqual(default(DateTimeOffset));
+    }
+}
+
+public sealed class BackupExportValidator : AbstractValidator<BackupExport>
+{
+    public BackupExportValidator()
+    {
+        RuleFor(x => x.Id).NotEmpty();
+        RuleFor(x => x.TriggerType).IsInEnum();
+        RuleFor(x => x.Status).IsInEnum();
+        RuleFor(x => x.BackupType).IsInEnum();
+        RuleFor(x => x.SourceClusterId).NotEmpty();
+        RuleFor(x => x.TargetId).NotEmpty();
+        RuleFor(x => x.PolicyId).NotEmpty().When(x => x.PolicyId is not null);
+        RuleFor(x => x.ScheduleId).NotEmpty().When(x => x.ScheduleId is not null);
+        RuleFor(x => x.ManualRequestJson).MaximumLength(200000).When(x => x.ManualRequestJson is not null);
+        RuleFor(x => x.RequestedByUserId).NotEmpty().When(x => x.RequestedByUserId is not null);
+        RuleFor(x => x.RequestedByName).NotEmpty().MaximumLength(256);
+        RuleFor(x => x.CreatedAt).NotEqual(default(DateTimeOffset));
+        RuleFor(x => x.Error).MaximumLength(200000).When(x => x.Error is not null);
+        RuleFor(x => x.FailureReason).MaximumLength(200000).When(x => x.FailureReason is not null);
+        RuleFor(x => x.PinnedByUserId).NotEmpty().When(x => x.PinnedByUserId is not null);
+        RuleFor(x => x.PinnedByName).MaximumLength(256).When(x => x.PinnedByName is not null);
+        RuleFor(x => x.DeletionReason).MaximumLength(200000).When(x => x.DeletionReason is not null);
+        RuleFor(x => x.DeletionError).MaximumLength(200000).When(x => x.DeletionError is not null);
+        RuleFor(x => x.DeletionAttemptCount).GreaterThanOrEqualTo(0);
+    }
+}
+
+public sealed class BackupTableExportValidator : AbstractValidator<BackupTableExport>
+{
+    public BackupTableExportValidator()
+    {
+        RuleFor(x => x.Id).NotEmpty();
+        RuleFor(x => x.BackupId).NotEmpty();
+        RuleFor(x => x.EffectiveBackupType).IsInEnum();
+        RuleFor(x => x.ParentFullBackupId).NotEmpty().When(x => x.ParentFullBackupId is not null);
+        RuleFor(x => x.ParentFullBackupTableId).NotEmpty().When(x => x.ParentFullBackupTableId is not null);
+        RuleFor(x => x.Database).NotEmpty().MaximumLength(512);
+        RuleFor(x => x.Table).NotEmpty().MaximumLength(512);
+        RuleFor(x => x.Engine).NotEmpty().MaximumLength(2048);
+        RuleFor(x => x.SchemaDefinitionId).NotEmpty();
+        RuleFor(x => x.S3Path).NotEmpty().MaximumLength(4096);
+        RuleFor(x => x.Status).IsInEnum();
+        RuleFor(x => x.ClickHouseOperationId).MaximumLength(512).When(x => x.ClickHouseOperationId is not null);
+        RuleFor(x => x.ClickHouseStatus).MaximumLength(128).When(x => x.ClickHouseStatus is not null);
+        RuleFor(x => x.Error).MaximumLength(200000).When(x => x.Error is not null);
+    }
+}
+
+public sealed class BackupTableShardExportValidator : AbstractValidator<BackupTableShardExport>
+{
+    public BackupTableShardExportValidator()
+    {
+        RuleFor(x => x.Id).NotEmpty();
+        RuleFor(x => x.BackupTableId).NotEmpty();
+        RuleFor(x => x.EffectiveBackupType).IsInEnum();
+        RuleFor(x => x.ParentFullBackupId).NotEmpty().When(x => x.ParentFullBackupId is not null);
+        RuleFor(x => x.ParentFullBackupTableShardId).NotEmpty().When(x => x.ParentFullBackupTableShardId is not null);
+        RuleFor(x => x.SourceShardNumber).GreaterThan(0);
+        RuleFor(x => x.SourceShardName).MaximumLength(512).When(x => x.SourceShardName is not null);
+        RuleFor(x => x.ReplicaNumber).GreaterThan(0);
+        RuleFor(x => x.Host).NotEmpty().MaximumLength(512);
+        RuleFor(x => x.Port).InclusiveBetween(1, 65535);
+        RuleFor(x => x.S3Path).NotEmpty().MaximumLength(4096);
+        RuleFor(x => x.Status).IsInEnum();
+        RuleFor(x => x.ClickHouseOperationId).MaximumLength(512).When(x => x.ClickHouseOperationId is not null);
+        RuleFor(x => x.ClickHouseStatus).MaximumLength(128).When(x => x.ClickHouseStatus is not null);
+        RuleFor(x => x.Error).MaximumLength(200000).When(x => x.Error is not null);
+    }
+}
+
+public sealed class RestoreExportValidator : AbstractValidator<RestoreExport>
+{
+    public RestoreExportValidator()
+    {
+        RuleFor(x => x.Id).NotEmpty();
+        RuleFor(x => x.BackupId).NotEmpty();
+        RuleFor(x => x.TargetClusterId).NotEmpty();
+        RuleFor(x => x.Status).IsInEnum();
+        RuleFor(x => x.Layout).IsInEnum();
+        RuleFor(x => x.SourceShard).GreaterThan(0).When(x => x.SourceShard is not null);
+        RuleFor(x => x.TargetShard).GreaterThan(0).When(x => x.TargetShard is not null);
+        RuleFor(x => x.RequestJson).NotEmpty().MaximumLength(200000);
+        RuleFor(x => x.RequestedByUserId).NotEmpty().When(x => x.RequestedByUserId is not null);
+        RuleFor(x => x.RequestedByName).NotEmpty().MaximumLength(256);
+        RuleFor(x => x.CreatedAt).NotEqual(default(DateTimeOffset));
+        RuleFor(x => x.Error).MaximumLength(200000).When(x => x.Error is not null);
+        RuleFor(x => x.FailureReason).MaximumLength(200000).When(x => x.FailureReason is not null);
+    }
+}
+
+public sealed class RestoreTableExportValidator : AbstractValidator<RestoreTableExport>
+{
+    public RestoreTableExportValidator()
+    {
+        RuleFor(x => x.Id).NotEmpty();
+        RuleFor(x => x.RestoreId).NotEmpty();
+        RuleFor(x => x.BackupTableId).NotEmpty();
+        RuleFor(x => x.SourceDatabase).NotEmpty().MaximumLength(512);
+        RuleFor(x => x.SourceTable).NotEmpty().MaximumLength(512);
+        RuleFor(x => x.TargetDatabase).NotEmpty().MaximumLength(512);
+        RuleFor(x => x.TargetTable).NotEmpty().MaximumLength(512);
+        RuleFor(x => x.Status).IsInEnum();
+        RuleFor(x => x.ClickHouseOperationId).MaximumLength(512).When(x => x.ClickHouseOperationId is not null);
+        RuleFor(x => x.ClickHouseStatus).MaximumLength(128).When(x => x.ClickHouseStatus is not null);
+        RuleFor(x => x.Warning).MaximumLength(200000).When(x => x.Warning is not null);
+        RuleFor(x => x.Error).MaximumLength(200000).When(x => x.Error is not null);
+    }
+}
+
+public sealed class RestoreTableShardExportValidator : AbstractValidator<RestoreTableShardExport>
+{
+    public RestoreTableShardExportValidator()
+    {
+        RuleFor(x => x.Id).NotEmpty();
+        RuleFor(x => x.RestoreTableId).NotEmpty();
+        RuleFor(x => x.BackupTableShardId).NotEmpty();
+        RuleFor(x => x.SourceShardNumber).GreaterThan(0);
+        RuleFor(x => x.TargetShardNumber).GreaterThan(0).When(x => x.TargetShardNumber is not null);
+        RuleFor(x => x.TargetShardName).MaximumLength(512).When(x => x.TargetShardName is not null);
+        RuleFor(x => x.TargetReplicaNumber).GreaterThan(0).When(x => x.TargetReplicaNumber is not null);
+        RuleFor(x => x.TargetHost).NotEmpty().MaximumLength(512);
+        RuleFor(x => x.TargetPort).InclusiveBetween(1, 65535);
+        RuleFor(x => x.LayoutRole).NotEmpty().MaximumLength(128);
+        RuleFor(x => x.RestoreDatabase).NotEmpty().MaximumLength(512);
+        RuleFor(x => x.RestoreTableName).NotEmpty().MaximumLength(512);
+        RuleFor(x => x.Status).IsInEnum();
+        RuleFor(x => x.ClickHouseOperationId).MaximumLength(512).When(x => x.ClickHouseOperationId is not null);
+        RuleFor(x => x.ClickHouseStatus).MaximumLength(128).When(x => x.ClickHouseStatus is not null);
+        RuleFor(x => x.Warning).MaximumLength(200000).When(x => x.Warning is not null);
+        RuleFor(x => x.Error).MaximumLength(200000).When(x => x.Error is not null);
+    }
+}
 public sealed class SeedMissingBackupOperationRequestValidator : AbstractValidator<SeedMissingBackupOperationRequest>
 {
     public SeedMissingBackupOperationRequestValidator()
@@ -498,4 +649,5 @@ internal static class ValidationRuleExtensions
     public static IRuleBuilderOptions<T, string> ValidTimeZone<T>(this IRuleBuilder<T, string> rule) =>
         rule.NotEmpty().Must(value => TimeZoneInfo.TryFindSystemTimeZoneById(value, out _)).WithMessage("TimeZoneId is invalid.");
 }
+
 

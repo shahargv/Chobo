@@ -61,7 +61,6 @@ export class ChoboApiClient {
   serverVersion() { return this.get<ServerVersionDto>("server/version"); }
   dashboard(nextHours = 6) { return this.get<DashboardDto>(`dashboard?nextHours=${nextHours}`); }
   metrics() { return this.get<Record<string, number | null>>("metrics"); }
-  prometheusMetrics() { return this.requestText("metrics/prometheus", { accept: "text/plain" }); }
   metricsJsonText() { return this.requestText("metrics"); }
 
   users() { return this.get<UserDto[]>("users"); }

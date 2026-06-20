@@ -1265,7 +1265,7 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
-    public async Task Restore_redistribute_target_subset_creates_target_table_on_all_target_shards()
+    public async Task Restore_redistribute_target_subset_creates_target_table_only_on_selected_target_shards()
     {
         await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
         fixture.ClickHouse.Topology.Clear();
@@ -1301,7 +1301,7 @@ public sealed class BackupRestoreExecutionTests
             .OrderBy(x => x)
             .ToArray();
 
-        Assert.Equal(["restore-s1", "restore-s2", "restore-s3"], createTableHosts);
+        Assert.Equal(["restore-s1", "restore-s2"], createTableHosts);
     }
 
     [Fact]
@@ -1898,6 +1898,7 @@ public sealed class BackupRestoreExecutionTests
             var services = new ServiceCollection()
                 .AddSingleton(connection)
                 .AddDbContext<ChoboDbContext>((provider, builder) => builder.UseSqlite(provider.GetRequiredService<SqliteConnection>()))
+                .AddDbContextFactory<ChoboDbContext>((provider, builder) => builder.UseSqlite(provider.GetRequiredService<SqliteConnection>()), ServiceLifetime.Scoped)
                 .AddSingleton(fake)
                 .AddScoped<IClickHouseAdapter>(provider => provider.GetRequiredService<FakeClickHouseAdapter>())
                 .AddSingleton(storageDeletion)
@@ -2337,6 +2338,7 @@ public sealed class BackupRestoreExecutionTests
         public override DateTimeOffset GetUtcNow() => utcNow;
     }
 }
+
 
 
 

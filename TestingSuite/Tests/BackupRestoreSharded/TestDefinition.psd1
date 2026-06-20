@@ -232,12 +232,12 @@
             Type = 'Cli'
             Args = @('audit', 'show', '--last', '500')
             ExpectJson = @(
-                @{ Path = '$'; ContainsObject = @{ action = 'shards-prepared'; entityType = 'backup' } }
-                @{ Path = '$'; ContainsObject = @{ action = 'shard-succeeded'; entityType = 'backup-table-shard' } }
-                @{ Path = '$'; ContainsObject = @{ action = 'shard-failed'; entityType = 'restore-table-shard' } }
-                @{ Path = '$'; ContainsObject = @{ action = 'table-partially-succeeded'; entityType = 'restore-table' } }
-                @{ Path = '$'; ContainsObject = @{ action = 'partially-succeeded'; entityType = 'restore' } }
-                @{ Path = '$'; ContainsObject = @{ action = 'shard-succeeded'; entityType = 'restore-table-shard' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'shards-prepared'; entityType = 'backup' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'shard-succeeded'; entityType = 'backup-table-shard' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'shard-failed'; entityType = 'restore-table-shard' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'table-partially-succeeded'; entityType = 'restore-table' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'partially-succeeded'; entityType = 'restore' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'shard-succeeded'; entityType = 'restore-table-shard' } }
             )
         }
     )

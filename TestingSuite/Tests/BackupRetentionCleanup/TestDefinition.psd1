@@ -165,11 +165,11 @@
             Type = 'Cli'
             Args = @('audit', 'show', '--last', '500')
             ExpectJson = @(
-                @{ Path = '$'; ContainsObject = @{ action = 'pin'; entityType = 'backup' } }
-                @{ Path = '$'; ContainsObject = @{ action = 'unpin'; entityType = 'backup' } }
-                @{ Path = '$'; ContainsObject = @{ action = 'delete-requested'; entityType = 'backup' } }
-                @{ Path = '$'; ContainsObject = @{ action = 'backup-retention-delete-requested'; entityType = 'backup' } }
-                @{ Path = '$'; ContainsObject = @{ action = 'backup-cleanup-succeeded'; entityType = 'backup' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'pin'; entityType = 'backup' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'unpin'; entityType = 'backup' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'delete-requested'; entityType = 'backup' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'backup-retention-delete-requested'; entityType = 'backup' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'backup-cleanup-succeeded'; entityType = 'backup' } }
             )
         }
     )

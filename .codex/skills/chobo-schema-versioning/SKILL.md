@@ -39,3 +39,8 @@ Chobo treats schema versions as release-level contracts, not PR-level or chat-le
 - Do not bump `SchemaVersion` until we intentionally start compatibility work for a release after the last published schema.
 - When collapsing or resetting pre-release schema history, keep exactly one baseline migration matching the current `DbContext`.
 - If unsure whether a schema is published, stop and verify instead of guessing.
+
+## Export envelope compatibility
+
+Export envelopes intentionally exclude audit entries and application logs. Data envelopes include restorable operational backup/restore metadata. Change ChoboApi.ExportVersion only when serialized envelope compatibility changes, and keep imported credentials empty unless a future explicit re-encryption workflow is designed.
+

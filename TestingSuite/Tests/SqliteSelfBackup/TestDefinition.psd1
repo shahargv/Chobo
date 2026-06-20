@@ -37,7 +37,7 @@
             RetryTimeoutSeconds = 30
             RetryIntervalSeconds = 1
             ExpectJson = @(
-                @{ Path = '$'; ContainsObject = @{ action = 'sqlite-self-backup-created'; entityType = 'sqlite-self-backup'; actorName = 'system' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'sqlite-self-backup-created'; entityType = 'sqlite-self-backup'; actorName = 'system' } }
             )
         }
         @{

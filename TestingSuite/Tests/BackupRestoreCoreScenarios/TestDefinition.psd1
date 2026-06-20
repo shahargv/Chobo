@@ -298,10 +298,10 @@
             RetryTimeoutSeconds = 6
             RetryIntervalSeconds = 1
             ExpectJson = @(
-                @{ Path = '$'; ContainsObject = @{ action = 'created'; entityType = 'backup' } }
-                @{ Path = '$'; ContainsObject = @{ action = 'succeeded'; entityType = 'backup' } }
-                @{ Path = '$'; ContainsObject = @{ action = 'created'; entityType = 'restore' } }
-                @{ Path = '$'; ContainsObject = @{ action = 'succeeded'; entityType = 'restore' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'created'; entityType = 'backup' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'succeeded'; entityType = 'backup' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'created'; entityType = 'restore' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'succeeded'; entityType = 'restore' } }
             )
         }
         @{
@@ -311,7 +311,7 @@
             RetryTimeoutSeconds = 6
             RetryIntervalSeconds = 1
             ExpectJson = @(
-                @{ Path = '$'; ContainsObject = @{ level = 'Warning' } }
+                @{ Path = 'items'; ContainsObject = @{ level = 'Warning' } }
             )
         }
         @{
@@ -425,8 +425,8 @@
             RetryTimeoutSeconds = 6
             RetryIntervalSeconds = 1
             ExpectJson = @(
-                @{ Path = '$'; ContainsObject = @{ action = 'table-failed'; entityType = 'restore-table' } }
-                @{ Path = '$'; ContainsObject = @{ action = 'failed'; entityType = 'restore' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'table-failed'; entityType = 'restore-table' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'failed'; entityType = 'restore' } }
             )
         }
         @{

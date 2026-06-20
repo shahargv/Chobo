@@ -28,7 +28,7 @@ export function Backups() {
     onError: (error) => showToast({ kind: "error", text: String(error) })
   });
   return (
-    <Page title="Backups" action={<ManualBackupButton />}>
+    <Page title="Backups" subtitle="Start manual backups, review backup history, and inspect table or shard results." action={<ManualBackupButton />}>
       <section className="panel">
         <DataTable headers={["Status", "Completion Time", "Type", "Initiated by", "Created", "Policy", "Tables", "Pinned", "Actions"]}>
           {(backups.data ?? []).map((backup) => (

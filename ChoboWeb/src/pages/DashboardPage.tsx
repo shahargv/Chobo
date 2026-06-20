@@ -30,7 +30,7 @@ export function Dashboard() {
   });
   const missingOnboarding = onboarding.filter((step) => !step.done);
   return (
-    <Page title="Dashboard" action={<button className="secondary" onClick={() => { dashboard.refetch(); backups.refetch(); }}><Activity size={16} /> Refresh</button>}>
+    <Page title="Dashboard" subtitle="See upcoming schedules, running backups, and recent operational health at a glance." action={<button className="secondary" onClick={() => { dashboard.refetch(); backups.refetch(); }}><Activity size={16} /> Refresh</button>}>
       {missingOnboarding.length > 0 ? <OnboardingPanel steps={onboarding} /> : <OnboardingComplete />}
       <div className="stat-grid">
         <Stat label="Running backups" value={running.length} tone={running.length ? "warn" : "ok"} />

@@ -169,6 +169,16 @@ ChoboCli audit show --last 200
 ChoboCli logs show --last 500
 ```
 
+
+## Import And Export
+
+Data export/import is intended for Chobo metadata portability and disaster recovery. `data export` includes all restorable Chobo metadata except audit entries and application logs: users, access tokens, clusters, backup targets, policies, schedules, schema definitions, backups, backup tables and shards, restores, and restore tables and shards.
+
+Import does not restore audit entries or application logs. The importing server keeps its local audit/log history and writes a new import audit record.
+
+Imported ClickHouse and S3 credentials are intentionally empty. After importing, update cluster credentials and backup target credentials before running connection tests, backups, restores, cleanup, or metadata recovery that needs those resources. The next save encrypts the credentials with the current server key.
+
+Use config export/import only for configuration-only moves. Config import is not a way to preserve existing backup/restore history; use data export/import for full metadata recovery.
 ## Upgrade Notes
 
 Chobo tracks separate API, export, product/server, and SQLite schema versions. The current API path is `/api/v1`.
@@ -183,3 +193,4 @@ Before upgrading production:
 - Keep the same `CHOBO_ENCRYPTION_KEY_BASE64`; changing it makes stored credentials unreadable.
 - Verify the new server can reach ClickHouse and S3.
 - Check `/health`, `server auth`, `dashboard`, and `audit show` after startup.
+
