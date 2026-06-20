@@ -100,7 +100,8 @@ public sealed record ManualBackupRequest(
     Guid TargetId,
     PolicySelector Selector,
     BackupType BackupType = BackupType.Full,
-    Guid? PolicyId = null);
+    Guid? PolicyId = null,
+    bool SchemaOnly = false);
 
 public sealed record BackupListRequest(Guid? PolicyId, string? ClusterName, string? TableName, BackupRunStatus? Status);
 
@@ -132,6 +133,9 @@ public sealed record RestoreTableDto(
     string SourceTable,
     string TargetDatabase,
     string TargetTable,
+    bool Append,
+    bool AllowSchemaMismatch,
+    bool SchemaOnly,
     RestoreTableStatus Status,
     string? ClickHouseOperationId,
     string? ClickHouseStatus,
@@ -174,4 +178,17 @@ public sealed record InitiateRestoreRequest(
     bool AllowSchemaMismatch,
     RestoreLayout? Layout = null,
     int? SourceShard = null,
-    int? TargetShard = null);
+    int? TargetShard = null,
+    IReadOnlyList<RestoreTableMappingRequest>? Tables = null,
+    bool SchemaOnly = false,
+    IReadOnlyList<int>? SourceShards = null,
+    IReadOnlyList<int>? TargetShards = null);
+
+public sealed record RestoreTableMappingRequest(
+    Guid BackupTableId,
+    string? TargetDatabase,
+    string? TargetTable,
+    bool? Append = null,
+    bool? AllowSchemaMismatch = null,
+    bool? SchemaOnly = null);
+

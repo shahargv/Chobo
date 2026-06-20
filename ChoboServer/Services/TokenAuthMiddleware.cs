@@ -7,8 +7,7 @@ public sealed class TokenAuthMiddleware(RequestDelegate next)
     public async Task InvokeAsync(HttpContext context, ITokenService tokenService, ActorContext actor, Serilog.ILogger logger)
     {
         var log = logger.ForContext<TokenAuthMiddleware>();
-        if (context.Request.Path.StartsWithSegments("/health") ||
-            context.Request.Path.StartsWithSegments("/swagger"))
+        if (!context.Request.Path.StartsWithSegments("/api"))
         {
             await next(context);
             return;

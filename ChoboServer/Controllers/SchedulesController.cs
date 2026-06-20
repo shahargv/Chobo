@@ -11,6 +11,10 @@ public sealed class SchedulesController(ScheduleApplicationService schedules) : 
     [HttpGet]
     public Task<IReadOnlyList<BackupScheduleDto>> List() => schedules.ListAsync();
 
+    [HttpPost("validate-cron")]
+    public ActionResult<ValidateScheduleCronResponse> ValidateCron(ValidateScheduleCronRequest request) =>
+        schedules.ValidateCron(request);
+
     [HttpPost]
     public async Task<ActionResult<BackupScheduleDto>> Add(UpsertScheduleRequest request)
     {

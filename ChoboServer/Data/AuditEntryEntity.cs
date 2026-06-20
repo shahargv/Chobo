@@ -9,6 +9,8 @@ public sealed class AuditEntryEntity
     public string Action { get; set; } = "";
     public string EntityType { get; set; } = "";
     public string? EntityId { get; set; }
+    public string? OperationId { get; set; }
     public string Details { get; set; } = "";
 }
+
 

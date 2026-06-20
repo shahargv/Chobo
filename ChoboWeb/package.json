@@ -1,0 +1,33 @@
+{
+  "name": "choboweb",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "test": "vitest run",
+    "typecheck": "tsc -b",
+    "generate:api": "node scripts/generate-api.mjs",
+    "update:api": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/update-api.ps1",
+    "check:api": "node scripts/generate-api.mjs && git diff --exit-code -- openapi/chobo.v1.json src/api/generated.ts"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.90.10",
+    "@tanstack/react-table": "^8.21.3",
+    "lucide-react": "^0.555.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-router-dom": "^7.9.6"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@types/react": "^19.2.5",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.0",
+    "jsdom": "^27.2.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.2.4",
+    "vitest": "^4.0.13"
+  }
+}

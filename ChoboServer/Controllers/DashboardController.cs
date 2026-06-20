@@ -16,3 +16,4 @@ public sealed class DashboardController(DashboardApplicationService dashboard) :
     public Task<IReadOnlyDictionary<string, double?>> GetMetrics(CancellationToken cancellationToken) =>
         dashboard.GetMetricsAsync(cancellationToken);
 }
+

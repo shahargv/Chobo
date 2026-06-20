@@ -17,9 +17,11 @@ public static class DatabasePerformanceMaintenance
         await db.Database.ExecuteSqlRawAsync("""
             CREATE INDEX IF NOT EXISTS IX_ApplicationLogEntries_Timestamp ON ApplicationLogEntries (Timestamp);
             CREATE INDEX IF NOT EXISTS IX_ApplicationLogEntries_Level_Timestamp ON ApplicationLogEntries (Level, Timestamp);
+            CREATE INDEX IF NOT EXISTS IX_ApplicationLogEntries_OperationId_Timestamp ON ApplicationLogEntries (OperationId, Timestamp);
             CREATE INDEX IF NOT EXISTS IX_AuditEntries_Timestamp ON AuditEntries (Timestamp);
             CREATE INDEX IF NOT EXISTS IX_AuditEntries_ActorUserId_Timestamp ON AuditEntries (ActorUserId, Timestamp);
             CREATE INDEX IF NOT EXISTS IX_AuditEntries_EntityType_Timestamp ON AuditEntries (EntityType, Timestamp);
+            CREATE INDEX IF NOT EXISTS IX_AuditEntries_OperationId_Timestamp ON AuditEntries (OperationId, Timestamp);
             CREATE INDEX IF NOT EXISTS IX_AccessTokens_TokenLookupHash ON AccessTokens (TokenLookupHash);
             CREATE INDEX IF NOT EXISTS IX_AccessTokens_IsActive_TokenLookupHash ON AccessTokens (IsActive, TokenLookupHash);
             CREATE INDEX IF NOT EXISTS IX_AccessTokens_UserId_IsActive ON AccessTokens (UserId, IsActive);
@@ -67,3 +69,4 @@ public static class DatabasePerformanceMaintenance
         await db.Database.ExecuteSqlRawAsync("ALTER TABLE AccessTokens ADD COLUMN TokenLookupHash TEXT NOT NULL DEFAULT '';");
     }
 }
+

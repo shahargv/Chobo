@@ -40,6 +40,10 @@ public sealed class BackupApplicationService(
         {
             throw new ArgumentException("Manual incremental backups require PolicyId.");
         }
+        if (request.SchemaOnly && request.BackupType == BackupType.Incremental)
+        {
+            throw new ArgumentException("Schema-only backups must be full backups.");
+        }
 
         if (clusterId == Guid.Empty)
         {
@@ -80,11 +84,11 @@ public sealed class BackupApplicationService(
 
         db.Backups.Add(backup);
         await db.SaveChangesAsync(cancellationToken);
-        _logger.Information("Manual backup {BackupId} created by {ActorName} for cluster {ClusterId} target {TargetId} type {BackupType}.", backup.Id, actor.ActorName, clusterId, targetId, backup.BackupType);
-        await audit.RecordAsync("created", AuditEntityType.Backup, backup.Id.ToString(), new { backup.TriggerType, backup.BackupType, backup.SourceClusterId, backup.TargetId, backup.PolicyId });
+        _logger.Information("Manual backup {BackupId} created by {ActorName} for cluster {ClusterId} target {TargetId} type {BackupType} schemaOnly={SchemaOnly}.", backup.Id, actor.ActorName, clusterId, targetId, backup.BackupType, request.SchemaOnly);
+        await audit.RecordAsync("created", AuditEntityType.Backup, backup.Id.ToString(), new { operationId = backup.Id, backup.TriggerType, backup.BackupType, backup.SourceClusterId, backup.TargetId, backup.PolicyId, request.SchemaOnly });
         await queues.QueueBackupAsync(backup.Id, cancellationToken);
         _logger.Information("Manual backup {BackupId} queued.", backup.Id);
-        await audit.RecordAsync("queued", AuditEntityType.Backup, backup.Id.ToString(), new { reason = "manual" });
+        await audit.RecordAsync("queued", AuditEntityType.Backup, backup.Id.ToString(), new { operationId = backup.Id, reason = "manual" });
 
         return BackupRestoreMapping.ToDto(await LoadAsync(backup.Id, cancellationToken) ?? backup);
     }
@@ -134,7 +138,7 @@ public sealed class BackupApplicationService(
         backup.PinnedByUserId = actor.UserId;
         backup.PinnedByName = actor.ActorName;
         await db.SaveChangesAsync(cancellationToken);
-        await audit.RecordAsync("pin", AuditEntityType.Backup, id.ToString(), new { backup.PinnedByUserId, backup.PinnedByName });
+        await audit.RecordAsync("pin", AuditEntityType.Backup, id.ToString(), new { operationId = id, backup.PinnedByUserId, backup.PinnedByName });
         return BackupRestoreMapping.ToDto(backup);
     }
 
@@ -202,7 +206,7 @@ public sealed class BackupApplicationService(
         backup.DeletionRequestedAt ??= DateTimeOffset.UtcNow;
         backup.DeletionError = null;
         await db.SaveChangesAsync(cancellationToken);
-        await audit.RecordAsync("delete-requested", AuditEntityType.Backup, id.ToString(), new { reason = backup.DeletionReason, force, backup.IsPinned });
+        await audit.RecordAsync("delete-requested", AuditEntityType.Backup, id.ToString(), new { operationId = id, reason = backup.DeletionReason, force, backup.IsPinned });
         return BackupRestoreMapping.ToDto(backup);
     }
 
