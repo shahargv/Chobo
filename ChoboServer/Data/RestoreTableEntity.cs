@@ -13,6 +13,9 @@ public sealed class RestoreTableEntity
     public string SourceTable { get; set; } = "";
     public string TargetDatabase { get; set; } = "";
     public string TargetTable { get; set; } = "";
+    public bool Append { get; set; }
+    public bool AllowSchemaMismatch { get; set; }
+    public bool SchemaOnly { get; set; }
     public RestoreTableStatus Status { get; set; } = RestoreTableStatus.Queued;
     public string? ClickHouseOperationId { get; set; }
     public string? ClickHouseStatus { get; set; }

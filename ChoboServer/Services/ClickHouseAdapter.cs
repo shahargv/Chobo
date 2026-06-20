@@ -23,6 +23,7 @@ public sealed record ClickHouseShardReplicaInfo(int ShardNumber, string? ShardNa
 public interface IClickHouseAdapter
 {
     Task<IReadOnlyList<ClickHouseTableInfo>> GetTablesAsync(ClickHouseClusterEntity cluster, CancellationToken cancellationToken);
+    Task<IReadOnlyList<string>> GetClusterNamesAsync(ClickHouseClusterEntity cluster, CancellationToken cancellationToken);
     Task<ClickHouseTableInfo?> GetTableAsync(ClickHouseClusterEntity cluster, string database, string table, CancellationToken cancellationToken);
     Task<ClickHouseTableInfo?> GetTableAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string database, string table, CancellationToken cancellationToken);
     Task ExecuteAsync(ClickHouseClusterEntity cluster, string sql, CancellationToken cancellationToken);
@@ -36,7 +37,7 @@ public interface IClickHouseAdapter
     Task<ClickHouseOperationStatus> GetOperationStatusAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string operationId, CancellationToken cancellationToken);
 }
 
-public sealed class ClickHouseAdapter(ICredentialProtector protector, Serilog.ILogger logger) : IClickHouseAdapter
+public sealed class ClickHouseAdapter(ICredentialProtector protector, IEndpointRewriteService endpointRewrites, Serilog.ILogger logger) : IClickHouseAdapter
 {
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(20);
     private readonly Serilog.ILogger _logger = logger.ForContext<ClickHouseAdapter>();
@@ -65,6 +66,22 @@ public sealed class ClickHouseAdapter(ICredentialProtector protector, Serilog.IL
 
         _logger.Information("Read {TableCount} ClickHouse tables for cluster {ClusterId}.", result.Count, cluster.Id);
         return result;
+    }
+
+    public async Task<IReadOnlyList<string>> GetClusterNamesAsync(ClickHouseClusterEntity cluster, CancellationToken cancellationToken)
+    {
+        if (cluster.Mode == Chobo.Contracts.ClusterMode.SingleInstance)
+        {
+            return [];
+        }
+
+        var rows = await QueryAsync(cluster, """
+            SELECT DISTINCT cluster
+            FROM system.clusters
+            ORDER BY cluster
+            """, cancellationToken);
+
+        return rows.Select(row => row[0]).Where(x => !string.IsNullOrWhiteSpace(x)).ToList();
     }
 
     public async Task<ClickHouseTableInfo?> GetTableAsync(ClickHouseClusterEntity cluster, string database, string table, CancellationToken cancellationToken)
@@ -141,14 +158,21 @@ public sealed class ClickHouseAdapter(ICredentialProtector protector, Serilog.IL
 
         var useTls = FirstAccessNode(cluster).UseTls;
         return rows
-            .Select(row => new ClickHouseShardReplicaInfo(
-                int.Parse(row[0], System.Globalization.CultureInfo.InvariantCulture),
-                $"shard{int.Parse(row[0], System.Globalization.CultureInfo.InvariantCulture)}",
-                int.Parse(row[1], System.Globalization.CultureInfo.InvariantCulture),
-                row[2],
-                int.Parse(row[3], System.Globalization.CultureInfo.InvariantCulture),
-                useTls,
-                row.Count > 4 && int.TryParse(row[4], out var errors) ? errors : 0))
+            .Select(row =>
+            {
+                var shardNumber = int.Parse(row[0], System.Globalization.CultureInfo.InvariantCulture);
+                var replicaNumber = int.Parse(row[1], System.Globalization.CultureInfo.InvariantCulture);
+                var reportedEndpoint = new ClickHouseNodeEndpoint(row[2], int.Parse(row[3], System.Globalization.CultureInfo.InvariantCulture), useTls);
+                var serverEndpoint = endpointRewrites.RewriteClickHouseEndpointForServer(reportedEndpoint);
+                return new ClickHouseShardReplicaInfo(
+                    shardNumber,
+                    $"shard{shardNumber}",
+                    replicaNumber,
+                    serverEndpoint.Host,
+                    serverEndpoint.Port,
+                    serverEndpoint.UseTls,
+                    row.Count > 4 && int.TryParse(row[4], out var errors) ? errors : 0);
+            })
             .ToList();
     }
 
@@ -261,7 +285,8 @@ public sealed class ClickHouseAdapter(ICredentialProtector protector, Serilog.IL
 
     private async Task<List<List<string>>> QueryAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string sql, CancellationToken cancellationToken)
     {
-        var settings = await CreateSettingsAsync(endpoint, cluster, cancellationToken);
+        var effectiveEndpoint = endpointRewrites.RewriteClickHouseEndpointForServer(endpoint);
+        var settings = await CreateSettingsAsync(effectiveEndpoint, cluster, cancellationToken);
         await using var connection = new ClickHouseConnection(settings);
         await connection.OpenAsync(cancellationToken);
         await using var command = connection.CreateCommand(sql);
@@ -287,7 +312,7 @@ public sealed class ClickHouseAdapter(ICredentialProtector protector, Serilog.IL
         }
         catch (Exception ex)
         {
-            _logger.Error(ex, "ClickHouse query failed on {Host}:{Port}: {Message}. SQL: {SqlPreview}", endpoint.Host, settings.Port, ex.Message, Preview(sql));
+            _logger.Error(ex, "ClickHouse query failed on {Host}:{Port}: {Message}. SQL: {SqlPreview}", effectiveEndpoint.Host, settings.Port, ex.Message, Preview(sql));
             throw new InvalidOperationException(ex.Message, ex);
         }
     }
@@ -323,9 +348,9 @@ public sealed class ClickHouseAdapter(ICredentialProtector protector, Serilog.IL
         return compact.Length <= 400 ? compact : compact[..400] + "...";
     }
 
-    private static string S3Endpoint(BackupTargetEntity target, string path)
+    private string S3Endpoint(BackupTargetEntity target, string path)
     {
-        return S3TargetUrlBuilder.BuildObjectUrl(target, path).ToString();
+        return endpointRewrites.RewriteS3EndpointForClickHouse(S3TargetUrlBuilder.BuildObjectUrl(target, path)).ToString();
     }
 
     private static string Hash(string value) =>

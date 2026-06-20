@@ -49,6 +49,7 @@ public sealed class Baseline : Migration
                 Action TEXT NOT NULL,
                 EntityType TEXT NOT NULL,
                 EntityId TEXT NULL,
+                OperationId TEXT NULL,
                 Details TEXT NOT NULL
             );
 
@@ -58,6 +59,7 @@ public sealed class Baseline : Migration
                 Level VARCHAR(10),
                 Exception TEXT,
                 RenderedMessage TEXT,
+                OperationId TEXT NULL,
                 Properties TEXT
             );
 
@@ -272,6 +274,9 @@ public sealed class Baseline : Migration
                 SourceTable TEXT NOT NULL,
                 TargetDatabase TEXT NOT NULL,
                 TargetTable TEXT NOT NULL,
+                Append INTEGER NOT NULL,
+                AllowSchemaMismatch INTEGER NOT NULL,
+                SchemaOnly INTEGER NOT NULL,
                 Status INTEGER NOT NULL,
                 ClickHouseOperationId TEXT NULL,
                 ClickHouseStatus TEXT NULL,
@@ -318,8 +323,10 @@ public sealed class Baseline : Migration
             CREATE INDEX IF NOT EXISTS IX_AuditEntries_Timestamp ON AuditEntries (Timestamp);
             CREATE INDEX IF NOT EXISTS IX_AuditEntries_ActorUserId_Timestamp ON AuditEntries (ActorUserId, Timestamp);
             CREATE INDEX IF NOT EXISTS IX_AuditEntries_EntityType_Timestamp ON AuditEntries (EntityType, Timestamp);
+            CREATE INDEX IF NOT EXISTS IX_AuditEntries_OperationId_Timestamp ON AuditEntries (OperationId, Timestamp);
             CREATE INDEX IF NOT EXISTS IX_ApplicationLogEntries_Timestamp ON ApplicationLogEntries (Timestamp);
             CREATE INDEX IF NOT EXISTS IX_ApplicationLogEntries_Level_Timestamp ON ApplicationLogEntries (Level, Timestamp);
+            CREATE INDEX IF NOT EXISTS IX_ApplicationLogEntries_OperationId_Timestamp ON ApplicationLogEntries (OperationId, Timestamp);
             CREATE INDEX IF NOT EXISTS IX_ClickHouseClusters_IsDeleted_Name ON ClickHouseClusters (IsDeleted, Name);
             CREATE INDEX IF NOT EXISTS IX_ClickHouseAccessNodes_ClusterId ON ClickHouseAccessNodes (ClusterId);
             CREATE INDEX IF NOT EXISTS IX_BackupTargets_IsDeleted_Name ON BackupTargets (IsDeleted, Name);
@@ -381,3 +388,4 @@ public sealed class Baseline : Migration
             """);
     }
 }
+

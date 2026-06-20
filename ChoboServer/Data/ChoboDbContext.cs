@@ -39,8 +39,10 @@ public sealed class ChoboDbContext(DbContextOptions<ChoboDbContext> options) : D
         modelBuilder.Entity<AuditEntryEntity>().HasIndex(x => x.Timestamp);
         modelBuilder.Entity<AuditEntryEntity>().HasIndex(x => new { x.ActorUserId, x.Timestamp });
         modelBuilder.Entity<AuditEntryEntity>().HasIndex(x => new { x.EntityType, x.Timestamp });
+        modelBuilder.Entity<AuditEntryEntity>().HasIndex(x => new { x.OperationId, x.Timestamp });
         modelBuilder.Entity<ApplicationLogEntryEntity>().HasIndex(x => x.Timestamp);
         modelBuilder.Entity<ApplicationLogEntryEntity>().HasIndex(x => new { x.Level, x.Timestamp });
+        modelBuilder.Entity<ApplicationLogEntryEntity>().HasIndex(x => new { x.OperationId, x.Timestamp });
         modelBuilder.Entity<ClickHouseClusterEntity>().HasIndex(x => new { x.IsDeleted, x.Name });
         modelBuilder.Entity<ClickHouseAccessNodeEntity>().HasIndex(x => x.ClusterId);
         modelBuilder.Entity<BackupTargetEntity>().HasIndex(x => new { x.IsDeleted, x.Name });
@@ -128,3 +130,4 @@ public sealed class ChoboDbContext(DbContextOptions<ChoboDbContext> options) : D
         }
     }
 }
+

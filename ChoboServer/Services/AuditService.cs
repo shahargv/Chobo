@@ -11,6 +11,7 @@ public sealed class AuditService(ChoboDbContext db, IActorContext actor) : IAudi
 {
     public async Task RecordAsync(string action, AuditEntityType entityType, string? entityId, object? details = null)
     {
+        var operationId = OperationCorrelationContext.CurrentOperationId ?? AuditDetails.TryGetOperationId(details);
         db.AuditEntries.Add(new AuditEntryEntity
         {
             ActorUserId = actor.UserId,
@@ -18,7 +19,8 @@ public sealed class AuditService(ChoboDbContext db, IActorContext actor) : IAudi
             Action = action,
             EntityType = AuditEntityTypes.ToStorageValue(entityType),
             EntityId = entityId,
-            Details = AuditDetails.Serialize(details)
+            OperationId = operationId,
+            Details = AuditDetails.SerializeWithOperationId(details, operationId)
         });
         await db.SaveChangesAsync();
     }
@@ -74,3 +76,4 @@ public static class AuditEntityTypes
             _ => throw new ArgumentOutOfRangeException(nameof(entityType), entityType, "Unsupported audit entity type.")
         };
 }
+

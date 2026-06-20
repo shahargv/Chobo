@@ -96,6 +96,31 @@ public sealed class ScheduleApplicationService(
         return true;
     }
 
+    public ValidateScheduleCronResponse ValidateCron(ValidateScheduleCronRequest request)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(request.CronExpression))
+            {
+                return new(false, "CronExpression is required.", []);
+            }
+
+            if (!TimeZoneInfo.TryFindSystemTimeZoneById(request.TimeZoneId, out var timeZone))
+            {
+                return new(false, "TimeZoneId is invalid.", []);
+            }
+
+            QuartzCronProjection.ValidateExpression(request.CronExpression);
+            var now = DateTimeOffset.UtcNow;
+            var nextRuns = QuartzCronProjection.GetOccurrences(request.CronExpression, timeZone, now, now.AddDays(30), maxOccurrences: 5);
+            return new(true, null, nextRuns);
+        }
+        catch (FormatException ex)
+        {
+            return new(false, ex.Message, []);
+        }
+    }
+
     private async Task Validate(UpsertScheduleRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.Name))
@@ -109,6 +134,14 @@ public sealed class ScheduleApplicationService(
         if (request.CronExpression.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length < 6)
         {
             throw new ArgumentException("Quartz cron expressions must include at least 6 fields.");
+        }
+        try
+        {
+            QuartzCronProjection.ValidateExpression(request.CronExpression);
+        }
+        catch (FormatException ex)
+        {
+            throw new ArgumentException($"CronExpression is invalid: {ex.Message}");
         }
         if (request.MissedRunGracePeriod is not null && request.MissedRunGracePeriod <= TimeSpan.Zero)
         {

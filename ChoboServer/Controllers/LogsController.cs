@@ -9,8 +9,8 @@ namespace ChoboServer.Controllers;
 public sealed class LogsController(IApplicationLogStore logs, IAuditService audit) : ControllerBase
 {
     [HttpGet(ChoboApi.ApiPrefix + "/logs")]
-    public Task<IReadOnlyList<ApplicationLogEntryDto>> List([FromQuery] DateTimeOffset? startTime, [FromQuery] DateTimeOffset? endTime, [FromQuery] int? last) =>
-        logs.QueryAsync(startTime, endTime, last);
+    public Task<PagedResultDto<ApplicationLogEntryDto>> List([FromQuery] DateTimeOffset? startTime, [FromQuery] DateTimeOffset? endTime, [FromQuery] int? last, [FromQuery] int? offset, [FromQuery] int? limit, [FromQuery] string? operationId) =>
+        logs.QueryAsync(startTime, endTime, last, offset, limit, operationId);
 
     [HttpPost(ChoboApi.ApiPrefix + "/logs/clear")]
     public async Task<IActionResult> Clear(ClearApplicationLogsRequest request)
@@ -20,3 +20,4 @@ public sealed class LogsController(IApplicationLogStore logs, IAuditService audi
         return Ok(new { deleted });
     }
 }
+

@@ -1,4 +1,4 @@
-﻿{
+{
   "$schema": "https://json.schemastore.org/launchsettings.json",
   "profiles": {
     "http": {
@@ -13,14 +13,16 @@
     "debug-local": {
       "commandName": "Project",
       "dotnetRunMessages": true,
-      "launchBrowser": false,
+      "launchBrowser": true,
+      "launchUrl": "",
       "applicationUrl": "http://localhost:5202",
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development",
-        "CHOBO_DATA_DIRECTORY": "data-dev",
+        "CHOBO_DATA_DIRECTORY": "C:/tmp/Chobo/data-dev-gui",
         "CHOBO_ENCRYPTION_KEY_BASE64": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
         "CHOBO_INIT_ADMIN_USER": "admin",
-        "CHOBO_INIT_ACCESS_TOKEN": "dev-static-access-token"
+        "CHOBO_INIT_ACCESS_TOKEN": "dev-static-access-token",
+        "CHOBO_WEB_IS_GUI_ENABLED": "true"
       }
     },
     "https": {

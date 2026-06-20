@@ -16,11 +16,19 @@ COPY . .
 WORKDIR "/src/ChoboServer"
 RUN dotnet build "./ChoboServer.csproj" -c $BUILD_CONFIGURATION -o /app/build /p:Version=$BUILD_VERSION /p:InformationalVersion=$INFORMATIONAL_VERSION
 
+FROM node:24-alpine AS web
+WORKDIR /src/ChoboWeb
+COPY ["ChoboWeb/package.json", "./"]
+RUN npm install
+COPY ["ChoboWeb/", "./"]
+RUN npm run build
+
 FROM build AS publish
 ARG BUILD_CONFIGURATION=Release
 ARG BUILD_VERSION=0.0.0-dev
 ARG INFORMATIONAL_VERSION=0.0.0-dev
 RUN dotnet publish "./ChoboServer.csproj" -c $BUILD_CONFIGURATION -o /app/publish /p:UseAppHost=false /p:Version=$BUILD_VERSION /p:InformationalVersion=$INFORMATIONAL_VERSION
+COPY --from=web /src/ChoboWeb/dist/ /app/publish/wwwroot/
 
 FROM base AS final
 WORKDIR /app

@@ -4,7 +4,10 @@ using ChoboServer.BackgroundServices;
 using ChoboServer.Options;
 using ChoboServer.Repositories;
 using ChoboServer.Services;
+using ChoboServer.Controllers.Validators;
+using FluentValidation;
 using Microsoft.Data.Sqlite;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Microsoft.OpenApi;
@@ -26,9 +29,23 @@ public static class ServiceCollectionExtensions
         services.AddOptions<ChoboBackupRestoreOptions>().Bind(configuration.GetSection("Chobo:BackupRestore"));
         services.AddOptions<RetentionManagementOptions>().Bind(configuration.GetSection("Chobo:RetentionManagement"));
         services.AddOptions<BackupsGarbageCollectorOptions>().Bind(configuration.GetSection("Chobo:BackupsGarbageCollector"));
+        services.AddOptions<ChoboWebOptions>().Bind(configuration.GetSection("Chobo:Web"));
+        services.AddOptions<ChoboEndpointRewriteOptions>().Bind(configuration.GetSection("Chobo:EndpointRewrites"));
         services.AddOptions<ChoboTestHooksOptions>().Bind(configuration.GetSection("Chobo:TestHooks"));
 
-        services.AddControllers().AddJsonOptions(options =>
+        services.AddValidatorsFromAssemblyContaining<UpsertClusterRequestValidator>();
+        services.Configure<ApiBehaviorOptions>(options =>
+        {
+            options.InvalidModelStateResponseFactory = context =>
+            {
+                var message = string.Join("; ", context.ModelState
+                    .SelectMany(x => x.Value?.Errors.Select(error => error.ErrorMessage) ?? [])
+                    .Where(x => !string.IsNullOrWhiteSpace(x)));
+
+                return new BadRequestObjectResult(new Chobo.Contracts.ErrorResponse(string.IsNullOrWhiteSpace(message) ? "Request validation failed." : message));
+            };
+        });
+        services.AddControllers(options => options.Filters.Add<FluentValidationActionFilter>()).AddJsonOptions(options =>
         {
             options.JsonSerializerOptions.PropertyNameCaseInsensitive = true;
             options.JsonSerializerOptions.Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
@@ -65,6 +82,7 @@ public static class ServiceCollectionExtensions
             var dataDirectory = ChoboPaths.GetDataDirectory(storage.DataDirectory);
             Directory.CreateDirectory(dataDirectory);
             return new LoggerConfiguration()
+                .Enrich.FromLogContext()
                 .ReadFrom.Configuration(configuration)
                 .WriteTo.Sink(new ApplicationLogSqliteSink(dataDirectory))
                 .CreateLogger();
@@ -91,6 +109,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IAesKeyRepository, FileAesKeyRepository>();
         services.AddScoped<ICredentialProtector, CredentialProtector>();
         services.AddScoped<IExportImportService, ExportImportService>();
+        services.AddSingleton<IEndpointRewriteService, EndpointRewriteService>();
         services.AddScoped<ClickHouseAdapter>();
         services.AddScoped<IClickHouseAdapter>(serviceProvider => serviceProvider.GetRequiredService<ClickHouseAdapter>());
         services.AddScoped<S3BackupStorageOperations>();
