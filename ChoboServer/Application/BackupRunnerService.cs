@@ -7,6 +7,7 @@ using ChoboServer.Options;
 using ChoboServer.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Serilog.Context;
 
 namespace ChoboServer.Application;
 
@@ -47,6 +48,9 @@ public sealed class BackupRunnerService(
         {
             return;
         }
+
+        using var operationCorrelationScope = OperationCorrelationContext.Push(backup.Id.ToString());
+        using var operationLogScope = LogContext.PushProperty("OperationId", backup.Id.ToString());
 
         try
         {
@@ -196,7 +200,7 @@ public sealed class BackupRunnerService(
                     await PollBackupAsync(clickHouse, backup.SourceCluster!, table, status, options.Value.PollInterval, cancellationToken);
                     await db.SaveChangesAsync(cancellationToken);
                     _logger.Information("Backup table {BackupTableId} {Database}.{Table} completed with ClickHouse status {Status}.", table.Id, table.Database, table.Table, table.ClickHouseStatus);
-                    await audit.RecordAsync("table-succeeded", AuditEntityType.BackupTable, table.Id.ToString(), new { table.Database, table.Table, table.ClickHouseStatus });
+                    await audit.RecordAsync("table-succeeded", AuditEntityType.BackupTable, table.Id.ToString(), new { table.Database, table.Table, clickHouseOperationId = table.ClickHouseOperationId, table.ClickHouseStatus });
                     return;
                 }
 
@@ -209,11 +213,11 @@ public sealed class BackupRunnerService(
             table.ClickHouseStatus = operation.Status;
             await db.SaveChangesAsync(cancellationToken);
             _logger.Information("Backup table {BackupTableId} submitted ClickHouse operation {OperationId} status {Status}.", table.Id, operation.OperationId, operation.Status);
-            await audit.RecordAsync("clickhouse-operation-submitted", AuditEntityType.BackupTable, table.Id.ToString(), new { operation.OperationId, operation.Status });
+            await audit.RecordAsync("clickhouse-operation-submitted", AuditEntityType.BackupTable, table.Id.ToString(), new { clickHouseOperationId = operation.OperationId, operation.Status });
             await PollBackupAsync(clickHouse, backup.SourceCluster!, table, new ClickHouseOperationStatus(true, operation.Status, null), options.Value.PollInterval, cancellationToken);
             await db.SaveChangesAsync(cancellationToken);
             _logger.Information("Backup table {BackupTableId} {Database}.{Table} completed with ClickHouse status {Status}.", table.Id, table.Database, table.Table, table.ClickHouseStatus);
-            await audit.RecordAsync("table-succeeded", AuditEntityType.BackupTable, table.Id.ToString(), new { table.Database, table.Table, table.ClickHouseStatus });
+            await audit.RecordAsync("table-succeeded", AuditEntityType.BackupTable, table.Id.ToString(), new { table.Database, table.Table, clickHouseOperationId = table.ClickHouseOperationId, table.ClickHouseStatus });
         }
         catch (Exception ex)
         {
@@ -222,7 +226,7 @@ public sealed class BackupRunnerService(
             table.Error = ex.Message;
             table.CompletedAt = DateTimeOffset.UtcNow;
             await db.SaveChangesAsync(CancellationToken.None);
-            await audit.RecordAsync("table-failed", AuditEntityType.BackupTable, table.Id.ToString(), new { error = ex.Message });
+            await audit.RecordAsync("table-failed", AuditEntityType.BackupTable, table.Id.ToString(), new { error = ex.Message, clickHouseOperationId = table.ClickHouseOperationId });
         }
     }
 
@@ -400,7 +404,7 @@ public sealed class BackupRunnerService(
                     {
                         await PollBackupShardAsync(scopedClickHouse, endpoint, backup.SourceCluster!, shard, status, scopedOptions.Value.PollInterval, cancellationToken);
                         await scopedDb.SaveChangesAsync(cancellationToken);
-                        await scopedAudit.RecordAsync("shard-succeeded", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { table.Database, table.Table, sourceShard = shard.SourceShardNumber, shard.ClickHouseStatus });
+                        await scopedAudit.RecordAsync("shard-succeeded", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { table.Database, table.Table, sourceShard = shard.SourceShardNumber, clickHouseOperationId = shard.ClickHouseOperationId, shard.ClickHouseStatus });
                         await TryWriteIntermediateManifestAsync(scopedManifests, backup.Id, cancellationToken);
                         continue;
                     }
@@ -415,11 +419,11 @@ public sealed class BackupRunnerService(
                 table.ClickHouseOperationId ??= operation.OperationId;
                 table.ClickHouseStatus = operation.Status;
                 await scopedDb.SaveChangesAsync(cancellationToken);
-                await scopedAudit.RecordAsync("clickhouse-operation-submitted", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { operation.OperationId, operation.Status, sourceShard = shard.SourceShardNumber });
+                await scopedAudit.RecordAsync("clickhouse-operation-submitted", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { clickHouseOperationId = operation.OperationId, operation.Status, sourceShard = shard.SourceShardNumber });
                 await scopedTestHooks.MaybeDelayBackupBeforePollAsync(cancellationToken);
                 await PollBackupShardAsync(scopedClickHouse, endpoint, backup.SourceCluster!, shard, new ClickHouseOperationStatus(true, operation.Status, null), scopedOptions.Value.PollInterval, cancellationToken);
                 await scopedDb.SaveChangesAsync(cancellationToken);
-                await scopedAudit.RecordAsync("shard-succeeded", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { table.Database, table.Table, sourceShard = shard.SourceShardNumber, shard.ClickHouseStatus });
+                await scopedAudit.RecordAsync("shard-succeeded", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { table.Database, table.Table, sourceShard = shard.SourceShardNumber, clickHouseOperationId = shard.ClickHouseOperationId, shard.ClickHouseStatus });
                 await TryWriteIntermediateManifestAsync(scopedManifests, backup.Id, cancellationToken);
             }
             catch (Exception ex)
@@ -429,7 +433,7 @@ public sealed class BackupRunnerService(
                 shard.Error = ex.Message;
                 shard.CompletedAt = DateTimeOffset.UtcNow;
                 await scopedDb.SaveChangesAsync(CancellationToken.None);
-                await scopedAudit.RecordAsync("shard-failed", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { error = ex.Message, sourceShard = shard.SourceShardNumber });
+                await scopedAudit.RecordAsync("shard-failed", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { error = ex.Message, sourceShard = shard.SourceShardNumber, clickHouseOperationId = shard.ClickHouseOperationId });
                 await TryWriteIntermediateManifestAsync(scopedManifests, backup.Id, CancellationToken.None);
             }
         }
@@ -442,7 +446,7 @@ public sealed class BackupRunnerService(
         table.CompletedAt = DateTimeOffset.UtcNow;
         await scopedDb.SaveChangesAsync(cancellationToken);
         var tableAction = table.Status == BackupTableStatus.Succeeded ? "table-succeeded" : table.Status == BackupTableStatus.PartiallySucceeded ? "table-partially-succeeded" : "table-failed";
-        await scopedAudit.RecordAsync(tableAction, AuditEntityType.BackupTable, table.Id.ToString(), new { table.Database, table.Table, shardCount = table.Shards.Count, failureReason = table.Error });
+        await scopedAudit.RecordAsync(tableAction, AuditEntityType.BackupTable, table.Id.ToString(), new { table.Database, table.Table, shardCount = table.Shards.Count, clickHouseOperationId = table.ClickHouseOperationId, failureReason = table.Error });
         await TryWriteIntermediateManifestAsync(scopedManifests, backup.Id, cancellationToken);
     }
 

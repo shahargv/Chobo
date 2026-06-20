@@ -30,6 +30,7 @@ export type FailedBackupRetentionMode = "KeepAndExcludeFromMinBackupsToKeep" | "
 
 export interface ErrorResponse { error: string; }
 export interface ServerVersionDto { productName: string; serverVersion: string; apiVersion: number; schemaVersion: number; databaseSchemaVersion: number; }
+export interface PagedResultDto<T> { items: T[]; offset: number; limit: number; totalCount: number; }
 export interface ApplicationLogEntryDto { id: number; timestamp: string; level: string; category: string; message: string; exception?: string | null; }
 export interface ClearApplicationLogsRequest { before: string; }
 export interface AuditEntryDto { id: number; timestamp: string; actorUserId?: string | null; actorName: string; action: string; entityType: string; entityId?: string | null; details: JsonValue; }
@@ -100,6 +101,7 @@ export const openApiSchemaNames = [
   "AccessTokenExport",
   "ApplicationLogEntryDto",
   "AuditEntryDto",
+  "PagedResultDto",
   "BackupDto",
   "BackupMetadataRecoveryItem",
   "BackupMetadataRecoveryResult",
@@ -172,3 +174,4 @@ export const openApiSchemaNames = [
   "ValidateScheduleCronRequest",
   "ValidateScheduleCronResponse"
 ] as const;
+

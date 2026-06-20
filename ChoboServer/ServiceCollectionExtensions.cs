@@ -30,6 +30,7 @@ public static class ServiceCollectionExtensions
         services.AddOptions<RetentionManagementOptions>().Bind(configuration.GetSection("Chobo:RetentionManagement"));
         services.AddOptions<BackupsGarbageCollectorOptions>().Bind(configuration.GetSection("Chobo:BackupsGarbageCollector"));
         services.AddOptions<ChoboWebOptions>().Bind(configuration.GetSection("Chobo:Web"));
+        services.AddOptions<ChoboEndpointRewriteOptions>().Bind(configuration.GetSection("Chobo:EndpointRewrites"));
         services.AddOptions<ChoboTestHooksOptions>().Bind(configuration.GetSection("Chobo:TestHooks"));
 
         services.AddValidatorsFromAssemblyContaining<UpsertClusterRequestValidator>();
@@ -81,6 +82,7 @@ public static class ServiceCollectionExtensions
             var dataDirectory = ChoboPaths.GetDataDirectory(storage.DataDirectory);
             Directory.CreateDirectory(dataDirectory);
             return new LoggerConfiguration()
+                .Enrich.FromLogContext()
                 .ReadFrom.Configuration(configuration)
                 .WriteTo.Sink(new ApplicationLogSqliteSink(dataDirectory))
                 .CreateLogger();
@@ -107,6 +109,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IAesKeyRepository, FileAesKeyRepository>();
         services.AddScoped<ICredentialProtector, CredentialProtector>();
         services.AddScoped<IExportImportService, ExportImportService>();
+        services.AddSingleton<IEndpointRewriteService, EndpointRewriteService>();
         services.AddScoped<ClickHouseAdapter>();
         services.AddScoped<IClickHouseAdapter>(serviceProvider => serviceProvider.GetRequiredService<ClickHouseAdapter>());
         services.AddScoped<S3BackupStorageOperations>();

@@ -34,6 +34,7 @@ if (webOptions.IsGuiEnabled && webOptions.GuiPort is { } guiPort)
 builder.Services.AddChoboServer(builder.Configuration);
 
 Log.Logger = new LoggerConfiguration()
+    .Enrich.FromLogContext()
     .ReadFrom.Configuration(builder.Configuration)
     .WriteTo.Sink(new ApplicationLogSqliteSink(choboDataDirectory))
     .CreateLogger();

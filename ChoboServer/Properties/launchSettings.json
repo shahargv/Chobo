@@ -1,4 +1,4 @@
-﻿{
+{
   "$schema": "https://json.schemastore.org/launchsettings.json",
   "profiles": {
     "http": {
@@ -18,7 +18,7 @@
       "applicationUrl": "http://localhost:5202",
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development",
-        "CHOBO_DATA_DIRECTORY": "data-dev-gui",
+        "CHOBO_DATA_DIRECTORY": "C:/tmp/Chobo/data-dev-gui",
         "CHOBO_ENCRYPTION_KEY_BASE64": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
         "CHOBO_INIT_ADMIN_USER": "admin",
         "CHOBO_INIT_ACCESS_TOKEN": "dev-static-access-token",

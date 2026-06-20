@@ -1,6 +1,7 @@
 import type {
   AccessTokenDto,
   ApplicationLogEntryDto,
+  PagedResultDto,
   AuditEntryDto,
   BackupDto,
   BackupMetadataRecoveryResult,
@@ -111,9 +112,9 @@ export class ChoboApiClient {
   restore(id: string) { return this.get<RestoreDto>(`restores/${id}`); }
   initiateRestore(request: InitiateRestoreRequest) { return this.post<RestoreDto>("restores/initiate", request); }
 
-  logs(params: { startTime?: string; endTime?: string; last?: number } = {}) { return this.get<ApplicationLogEntryDto[]>(`logs${query(params)}`); }
+  logs(params: { startTime?: string; endTime?: string; last?: number; offset?: number; limit?: number; operationId?: string } = {}) { return this.get<PagedResultDto<ApplicationLogEntryDto>>(`logs${query(params)}`); }
   clearLogs(before: string) { return this.post<{ deleted: number }>("logs/clear", { before }); }
-  audits(params: { startTime?: string; endTime?: string; last?: number } = {}) { return this.get<AuditEntryDto[]>(`audit${query(params)}`); }
+  audits(params: { startTime?: string; endTime?: string; last?: number; offset?: number; limit?: number; operationId?: string } = {}) { return this.get<PagedResultDto<AuditEntryDto>>(`audit${query(params)}`); }
   clearAudits(before: string) { return this.post<{ deleted: number }>("audit/clear", { before }); }
 
   exportData() { return this.get<ExportEnvelope>("data/export"); }
@@ -162,3 +163,4 @@ function query(values: Record<string, string | number | undefined | null>) {
   const text = params.toString();
   return text ? `?${text}` : "";
 }
+
