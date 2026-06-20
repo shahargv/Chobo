@@ -23,13 +23,14 @@ public sealed class ApplicationLogSqliteSink(string dataDirectory) : ILogEventSi
 
             using var command = connection.CreateCommand();
             command.CommandText = """
-                                  INSERT INTO ApplicationLogEntries (Timestamp, Level, Exception, RenderedMessage, Properties)
-                                  VALUES ($timestamp, $level, $exception, $message, $properties);
+                                  INSERT INTO ApplicationLogEntries (Timestamp, Level, Exception, RenderedMessage, OperationId, Properties)
+                                  VALUES ($timestamp, $level, $exception, $message, $operationId, $properties);
                                   """;
             command.Parameters.AddWithValue("$timestamp", logEvent.Timestamp.ToUniversalTime().ToUnixTimeMilliseconds());
             command.Parameters.AddWithValue("$level", logEvent.Level.ToString());
             command.Parameters.AddWithValue("$exception", (object?)logEvent.Exception?.ToString() ?? DBNull.Value);
             command.Parameters.AddWithValue("$message", logEvent.RenderMessage());
+            command.Parameters.AddWithValue("$operationId", (object?)GetOperationId(logEvent) ?? DBNull.Value);
             command.Parameters.AddWithValue("$properties", SerializeProperties(logEvent));
             command.ExecuteNonQuery();
         }
@@ -37,6 +38,16 @@ public sealed class ApplicationLogSqliteSink(string dataDirectory) : ILogEventSi
         {
             // Logging must never break the application path.
         }
+    }
+
+    private static string? GetOperationId(LogEvent logEvent)
+    {
+        if (!logEvent.Properties.TryGetValue("OperationId", out var value))
+        {
+            return null;
+        }
+
+        return ToJsonValue(value)?.ToString();
     }
 
     private static string SerializeProperties(LogEvent logEvent)
@@ -65,3 +76,6 @@ public sealed class ApplicationLogSqliteSink(string dataDirectory) : ILogEventSi
             _ => value.ToString()
         };
 }
+
+
+

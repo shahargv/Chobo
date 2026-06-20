@@ -9,8 +9,8 @@ namespace ChoboServer.Controllers;
 public sealed class AuditController(IAuditStore audits, IAuditService audit) : ControllerBase
 {
     [HttpGet(ChoboApi.ApiPrefix + "/audit")]
-    public Task<IReadOnlyList<AuditEntryDto>> List([FromQuery] DateTimeOffset? startTime, [FromQuery] DateTimeOffset? endTime, [FromQuery] int? last) =>
-        audits.QueryAsync(startTime, endTime, last);
+    public Task<PagedResultDto<AuditEntryDto>> List([FromQuery] DateTimeOffset? startTime, [FromQuery] DateTimeOffset? endTime, [FromQuery] int? last, [FromQuery] int? offset, [FromQuery] int? limit, [FromQuery] string? operationId) =>
+        audits.QueryAsync(startTime, endTime, last, offset, limit, operationId);
 
     [HttpPost(ChoboApi.ApiPrefix + "/audit/clear")]
     public async Task<IActionResult> Clear(ClearAuditEntriesRequest request)
@@ -20,3 +20,4 @@ public sealed class AuditController(IAuditStore audits, IAuditService audit) : C
         return Ok(new { deleted });
     }
 }
+

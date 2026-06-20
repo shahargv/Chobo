@@ -8,31 +8,37 @@ namespace ChoboServer.Repositories;
 
 public interface IAuditStore
 {
-    Task<IReadOnlyList<AuditEntryDto>> QueryAsync(DateTimeOffset? startTime, DateTimeOffset? endTime, int? last);
+    Task<PagedResultDto<AuditEntryDto>> QueryAsync(DateTimeOffset? startTime, DateTimeOffset? endTime, int? last, int? offset = null, int? limit = null, string? operationId = null);
     Task<int> DeleteBeforeAsync(DateTimeOffset before, CancellationToken cancellationToken = default);
 }
 
 public sealed class AuditStore(ChoboDbContext db) : IAuditStore
 {
-    public async Task<IReadOnlyList<AuditEntryDto>> QueryAsync(DateTimeOffset? startTime, DateTimeOffset? endTime, int? last)
+    public async Task<PagedResultDto<AuditEntryDto>> QueryAsync(DateTimeOffset? startTime, DateTimeOffset? endTime, int? last, int? offset = null, int? limit = null, string? operationId = null)
     {
-        const string sql = """
-                           SELECT Id, Timestamp, ActorUserId, ActorName, Action, EntityType, EntityId, Details
-                           FROM AuditEntries
-                           WHERE ($startTime IS NULL OR Timestamp >= $startTime)
-                             AND ($endTime IS NULL OR Timestamp <= $endTime)
-                           ORDER BY Timestamp DESC
-                           LIMIT $limit;
-                           """;
-
+        const string whereSql = """
+                                WHERE ($startTime IS NULL OR Timestamp >= $startTime)
+                                  AND ($endTime IS NULL OR Timestamp <= $endTime)
+                                  AND ($operationId IS NULL OR OperationId = $operationId)
+                                """;
+        var pageOffset = Math.Max(offset ?? 0, 0);
+        var pageLimit = Math.Clamp(limit ?? last ?? 200, 1, 10_000);
         var results = new List<AuditEntryDto>();
         var connection = (SqliteConnection)db.Database.GetDbConnection();
         await using var _ = await OpenIfNeededAsync(connection);
+        var totalCount = await CountAsync(connection, whereSql, startTime, endTime, operationId);
+
         await using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        command.Parameters.AddWithValue("$startTime", ToSqlValue(startTime));
-        command.Parameters.AddWithValue("$endTime", ToSqlValue(endTime));
-        command.Parameters.AddWithValue("$limit", Math.Clamp(last ?? 500, 1, 10_000));
+        command.CommandText = $"""
+                              SELECT Id, Timestamp, ActorUserId, ActorName, Action, EntityType, EntityId, Details
+                              FROM AuditEntries
+                              {whereSql}
+                              ORDER BY Timestamp DESC, Id DESC
+                              LIMIT $limit OFFSET $offset;
+                              """;
+        AddFilterParameters(command, startTime, endTime, operationId);
+        command.Parameters.AddWithValue("$limit", pageLimit);
+        command.Parameters.AddWithValue("$offset", pageOffset);
 
         await using var reader = await command.ExecuteReaderAsync();
         while (await reader.ReadAsync())
@@ -48,7 +54,7 @@ public sealed class AuditStore(ChoboDbContext db) : IAuditStore
                 AuditDetails.ToJsonElement(reader.GetString(7))));
         }
 
-        return results;
+        return new PagedResultDto<AuditEntryDto>(results, pageOffset, pageLimit, totalCount);
     }
 
     public async Task<int> DeleteBeforeAsync(DateTimeOffset before, CancellationToken cancellationToken = default)
@@ -59,6 +65,21 @@ public sealed class AuditStore(ChoboDbContext db) : IAuditStore
         command.CommandText = "DELETE FROM AuditEntries WHERE Timestamp < $before;";
         command.Parameters.AddWithValue("$before", ToSqlValue(before));
         return await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task<int> CountAsync(SqliteConnection connection, string whereSql, DateTimeOffset? startTime, DateTimeOffset? endTime, string? operationId)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT COUNT(*) FROM AuditEntries {whereSql};";
+        AddFilterParameters(command, startTime, endTime, operationId);
+        return Convert.ToInt32(await command.ExecuteScalarAsync());
+    }
+
+    private static void AddFilterParameters(SqliteCommand command, DateTimeOffset? startTime, DateTimeOffset? endTime, string? operationId)
+    {
+        command.Parameters.AddWithValue("$startTime", ToSqlValue(startTime));
+        command.Parameters.AddWithValue("$endTime", ToSqlValue(endTime));
+        command.Parameters.AddWithValue("$operationId", string.IsNullOrWhiteSpace(operationId) ? DBNull.Value : operationId);
     }
 
     private static object ToSqlValue(DateTimeOffset? value) =>
@@ -89,3 +110,4 @@ public sealed class AuditStore(ChoboDbContext db) : IAuditStore
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }
+

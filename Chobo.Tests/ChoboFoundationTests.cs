@@ -52,6 +52,12 @@ public sealed class ChoboFoundationTests
             ["CHOBO_WEB_IS_GUI_ENABLED"] = "false",
             ["CHOBO_WEB_GUI_PORT"] = "18081",
             ["CHOBO_TEST_HOOKS_ENABLED"] = "true",
+            ["Chobo__EndpointRewrites__ClickHouse__0__Host"] = "clickhouse-cluster-s1-r1",
+            ["Chobo__EndpointRewrites__ClickHouse__0__Port"] = "9000",
+            ["Chobo__EndpointRewrites__ClickHouse__0__ServerHost"] = "localhost",
+            ["Chobo__EndpointRewrites__ClickHouse__0__ServerPort"] = "18111",
+            ["Chobo__EndpointRewrites__S3ForClickHouse__0__ServerEndpoint"] = "http://localhost:9000",
+            ["Chobo__EndpointRewrites__S3ForClickHouse__0__ClickHouseEndpoint"] = "http://minio:9000",
             ["AllowedHosts"] = "env-host",
             ["Serilog__MinimumLevel__Default"] = "Debug"
         });
@@ -67,6 +73,7 @@ public sealed class ChoboFoundationTests
         var selfBackup = configuration.GetSection("Chobo:SqliteSelfBackup").Get<ChoboSqliteSelfBackupOptions>()!;
         var backupRestore = configuration.GetSection("Chobo:BackupRestore").Get<ChoboBackupRestoreOptions>()!;
         var web = configuration.GetSection("Chobo:Web").Get<ChoboWebOptions>()!;
+        var endpointRewrites = configuration.GetSection("Chobo:EndpointRewrites").Get<ChoboEndpointRewriteOptions>()!;
         var testHooks = configuration.GetSection("Chobo:TestHooks").Get<ChoboTestHooksOptions>()!;
 
         Assert.Equal("env-data", storage.DataDirectory);
@@ -87,6 +94,9 @@ public sealed class ChoboFoundationTests
         Assert.Equal(TimeSpan.FromSeconds(3), backupRestore.PollInterval);
         Assert.False(web.IsGuiEnabled);
         Assert.Equal(18081, web.GuiPort);
+        Assert.Equal("clickhouse-cluster-s1-r1", endpointRewrites.ClickHouse[0].Host);
+        Assert.Equal(18111, endpointRewrites.ClickHouse[0].ServerPort);
+        Assert.Equal("http://minio:9000", endpointRewrites.S3ForClickHouse[0].ClickHouseEndpoint);
         Assert.True(testHooks.Enabled);
         Assert.Equal("env-host", configuration["AllowedHosts"]);
         Assert.Equal("Debug", configuration["Serilog:MinimumLevel:Default"]);
@@ -288,6 +298,55 @@ public sealed class ChoboFoundationTests
         Assert.Equal("https://backup-bucket.s3.example.com/prod/backups/db/table/file%20name.bin", virtualHost.AbsoluteUri);
     }
 
+
+    [Fact]
+    public void Endpoint_rewrites_map_each_clickhouse_node_for_local_server_access()
+    {
+        var rewrites = new EndpointRewriteService(Options.Create(new ChoboEndpointRewriteOptions
+        {
+            ClickHouse =
+            [
+                new ClickHouseEndpointRewriteOptions
+                {
+                    Host = "clickhouse-cluster-s1-r1",
+                    Port = 9000,
+                    UseTls = false,
+                    ServerHost = "localhost",
+                    ServerPort = 18111,
+                    ServerUseTls = false
+                }
+            ]
+        }));
+
+        var endpoint = rewrites.RewriteClickHouseEndpointForServer(new ClickHouseNodeEndpoint("clickhouse-cluster-s1-r1", 9000, false));
+        var unknown = rewrites.RewriteClickHouseEndpointForServer(new ClickHouseNodeEndpoint("clickhouse-other", 9000, false));
+
+        Assert.Equal(new ClickHouseNodeEndpoint("localhost", 18111, false), endpoint);
+        Assert.Equal(new ClickHouseNodeEndpoint("clickhouse-other", 9000, false), unknown);
+    }
+
+    [Fact]
+    public void Endpoint_rewrites_map_server_s3_endpoint_for_clickhouse_sql_only()
+    {
+        var rewrites = new EndpointRewriteService(Options.Create(new ChoboEndpointRewriteOptions
+        {
+            S3ForClickHouse =
+            [
+                new S3EndpointRewriteOptions
+                {
+                    ServerEndpoint = "http://localhost:9000",
+                    ClickHouseEndpoint = "http://minio:9000"
+                }
+            ]
+        }));
+
+        var rewritten = rewrites.RewriteS3EndpointForClickHouse(new Uri("http://localhost:9000/data-bucket/path/to/file.bin"));
+        var unchanged = rewrites.RewriteS3EndpointForClickHouse(new Uri("http://s3.example.com/data-bucket/path/to/file.bin"));
+
+        Assert.Equal("http://minio:9000/data-bucket/path/to/file.bin", rewritten.AbsoluteUri);
+        Assert.Equal("http://s3.example.com/data-bucket/path/to/file.bin", unchanged.AbsoluteUri);
+    }
+
     [Fact]
     public async Task Cluster_credentials_are_encrypted_and_hidden_from_api()
     {
@@ -441,8 +500,8 @@ public sealed class ChoboFoundationTests
         var user = await Post<CreateUserResponse>(client, "/api/v1/users", new CreateUserRequest("operator"));
         Assert.False(string.IsNullOrWhiteSpace(user.AccessToken));
 
-        var audits = await client.GetFromJsonAsync<List<AuditEntryDto>>("/api/v1/audit?last=20", JsonOptions);
-        Assert.Contains(audits!, x => x.Action == "create" && x.EntityType == "user");
+        var audits = await client.GetFromJsonAsync<PagedResultDto<AuditEntryDto>>("/api/v1/audit?last=20", JsonOptions);
+        Assert.Contains(audits!.Items, x => x.Action == "create" && x.EntityType == "user");
 
         var config = await client.GetFromJsonAsync<ExportEnvelope>("/api/v1/config/export", JsonOptions);
         Assert.NotNull(config);
@@ -513,8 +572,8 @@ public sealed class ChoboFoundationTests
         var user = await Post<CreateUserResponse>(client, "/api/v1/users", new CreateUserRequest("operator"));
         Assert.Equal(HttpStatusCode.NoContent, (await client.DeleteAsync($"/api/v1/users/{user.UserId}")).StatusCode);
 
-        var audits = await client.GetFromJsonAsync<List<AuditEntryDto>>("/api/v1/audit?last=20", JsonOptions) ?? throw new InvalidOperationException("Audit query returned no data.");
-        var updateAudit = audits.First(x => x.Action == "update" && x.EntityType == "backup-target" && x.EntityId == created.Id.ToString());
+        var audits = await client.GetFromJsonAsync<PagedResultDto<AuditEntryDto>>("/api/v1/audit?last=20", JsonOptions) ?? throw new InvalidOperationException("Audit query returned no data.");
+        var updateAudit = audits.Items.First(x => x.Action == "update" && x.EntityType == "backup-target" && x.EntityId == created.Id.ToString());
         Assert.Equal("minio", updateAudit.Details.GetProperty("previous").GetProperty("name").GetString());
         Assert.Equal("bucket-a", updateAudit.Details.GetProperty("previous").GetProperty("s3").GetProperty("bucket").GetString());
         Assert.Equal("minio-renamed", updateAudit.Details.GetProperty("current").GetProperty("name").GetString());
@@ -522,7 +581,7 @@ public sealed class ChoboFoundationTests
         Assert.Equal(updated.Id.ToString(), updateAudit.Details.GetProperty("current").GetProperty("id").GetString());
         Assert.False(updateAudit.Details.GetRawText().Contains("secret", StringComparison.OrdinalIgnoreCase));
 
-        var deactivateAudit = audits.First(x => x.Action == "deactivate" && x.EntityType == "user" && x.EntityId == user.UserId.ToString());
+        var deactivateAudit = audits.Items.First(x => x.Action == "deactivate" && x.EntityType == "user" && x.EntityId == user.UserId.ToString());
         Assert.Equal("operator", deactivateAudit.Details.GetProperty("deactivated").GetProperty("userName").GetString());
         Assert.False(deactivateAudit.Details.GetProperty("current").GetProperty("isActive").GetBoolean());
     }
@@ -558,7 +617,7 @@ public sealed class ChoboFoundationTests
         Assert.True(schedule.IsEnabled);
         Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsync($"/api/v1/schedules/{schedule.Id}/disable", null)).StatusCode);
 
-        var logs = await client.GetFromJsonAsync<List<ApplicationLogEntryDto>>("/api/v1/logs?last=10", JsonOptions);
+        var logs = await client.GetFromJsonAsync<PagedResultDto<ApplicationLogEntryDto>>("/api/v1/logs?last=10", JsonOptions);
         Assert.NotNull(logs);
         var clear = await client.PostAsJsonAsync("/api/v1/logs/clear", new ClearApplicationLogsRequest(DateTimeOffset.UtcNow.AddDays(1)), JsonOptions);
         Assert.True(clear.IsSuccessStatusCode);
@@ -757,15 +816,72 @@ public sealed class ChoboFoundationTests
         Assert.Equal("INTEGER", await GetColumnTypeAsync(db, "Users", "CreatedAt"));
         Assert.Equal("INTEGER", await GetColumnTypeAsync(db, "BackupSchedules", "CreatedAt"));
 
-        var audits = await client.GetFromJsonAsync<List<AuditEntryDto>>("/api/v1/audit?last=5", JsonOptions);
-        var logs = await client.GetFromJsonAsync<List<ApplicationLogEntryDto>>("/api/v1/logs?last=5", JsonOptions);
+        var audits = await client.GetFromJsonAsync<PagedResultDto<AuditEntryDto>>("/api/v1/audit?last=5", JsonOptions);
+        var logs = await client.GetFromJsonAsync<PagedResultDto<ApplicationLogEntryDto>>("/api/v1/logs?last=5", JsonOptions);
         var rawAuditJson = await client.GetStringAsync("/api/v1/audit?last=5");
-        Assert.Contains(audits!, x => x.Action == "initialize" && x.Timestamp > DateTimeOffset.UnixEpoch);
-        Assert.Contains(logs!, x => x.Message.Contains("Timestamp storage regression log entry") && x.Timestamp > DateTimeOffset.UnixEpoch);
+        Assert.Contains(audits!.Items, x => x.Action == "initialize" && x.Timestamp > DateTimeOffset.UnixEpoch);
+        Assert.Contains(logs!.Items, x => x.Message.Contains("Timestamp storage regression log entry") && x.Timestamp > DateTimeOffset.UnixEpoch);
         Assert.Contains("+00:00", rawAuditJson);
         Assert.DoesNotContain("\\u002B", rawAuditJson);
     }
 
+
+    [Fact]
+    public async Task Logs_and_audits_can_be_filtered_by_operation_id_column()
+    {
+        await using var factory = CreateFactory();
+        _ = AuthenticatedClient(factory);
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+        var timestamp = ToUnixMilliseconds(DateTimeOffset.Parse("2026-05-15T10:11:12+00:00"));
+
+        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO ApplicationLogEntries (Timestamp, Level, Exception, RenderedMessage, OperationId, Properties) VALUES ({timestamp}, 'Information', NULL, 'matching log', 'backup-a', '{{\"OperationId\":\"backup-a\"}}');");
+        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO ApplicationLogEntries (Timestamp, Level, Exception, RenderedMessage, OperationId, Properties) VALUES ({timestamp + 1000}, 'Information', NULL, 'newer matching log', 'backup-a', '{{\"OperationId\":\"backup-a\"}}');");
+        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO ApplicationLogEntries (Timestamp, Level, Exception, RenderedMessage, OperationId, Properties) VALUES ({timestamp}, 'Information', NULL, 'other log', 'backup-b', '{{\"OperationId\":\"backup-b\"}}');");
+        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO AuditEntries (Timestamp, ActorName, Action, EntityType, OperationId, Details) VALUES ({timestamp}, 'system', 'matching-audit', 'backup', 'backup-a', '{{\"operationId\":\"backup-a\"}}');");
+        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO AuditEntries (Timestamp, ActorName, Action, EntityType, OperationId, Details) VALUES ({timestamp + 1000}, 'system', 'newer-matching-audit', 'backup', 'backup-a', '{{\"operationId\":\"backup-a\"}}');");
+        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO AuditEntries (Timestamp, ActorName, Action, EntityType, OperationId, Details) VALUES ({timestamp}, 'system', 'other-audit', 'backup', 'backup-b', '{{\"operationId\":\"backup-b\"}}');");
+
+        var logs = await scope.ServiceProvider.GetRequiredService<IApplicationLogStore>().QueryAsync(null, null, null, limit: 50, operationId: "backup-a");
+        var audits = await scope.ServiceProvider.GetRequiredService<IAuditStore>().QueryAsync(null, null, null, limit: 50, operationId: "backup-a");
+
+        Assert.Contains(logs.Items, x => x.Message == "matching log");
+        Assert.DoesNotContain(logs.Items, x => x.Message == "other log");
+        Assert.Contains(audits.Items, x => x.Action == "matching-audit");
+        Assert.DoesNotContain(audits.Items, x => x.Action == "other-audit");
+        Assert.Equal(2, logs.TotalCount);
+        Assert.Equal(2, audits.TotalCount);
+        var secondLogPage = await scope.ServiceProvider.GetRequiredService<IApplicationLogStore>().QueryAsync(null, null, null, offset: 1, limit: 1, operationId: "backup-a");
+        Assert.Single(secondLogPage.Items);
+        Assert.Equal("matching log", secondLogPage.Items[0].Message);
+    }
+
+    [Fact]
+    public async Task Logs_and_audits_time_filters_return_recent_rows()
+    {
+        await using var factory = CreateFactory();
+        _ = AuthenticatedClient(factory);
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        var old = ToUnixMilliseconds(now.AddHours(-2));
+        var recent = ToUnixMilliseconds(now.AddMinutes(-10));
+        var startTime = now.AddHours(-1);
+        var endTime = now.AddMinutes(1);
+
+        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO ApplicationLogEntries (Timestamp, Level, Exception, RenderedMessage, OperationId, Properties) VALUES ({old}, 'Information', NULL, 'old time-window log', NULL, '{{}}');");
+        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO ApplicationLogEntries (Timestamp, Level, Exception, RenderedMessage, OperationId, Properties) VALUES ({recent}, 'Information', NULL, 'recent time-window log', NULL, '{{}}');");
+        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO AuditEntries (Timestamp, ActorName, Action, EntityType, OperationId, Details) VALUES ({old}, 'system', 'old-time-window-audit', 'test', NULL, '{{}}');");
+        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO AuditEntries (Timestamp, ActorName, Action, EntityType, OperationId, Details) VALUES ({recent}, 'system', 'recent-time-window-audit', 'test', NULL, '{{}}');");
+
+        var logs = await scope.ServiceProvider.GetRequiredService<IApplicationLogStore>().QueryAsync(startTime, endTime, null, limit: 200);
+        var audits = await scope.ServiceProvider.GetRequiredService<IAuditStore>().QueryAsync(startTime, endTime, null, limit: 200);
+
+        Assert.Contains(logs.Items, x => x.Message == "recent time-window log");
+        Assert.DoesNotContain(logs.Items, x => x.Message == "old time-window log");
+        Assert.Contains(audits.Items, x => x.Action == "recent-time-window-audit");
+        Assert.DoesNotContain(audits.Items, x => x.Action == "old-time-window-audit");
+    }
     private static WebApplicationFactory<Program> CreateFactory(string? dataDir = null, string adminUser = "admin", string accessToken = Token, IReadOnlyDictionary<string, string?>? extraConfiguration = null)
     {
         dataDir ??= NewTestDataDirectory();
@@ -907,3 +1023,5 @@ public sealed class ChoboFoundationTests
         }
     }
 }
+
+

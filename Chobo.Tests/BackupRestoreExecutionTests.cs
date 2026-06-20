@@ -1154,6 +1154,35 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Backup_audit_events_use_backup_operation_id_and_keep_clickhouse_operation_id_separate()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+
+        var backupId = await fixture.CreateManualBackupAsync();
+        await fixture.RunBackupAsync(backupId);
+
+        fixture.Db.ChangeTracker.Clear();
+        var table = await fixture.Db.BackupTables.Include(x => x.Shards).SingleAsync(x => x.BackupId == backupId);
+        var shard = Assert.Single(table.Shards);
+        Assert.False(string.IsNullOrWhiteSpace(table.ClickHouseOperationId));
+        Assert.False(string.IsNullOrWhiteSpace(shard.ClickHouseOperationId));
+
+        var submittedAudit = await fixture.Db.AuditEntries.SingleAsync(x => x.Action == "clickhouse-operation-submitted" && x.EntityType == "backup-table-shard" && x.EntityId == shard.Id.ToString());
+        var shardSucceededAudit = await fixture.Db.AuditEntries.SingleAsync(x => x.Action == "shard-succeeded" && x.EntityType == "backup-table-shard" && x.EntityId == shard.Id.ToString());
+        var tableSucceededAudit = await fixture.Db.AuditEntries.SingleAsync(x => x.Action == "table-succeeded" && x.EntityType == "backup-table" && x.EntityId == table.Id.ToString());
+
+        AssertAuditCorrelation(submittedAudit, backupId, shard.ClickHouseOperationId);
+        AssertAuditCorrelation(shardSucceededAudit, backupId, shard.ClickHouseOperationId);
+        AssertAuditCorrelation(tableSucceededAudit, backupId, table.ClickHouseOperationId);
+
+        var operationAudits = await new AuditStore(fixture.Db).QueryAsync(null, null, null, limit: 500, operationId: backupId.ToString());
+        Assert.Contains(operationAudits.Items, x => x.Action == "clickhouse-operation-submitted");
+        Assert.Contains(operationAudits.Items, x => x.Action == "shard-succeeded");
+        Assert.Contains(operationAudits.Items, x => x.Action == "table-succeeded");
+        Assert.All(operationAudits.Items, x => Assert.Equal(backupId.ToString(), x.Details.GetProperty("operationId").GetString()));
+    }
+    [Fact]
     public async Task Operation_id_is_persisted_before_backup_polling_finishes()
     {
         await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
@@ -1326,6 +1355,14 @@ public sealed class BackupRestoreExecutionTests
 
     private static ClickHouseTableInfo Table(string database, string table, string engine, string columnsJson = "[]", string? schemaHash = null) =>
         new(database, table, engine, $"CREATE TABLE {database}.{table} (id UInt64) ENGINE = {engine} ORDER BY id", columnsJson, schemaHash ?? $"{database}.{table}.{engine}.{columnsJson}");
+
+    private static void AssertAuditCorrelation(AuditEntryEntity entry, Guid backupId, string? clickHouseOperationId)
+    {
+        Assert.Equal(backupId.ToString(), entry.OperationId);
+        using var document = JsonDocument.Parse(entry.Details);
+        Assert.Equal(backupId.ToString(), document.RootElement.GetProperty("operationId").GetString());
+        Assert.Equal(clickHouseOperationId, document.RootElement.GetProperty("clickHouseOperationId").GetString());
+    }
 
     private static JsonSerializerOptions CreateJsonOptions()
     {
@@ -2019,3 +2056,4 @@ public sealed class BackupRestoreExecutionTests
         public override DateTimeOffset GetUtcNow() => utcNow;
     }
 }
+

@@ -7,11 +7,10 @@ riderModule.iml
 .idea
 Chobo.Tests/TestResults
 ChoboServer/logs/
-ChoboServer/data-dev/
-ChoboServer/data-dev*/
-ChoboServer/data-openapi/
+ChoboServer/data-*/
 ChoboWeb/node_modules/
 ChoboWeb/dist/
 ChoboWeb/*.tsbuildinfo
 ChoboWeb/vite.config.js
 ChoboWeb/vite.config.d.ts
+
