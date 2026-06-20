@@ -290,13 +290,8 @@ public sealed class RestoreApplicationService(
             }
             else
             {
-                if (backupShards.Select(x => x.SourceShardNumber).Distinct().Count() != targetRepresentatives.Count)
-                {
-                    throw new ArgumentException("Preserve layout requires matching source and target shard counts. Specify --layout single-node or --layout redistribute for different topologies.");
-                }
-
                 target = targetRepresentatives.FirstOrDefault(x => x.ShardNumber == backupShard.SourceShardNumber)
-                    ?? throw new ArgumentException($"Target shard {backupShard.SourceShardNumber} was not found for preserve layout.");
+                    ?? throw new ArgumentException($"Preserve layout requires target shard {backupShard.SourceShardNumber}. Choose redistribute for different topologies.");
             }
 
             plans.Add(new ShardRestorePlan(backupShard, target, target.Endpoint, role));

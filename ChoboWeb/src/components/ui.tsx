@@ -29,6 +29,7 @@ export function DataTable({ headers, children }: { headers: string[]; children: 
   const [sorting, setSorting] = useState<SortingState>([]);
   const [globalFilter, setGlobalFilter] = useState("");
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+  const headerKey = headers.join("\u001f");
   const data = useMemo(() => parseTableRows(children), [children]);
   const columns = useMemo<ColumnDef<ParsedRow>[]>(() => headers.map((header, index) => {
     const isActionColumn = /^actions$/i.test(header);
@@ -41,7 +42,7 @@ export function DataTable({ headers, children }: { headers: string[]; children: 
       enableColumnFilter: !isActionColumn,
       enableGlobalFilter: !isActionColumn
     };
-  }), [headers]);
+  }), [headerKey]);
   const table = useReactTable({
     data,
     columns,
@@ -166,3 +167,4 @@ export function Input({ label, value, onChange, type = "text" }: { label: string
 export function Select({ label, value, onChange, options }: { label: string; value: string; onChange: (value: string) => void; options: string[][] }) {
   return <label>{label}<select value={value} onChange={(event) => onChange(event.target.value)}><option value="">Select...</option>{options.map(([optionValue, optionLabel]) => <option key={optionValue} value={optionValue}>{optionLabel}</option>)}</select></label>;
 }
+

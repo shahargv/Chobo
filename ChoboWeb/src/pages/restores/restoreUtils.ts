@@ -1,18 +1,19 @@
 import type { BackupDto, ClickHouseClusterShardDto, InitiateRestoreRequest, RestoreLayout, RestoreRunStatus } from "../../api/generated";
 import type { RestoreMappingDraft, RestoreStep, SourceShardOption, TargetShardOption } from "./restoreTypes";
 
-export function validateStep(step: RestoreStep, request: InitiateRestoreRequest, mappings: RestoreMappingDraft[], selectedSourceShards: number[], sourceShardCount: number, selectedTargetShards: number[] = [], targetShardCount = 0) {
+export function validateStep(step: RestoreStep, request: InitiateRestoreRequest, mappings: RestoreMappingDraft[], selectedSourceShards: number[], sourceShardCount: number, selectedTargetShards: number[] = [], targetShardCount = 0, preserveLayoutError: string | null = null) {
   if (step === 0) return request.backupId ? [] : ["Choose a backup."];
-  if (step === 1) return validateRestoreRequest(request, mappings, selectedSourceShards, sourceShardCount, selectedTargetShards, targetShardCount).filter((error) => error.startsWith("Choose a target") || error.startsWith("Choose at least one target"));
-  if (step === 2) return validateRestoreRequest(request, mappings, selectedSourceShards, sourceShardCount, selectedTargetShards, targetShardCount).filter((error) => !error.startsWith("Choose a backup") && !error.startsWith("Choose a target") && !error.startsWith("Choose at least one target"));
-  return validateRestoreRequest(request, mappings, selectedSourceShards, sourceShardCount, selectedTargetShards, targetShardCount);
+  if (step === 1) return validateRestoreRequest(request, mappings, selectedSourceShards, sourceShardCount, selectedTargetShards, targetShardCount, preserveLayoutError).filter((error) => error.startsWith("Choose a target") || error.startsWith("Choose at least one target") || error.startsWith("Preserve layout"));
+  if (step === 2) return validateRestoreRequest(request, mappings, selectedSourceShards, sourceShardCount, selectedTargetShards, targetShardCount, preserveLayoutError).filter((error) => !error.startsWith("Choose a backup") && !error.startsWith("Choose a target") && !error.startsWith("Choose at least one target"));
+  return validateRestoreRequest(request, mappings, selectedSourceShards, sourceShardCount, selectedTargetShards, targetShardCount, preserveLayoutError);
 }
 
-export function validateRestoreRequest(request: InitiateRestoreRequest, mappings: RestoreMappingDraft[], selectedSourceShards: number[], sourceShardCount: number, selectedTargetShards: number[] = [], targetShardCount = 0) {
+export function validateRestoreRequest(request: InitiateRestoreRequest, mappings: RestoreMappingDraft[], selectedSourceShards: number[], sourceShardCount: number, selectedTargetShards: number[] = [], targetShardCount = 0, preserveLayoutError: string | null = null) {
   const errors: string[] = [];
   if (!request.backupId) errors.push("Choose a backup.");
   if (!request.targetClusterId) errors.push("Choose a target ClickHouse cluster.");
   if ((request.layout ?? "Preserve") === "Redistribute" && targetShardCount > 0 && selectedTargetShards.length === 0) errors.push("Choose at least one target shard for redistribute.");
+  if ((request.layout ?? "Preserve") === "Preserve" && preserveLayoutError) errors.push(preserveLayoutError);
   if (!request.schemaOnly && sourceShardCount > 0 && selectedSourceShards.length === 0) errors.push("Choose at least one source shard.");
   const selected = mappings.filter((mapping) => mapping.selected);
   if (selected.length === 0) errors.push("Choose at least one table to restore.");
@@ -38,6 +39,11 @@ export function getSourceShardOptions(backup: BackupDto | null): SourceShardOpti
   return [...shards.entries()]
     .sort(([left], [right]) => left - right)
     .map(([value, label]) => ({ value, label }));
+}
+
+export function getMissingPreserveTargetShards(selectedSourceShards: number[], targetShardOptions: TargetShardOption[]) {
+  const available = new Set(targetShardOptions.map((shard) => shard.value));
+  return selectedSourceShards.filter((shard) => !available.has(shard));
 }
 
 export function getTargetShardOptions(topology: ClickHouseClusterShardDto[] | undefined): TargetShardOption[] {

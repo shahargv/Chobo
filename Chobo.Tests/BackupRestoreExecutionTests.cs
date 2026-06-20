@@ -1067,6 +1067,68 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Restore_preserve_allows_different_cluster_when_selected_source_shards_exist_on_target()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        fixture.ClickHouse.Topology.Clear();
+        fixture.ClickHouse.Topology.AddRange([
+            new ClickHouseShardReplicaInfo(1, "shard-1", 1, "restore-s1", 9000, false, 0),
+            new ClickHouseShardReplicaInfo(2, "shard-2", 1, "restore-s2", 9000, false, 0),
+            new ClickHouseShardReplicaInfo(3, "shard-3", 1, "restore-s3", 9000, false, 0)
+        ]);
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Succeeded, "backup-op", true)
+        ], shardCount: 3);
+        backup.Status = BackupRunStatus.Succeeded;
+        await fixture.Db.SaveChangesAsync();
+
+        var restore = await fixture.Services.GetRequiredService<RestoreApplicationService>().InitiateAsync(new InitiateRestoreRequest(
+            backup.Id,
+            fixture.TargetClusterId,
+            null,
+            null,
+            null,
+            null,
+            false,
+            false,
+            Layout: RestoreLayout.Preserve,
+            SourceShards: [1, 3]));
+
+        var table = Assert.Single(restore.Tables);
+        Assert.Equal([1, 3], table.Shards.OrderBy(x => x.SourceShardNumber).Select(x => x.TargetShardNumber).ToArray());
+    }
+
+    [Fact]
+    public async Task Restore_preserve_rejects_different_cluster_missing_selected_source_shard()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        fixture.ClickHouse.Topology.Clear();
+        fixture.ClickHouse.Topology.AddRange([
+            new ClickHouseShardReplicaInfo(1, "shard-1", 1, "restore-s1", 9000, false, 0),
+            new ClickHouseShardReplicaInfo(2, "shard-2", 1, "restore-s2", 9000, false, 0)
+        ]);
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Succeeded, "backup-op", true)
+        ], shardCount: 3);
+        backup.Status = BackupRunStatus.Succeeded;
+        await fixture.Db.SaveChangesAsync();
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(() => fixture.Services.GetRequiredService<RestoreApplicationService>().InitiateAsync(new InitiateRestoreRequest(
+            backup.Id,
+            fixture.TargetClusterId,
+            null,
+            null,
+            null,
+            null,
+            false,
+            false,
+            Layout: RestoreLayout.Preserve,
+            SourceShards: [1, 3])));
+
+        Assert.Contains("Preserve layout requires target shard 3", error.Message);
+    }
+
+    [Fact]
     public async Task Restore_redistribute_can_limit_target_shards_to_one_shard()
     {
         await using var fixture = await TestFixture.CreateAsync();
@@ -2193,8 +2255,4 @@ public sealed class BackupRestoreExecutionTests
         public override DateTimeOffset GetUtcNow() => utcNow;
     }
 }
-
-
-
-
 
