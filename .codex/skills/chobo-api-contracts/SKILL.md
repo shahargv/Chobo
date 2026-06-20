@@ -31,3 +31,11 @@ Use `Chobo.Contracts` and ChoboServer Swagger/OpenAPI as the source of truth. Do
 - Keep credentials write-only in UI state and displays.
 - Do not duplicate API types outside `src/api/generated.ts`; import from it.
 - New mutating server endpoints must preserve Chobo audit invariants.
+
+## Import/export rules
+
+- Data export/import exports all restorable metadata except audit entries and application logs.
+- Config export/import is configuration-only and must not silently destroy backup/restore history.
+- Imported ClickHouse and S3 credentials must be stored as empty and re-entered by the operator so they are encrypted with the current server key.
+- Import must append a local audit record for the import action.
+

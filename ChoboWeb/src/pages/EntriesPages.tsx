@@ -57,7 +57,7 @@ function EntriesPage({ title, page, setPage, result, isFetching, onRefresh, onCl
   const updatePage = (patch: Partial<EntryPageState>) => setPage((current) => ({ ...current, ...patch }));
   const moveTo = (nextOffset: number) => setPage((current) => ({ ...current, offset: Math.max(0, nextOffset) }));
 
-  return <Page title={title}>
+  return <Page title={title} subtitle={title === "Logs" ? "Search application logs with time windows, paging, and operation filters." : "Review audited configuration and operational changes with paging and filters."}>
     <section className="panel entries-panel">
       <div className="entry-filter-bar">
         <Input label="Start time" type="datetime-local" value={page.startTime} onChange={(value) => updatePage({ startTime: value })} />

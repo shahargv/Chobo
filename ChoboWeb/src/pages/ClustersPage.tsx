@@ -36,7 +36,7 @@ export function Clusters() {
     onError: (error) => showToast({ kind: "error", text: String(error) })
   });
   return (
-    <CrudPage title="ClickHouse Clusters" showForm={showForm} onAdd={() => { reset(); setShowForm(true); }} formTitle={editing ? "Edit ClickHouse cluster" : "Create ClickHouse cluster"} saveLabel={editing ? "Update cluster" : "Save cluster"} onCancel={reset} onSave={() => save.mutate()} form={<>
+    <CrudPage title="ClickHouse Clusters" subtitle="Register ClickHouse clusters, access nodes, credentials, and backup topology settings." showForm={showForm} onAdd={() => { reset(); setShowForm(true); }} formTitle={editing ? "Edit ClickHouse cluster" : "Create ClickHouse cluster"} saveLabel={editing ? "Update cluster" : "Save cluster"} onCancel={reset} onSave={() => save.mutate()} form={<>
       <Input label="Name" value={draft.name} onChange={(value) => setDraft({ ...draft, name: value })} />
       <Select label="Mode" value={draft.mode} onChange={(value) => setDraft({ ...draft, mode: value as UpsertClusterRequest["mode"] })} options={[["SingleInstance", "Single instance"], ["Cluster", "Cluster"]]} />
       <Input label="Access nodes" value={formatNodes(draft.accessNodes)} onChange={(value) => setDraft({ ...draft, accessNodes: parseNodes(value, draft.accessNodes.some((node) => node.useTls)) })} />

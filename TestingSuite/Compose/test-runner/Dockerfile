@@ -1,4 +1,4 @@
-FROM clickhouse/clickhouse-server:25.4 AS clickhouse
+FROM clickhouse/clickhouse-server:26.3 AS clickhouse
 FROM minio/mc:RELEASE.2025-08-13T08-35-41Z AS minio-client
 
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS cli-build

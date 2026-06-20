@@ -397,11 +397,11 @@
             Type = 'Cli'
             Args = @('audit', 'show', '--last', '50')
             ExpectJson = @(
-                @{ Path = '$'; ContainsObject = @{ action = 'create'; entityType = 'backup-schedule' } }
-                @{ Path = '$'; ContainsObject = @{ action = 'update'; entityType = 'backup-schedule' } }
-                @{ Path = '$'; ContainsObject = @{ action = 'delete'; entityType = 'backup-schedule' } }
-                @{ Path = '$'; ContainsObject = @{ action = 'delete'; entityType = 'backup-target' } }
-                @{ Path = '$'; ContainsObject = @{ action = 'delete'; entityType = 'cluster' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'create'; entityType = 'backup-schedule' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'update'; entityType = 'backup-schedule' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'delete'; entityType = 'backup-schedule' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'delete'; entityType = 'backup-target' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'delete'; entityType = 'cluster' } }
             )
         }
     )
@@ -436,10 +436,10 @@
             Type = 'Cli'
             Args = @('audit', 'show', '--last', '50')
             ExpectJson = @(
-                @{ Path = '$'; ContainsObject = @{ action = 'delete'; entityType = 'backup-schedule' } }
-                @{ Path = '$'; ContainsObject = @{ action = 'delete'; entityType = 'backup-policy' } }
-                @{ Path = '$'; ContainsObject = @{ action = 'delete'; entityType = 'backup-target' } }
-                @{ Path = '$'; ContainsObject = @{ action = 'delete'; entityType = 'cluster' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'delete'; entityType = 'backup-schedule' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'delete'; entityType = 'backup-policy' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'delete'; entityType = 'backup-target' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'delete'; entityType = 'cluster' } }
             )
         }
     )

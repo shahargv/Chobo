@@ -140,6 +140,15 @@ public sealed class RestoreApplicationService(
             };
             if (table.DataBackedUp && !restoreTable.SchemaOnly)
             {
+                if (layout == RestoreLayout.Preserve && request.SourceShard is null && request.SourceShards is null && request.TargetShard is null && request.TargetShards is null)
+                {
+                    var sourceShardCount = backupShards.Select(x => x.SourceShardNumber).Distinct().Count();
+                    if (sourceShardCount != targetRepresentatives.Count)
+                    {
+                        throw new ArgumentException($"Preserve layout requires matching source and target shard counts. Source has {sourceShardCount}; target has {targetRepresentatives.Count}. Choose redistribute for different topologies.");
+                    }
+                }
+
                 var shardPlans = PlanShardRestores(layout, backupShards, targetRepresentatives, request.TargetShard, request.TargetShards);
                 var useTemporaryRestoreTables = restoreTable.Append || shardPlans.Count > 1;
                 foreach (var plan in shardPlans)
@@ -394,4 +403,5 @@ public sealed class RestoreApplicationService(
         return options;
     }
 }
+
 

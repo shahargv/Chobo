@@ -468,15 +468,15 @@
             RetryTimeoutSeconds = 6
             RetryIntervalSeconds = 1
             ExpectJson = @(
-                @{ Path = '$'; ContainsObject = @{ action = 'failed'; entityType = 'backup'; entityId = '{authFailureBackup.id}' } }
-                @{ Path = '$'; ContainsObject = @{ action = 'failed'; entityType = 'backup'; entityId = '{sourceDownBackup.id}' } }
-                @{ Path = '$'; ContainsObject = @{ action = 'failed'; entityType = 'backup'; entityId = '{unavailableS3Backup.id}' } }
-                @{ Path = '$'; ContainsObject = @{ action = 'failed'; entityType = 'backup'; entityId = '{badS3Backup.id}' } }
-                @{ Path = '$'; ContainsObject = @{ action = 'failed'; entityType = 'backup'; entityId = '{missingOperationBackup.id}' } }
-                @{ Path = '$'; ContainsObject = @{ action = 'failed'; entityType = 'restore'; entityId = '{destDownRestore.id}' } }
-                @{ Path = '$'; ContainsObject = @{ action = 'failed'; entityType = 'restore'; entityId = '{destAuthFailureRestore.id}' } }
-                @{ Path = '$'; ContainsObject = @{ action = 'failed'; entityType = 'restore'; entityId = '{unavailableS3Restore.id}' } }
-                @{ Path = '$'; ContainsObject = @{ action = 'failed'; entityType = 'restore'; entityId = '{badS3Restore.id}' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'failed'; entityType = 'backup'; entityId = '{authFailureBackup.id}' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'failed'; entityType = 'backup'; entityId = '{sourceDownBackup.id}' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'failed'; entityType = 'backup'; entityId = '{unavailableS3Backup.id}' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'failed'; entityType = 'backup'; entityId = '{badS3Backup.id}' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'failed'; entityType = 'backup'; entityId = '{missingOperationBackup.id}' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'failed'; entityType = 'restore'; entityId = '{destDownRestore.id}' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'failed'; entityType = 'restore'; entityId = '{destAuthFailureRestore.id}' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'failed'; entityType = 'restore'; entityId = '{unavailableS3Restore.id}' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'failed'; entityType = 'restore'; entityId = '{badS3Restore.id}' } }
             )
             ExpectTextContains = @('failureReason')
         }
@@ -487,6 +487,37 @@
             RetryTimeoutSeconds = 6
             RetryIntervalSeconds = 1
             ExpectTextContains = @('{sourceDownBackup.id}', '{authFailureBackup.id}', '{unavailableS3Backup.id}', '{badS3Backup.id}', '{destDownRestore.id}', '{destAuthFailureRestore.id}', '{unavailableS3Restore.id}', '{badS3Restore.id}', '{missingOperationBackup.id}', 'Failure reason')
+            ExpectTextNotContains = @('{backupStore.AccessKey}', '{backupStore.SecretKey}', 'wrong-access-key', 'wrong-secret-key')
+        }
+        @{
+            Name = 'logs-operation-paging'
+            Type = 'Cli'
+            Args = @('logs', 'show', '--operation-id', '{badS3Backup.id}', '--offset', '0', '--limit', '1')
+            RetryTimeoutSeconds = 6
+            RetryIntervalSeconds = 1
+            ExpectJson = @(
+                @{ Path = 'offset'; Equals = 0 }
+                @{ Path = 'limit'; Equals = 1 }
+                @{ Path = 'totalCount'; NotEmpty = $true }
+                @{ Path = 'items'; Count = 1 }
+            )
+            ExpectTextContains = @('{badS3Backup.id}')
+            ExpectTextNotContains = @('{sourceDownBackup.id}', '{backupStore.AccessKey}', '{backupStore.SecretKey}', 'wrong-access-key', 'wrong-secret-key')
+        }
+        @{
+            Name = 'audit-operation-paging'
+            Type = 'Cli'
+            Args = @('audit', 'show', '--operation-id', '{badS3Backup.id}', '--offset', '0', '--limit', '2')
+            RetryTimeoutSeconds = 6
+            RetryIntervalSeconds = 1
+            ExpectJson = @(
+                @{ Path = 'offset'; Equals = 0 }
+                @{ Path = 'limit'; Equals = 2 }
+                @{ Path = 'totalCount'; NotEmpty = $true }
+                @{ Path = 'items'; ContainsObject = @{ entityType = 'backup'; entityId = '{badS3Backup.id}' } }
+            )
+            ExpectTextContains = @('{badS3Backup.id}')
+            ExpectTextNotContains = @('{sourceDownBackup.id}')
         }
     )
 

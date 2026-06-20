@@ -1,4 +1,5 @@
 using ChoboServer.Data;
+using Microsoft.EntityFrameworkCore;
 
 namespace ChoboServer.Services;
 
@@ -7,10 +8,11 @@ public interface IAuditService
     Task RecordAsync(string action, AuditEntityType entityType, string? entityId, object? details = null);
 }
 
-public sealed class AuditService(ChoboDbContext db, IActorContext actor) : IAuditService
+public sealed class AuditService(IDbContextFactory<ChoboDbContext> dbFactory, IActorContext actor) : IAuditService
 {
     public async Task RecordAsync(string action, AuditEntityType entityType, string? entityId, object? details = null)
     {
+        await using var db = await dbFactory.CreateDbContextAsync();
         var operationId = OperationCorrelationContext.CurrentOperationId ?? AuditDetails.TryGetOperationId(details);
         db.AuditEntries.Add(new AuditEntryEntity
         {
@@ -78,5 +80,3 @@ public static class AuditEntityTypes
             _ => throw new ArgumentOutOfRangeException(nameof(entityType), entityType, "Unsupported audit entity type.")
         };
 }
-
-

@@ -1,6 +1,7 @@
 using Chobo.Contracts;
 using ChoboServer.Data;
 using ChoboServer.Options;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -27,9 +28,55 @@ public sealed class DatabaseBootstrap(
 
     public async Task EnsureDatabaseObjectsAsync(CancellationToken cancellationToken = default)
     {
+        await VerifySchemaCompatibilityBeforeMigrationAsync(cancellationToken);
         await db.Database.MigrateAsync(cancellationToken);
     }
 
+
+    private async Task VerifySchemaCompatibilityBeforeMigrationAsync(CancellationToken cancellationToken)
+    {
+        var connection = db.Database.GetDbConnection();
+        var shouldClose = connection.State == System.Data.ConnectionState.Closed;
+        if (shouldClose)
+        {
+            await connection.OpenAsync(cancellationToken);
+        }
+
+        try
+        {
+            await using var tableCommand = connection.CreateCommand();
+            tableCommand.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'SchemaStates' LIMIT 1;";
+            if (await tableCommand.ExecuteScalarAsync(cancellationToken) is null)
+            {
+                return;
+            }
+
+            await using var versionCommand = connection.CreateCommand();
+            versionCommand.CommandText = "SELECT SchemaVersion FROM SchemaStates LIMIT 1;";
+            var value = await versionCommand.ExecuteScalarAsync(cancellationToken);
+            if (value is null || value == DBNull.Value)
+            {
+                return;
+            }
+
+            var schemaVersion = Convert.ToInt32(value, System.Globalization.CultureInfo.InvariantCulture);
+            if (schemaVersion > ChoboApi.SchemaVersion)
+            {
+                throw new InvalidOperationException($"Database schema version {schemaVersion} is newer than server-supported schema version {ChoboApi.SchemaVersion}.");
+            }
+        }
+        catch (SqliteException ex)
+        {
+            throw new InvalidOperationException("Failed to read Chobo schema state before applying EF migrations.", ex);
+        }
+        finally
+        {
+            if (shouldClose)
+            {
+                await connection.CloseAsync();
+            }
+        }
+    }
     public async Task EnsureSchemaStateAsync(CancellationToken cancellationToken = default)
     {
         if (!await db.SchemaStates.AnyAsync(cancellationToken))
@@ -108,3 +155,5 @@ public sealed class DatabaseBootstrap(
         return true;
     }
 }
+
+

@@ -14,7 +14,7 @@ export function RestoreHistory() {
   const clusterById = useMemo(() => new Map((clusters.data ?? []).map((cluster) => [cluster.id, cluster])), [clusters.data]);
 
   return (
-    <Page title="Restores" action={<Link className="primary" to="/restores/start"><RotateCcw size={16} /> Start restore</Link>}>
+    <Page title="Restores" subtitle="Browse restore history and open detailed status for each restore run." action={<Link className="primary" to="/restores/start"><RotateCcw size={16} /> Start restore</Link>}>
       <section className="panel restore-history-panel">
         <div className="section-head">
           <div>

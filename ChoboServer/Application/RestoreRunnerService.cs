@@ -148,7 +148,7 @@ public sealed class RestoreRunnerService(
             {
                 throw new InvalidOperationException($"Append restore requires target table {table.TargetDatabase}.{table.TargetTable} to already exist.");
             }
-            if (!hasSubmittedOperations && existing is null && !table.Append)
+            if (!hasSubmittedOperations && existing is null && !table.Append && restore.Layout != RestoreLayout.Redistribute)
             {
                 await EnsureTargetTableExistsOnAllShardsAsync(scopedClickHouse, restore.TargetCluster!, backupTable, table, cancellationToken);
             }
@@ -465,4 +465,5 @@ public sealed class RestoreRunnerService(
         return RestoreTableStatus.Failed;
     }
 }
+
 
