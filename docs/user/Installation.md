@@ -1,7 +1,81 @@
-# Production Setup
+# Installation
 
-This guide describes a production-oriented Chobo deployment using the published Docker images. For local development with Docker-hosted ClickHouse and MinIO, see [Local debugging instructions](DebuggingInstructions.MD).
+This guide describes a production-oriented Chobo deployment using the published Docker images.
 
+
+## Production Preflight Checklist
+
+Before the first production backup, confirm these items.
+
+ClickHouse access:
+
+- the Chobo ClickHouse user can read metadata and topology;
+- the user can run `BACKUP` for protected tables;
+- the user can run `RESTORE`, create target databases, and insert data when restore operations are expected;
+- the user can query `system.backups` while async operations run.
+
+Example ClickHouse grant shape, adapted to your database names and ClickHouse version:
+
+```sql
+CREATE USER IF NOT EXISTS chobo IDENTIFIED BY '<strong-password>';
+GRANT SHOW, SELECT ON system.* TO chobo;
+GRANT SELECT, BACKUP ON sales.* TO chobo;
+GRANT CREATE, INSERT, RESTORE ON restore_validation.* TO chobo;
+```
+
+For a ClickHouse cluster, add `ON CLUSTER '{cluster}'` where your ClickHouse deployment requires cluster-wide DDL. Replace `{cluster}` with the ClickHouse cluster name.
+
+```sql
+CREATE USER IF NOT EXISTS chobo ON CLUSTER '{cluster}' IDENTIFIED BY '<strong-password>';
+GRANT ON CLUSTER '{cluster}' SHOW, SELECT ON system.* TO chobo;
+GRANT ON CLUSTER '{cluster}' SELECT, BACKUP ON sales.* TO chobo;
+GRANT ON CLUSTER '{cluster}' CREATE, INSERT, RESTORE ON restore_validation.* TO chobo;
+```
+
+S3 access:
+
+- ClickHouse nodes can reach the endpoint and bucket;
+- ChoboServer can list and delete objects for lifecycle work;
+- the S3 identity can list, put, read, and delete only under the intended bucket or prefix.
+
+Example IAM-style permission shape:
+
+```json
+{
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket"],
+      "Resource": "arn:aws:s3:::chobo-backups",
+      "Condition": { "StringLike": { "s3:prefix": ["prod/*"] } }
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+      "Resource": "arn:aws:s3:::chobo-backups/prod/*"
+    }
+  ]
+}
+```
+
+Connectivity:
+
+- from ChoboServer, test ClickHouse and S3 with `clusters test-connection` and `targets test-connection`;
+- from at least one ClickHouse node, test the same S3 endpoint that Chobo will embed in ClickHouse `BACKUP` and `RESTORE` SQL;
+- verify DNS names resolve the same way from containers, hosts, and ClickHouse nodes.
+
+Persistence and recovery:
+
+- persist `Chobo:DataDirectory`;
+- keep the same `CHOBO_ENCRYPTION_KEY_BASE64` across restarts and upgrades;
+- back up `chobo.db` or enable SQLite self-backup;
+- document how to recover metadata from S3 manifests if local SQLite metadata is lost.
+
+Sizing:
+
+- start with modest `BackupRestore:MaxDop` and increase only after observing ClickHouse and S3 load;
+- leave CPU and memory headroom on ChoboServer for polling, metadata writes, and cleanup;
+- size ClickHouse and S3 capacity for restore drills, not only daily backups.
 ## Deployment Shape
 
 A production deployment has these moving pieces:
@@ -119,7 +193,7 @@ Go to **Clusters** and add the ClickHouse source you want Chobo to protect.
 
 For a single node, enter the ClickHouse host, port, credentials, TLS choice, and backup/restore parallelism. For a ClickHouse cluster, choose cluster mode and provide access nodes plus the ClickHouse cluster name when auto-discovery is not enough.
 
-Chobo uses ClickHouse HTTP(S). If your team normally thinks in native ports, Chobo accepts `9000` and maps it to HTTP `8123`, and accepts TLS `9440` and maps it to HTTPS `8443`. If your deployment exposes custom HTTP(S) ports, enter those ports directly.
+Chobo connects to ClickHouse through the HTTP(S) interface. Enter the ClickHouse HTTP or HTTPS port that ChoboServer can reach, such as `8123` for standard HTTP deployments.
 
 ## Configure Backup Storage
 
@@ -135,7 +209,7 @@ Go to **Policies** and create a backup policy that connects a ClickHouse source,
 
 ![Create a backup policy in the web GUI](assets/production-setup/04-add-policy.png)
 
-Use include and exclude rules to describe the tables a DBA wants protected. Schema-only policies are useful when the goal is DDL history rather than data backup.
+Use include and exclude rules to describe the tables you want to protect. Schema-only policies are useful when the goal is DDL history rather than data backup.
 
 Then go to **Schedules** and create recurring backup work for the policy.
 
@@ -161,7 +235,7 @@ Use the CLI from an admin machine or automation host. You can pass the server UR
 
 ```bash
 docker run --rm shahargv/chobo:cli-latest \
-  server version \
+  dashboard --next-hours 1 \
   --server-url https://chobo.example.com \
   --access-token <token>
 ```
@@ -227,8 +301,31 @@ Import does not restore audit entries or application logs. The importing server 
 
 Imported ClickHouse and S3 credentials are intentionally empty. After importing, update cluster credentials and backup target credentials before running connection tests, backups, restores, cleanup, or metadata recovery that needs those resources. The next save encrypts the credentials with the current server key.
 
-Use config export/import only for configuration-only moves. Config import is not a way to preserve existing backup/restore history; use data export/import for full metadata recovery.
+Use config export/import only for configuration-only moves. Config import is not a way to preserve existing backup/restore history. It is intended for configuration-only moves and fails when the target server already has backup or restore history. Use data export/import for full metadata recovery.
 
+
+## Chobo Metadata Disaster Recovery
+
+There are three recovery paths, depending on what you still have.
+
+| Scenario | Preferred path | Notes |
+| --- | --- | --- |
+| Chobo data directory is healthy | Restore or keep using `chobo.db` | Keep the same encryption key so stored credentials remain readable. |
+| You have a recent Chobo data export | Run `ChoboCli data import --file <file>` | Imports restorable metadata but not audit entries or application logs. Re-enter ClickHouse and S3 credentials after import. |
+| Local SQLite metadata is lost but S3 backup objects remain | Add an S3 target and run `ChoboCli backups recover` | Recovery uses storage manifests. ClickHouse credentials are not in manifests and must be re-entered. |
+| Only configuration should move | Use `config export` and `config import` | Config import is refused on a server that already has backup or restore history. |
+
+After any metadata recovery:
+
+```powershell
+ChoboCli clusters list
+ChoboCli targets list
+ChoboCli policies list
+ChoboCli schedules list
+ChoboCli dashboard --next-hours 24
+```
+
+Then test credentials and run a small manual backup before trusting schedules again.
 ## Upgrade Notes
 
 Chobo tracks separate API, export, product/server, and SQLite schema versions. The current API path is `/api/v1`.
@@ -245,3 +342,21 @@ Before upgrading production:
 
 
 
+
+## Rollback Notes
+
+Prefer pinned image tags for production changes instead of `latest`. Keep the previous server and CLI image tags in your rollback plan.
+
+Before rollback, check whether the newer server upgraded the SQLite schema. Chobo rejects databases newer than the server-supported schema, so downgrading after a schema upgrade may require restoring the previous `chobo.db` backup.
+
+Post-upgrade smoke test:
+
+```powershell
+ChoboCli dashboard --next-hours 24
+ChoboCli clusters test-connection --id <cluster-id>
+ChoboCli targets test-connection --id <target-id>
+ChoboCli backup manual --policy-id <small-policy-id> --backup-type Full
+ChoboCli backups wait --id <backup-id> --timeout-seconds 900 --poll-seconds 5
+```
+
+If the CLI reports compatibility errors, use the CLI image built for the server release.
