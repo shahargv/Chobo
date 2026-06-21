@@ -1,4 +1,4 @@
-# Chobo
+# Chobo - ClickHouse Backups Orchestrator 
 
 Chobo is for DBAs who run ClickHouse clusters and need backups they can schedule, inspect, and restore without building their own orchestration. Add your ClickHouse cluster, add your S3-compatible backup storage, create a backup policy, then run it manually or on a schedule from the web UI or CLI.
 
