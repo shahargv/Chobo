@@ -22,7 +22,7 @@ export function RestoreHistory() {
             <p>Queued and completed restores stay here for status, affected tables, failures, logs, and audit follow-up.</p>
           </div>
         </div>
-        <DataTable headers={["Status", "Completion Time", "Requested by", "Created", "Backup", "Target", "Layout", "Tables", "Failure", "Actions"]}>
+        <DataTable headers={["Status", "Completion Time", "Requested by", "Created", "Backup", "Target", "Layout", "Tables", "Failure", "Actions"]} isLoading={restores.isLoading}>
           {(restores.data ?? []).map((restore) => (
             <tr key={restore.id}>
               <td><Status value={restore.status} /></td>

@@ -80,7 +80,7 @@
         @{
             Name = 'request-sharded-delete'
             Type = 'Cli'
-            Args = @('backups', 'delete', '--id', '{backup.id}')
+            Args = @('backups', 'delete', '--id', '{backup.id}', '--confirm-destructive')
             ExpectJson = @(
                 @{ Path = 'status'; Equals = 'ManualDeleteRequested' }
             )

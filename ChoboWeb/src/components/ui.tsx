@@ -25,7 +25,7 @@ export function CrudPage({ title, subtitle, showForm, onAdd, formTitle, saveLabe
 type ParsedCell = { node: ReactNode; text: string; className?: string };
 type ParsedRow = { id: string; cells: ParsedCell[] };
 
-export function DataTable({ headers, children }: { headers: string[]; children: ReactNode }) {
+export function DataTable({ headers, children, isLoading = false, loadingText = "Loading rows..." }: { headers: string[]; children: ReactNode; isLoading?: boolean; loadingText?: string }) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [globalFilter, setGlobalFilter] = useState("");
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
@@ -59,11 +59,12 @@ export function DataTable({ headers, children }: { headers: string[]; children: 
   });
   const visibleRows = table.getRowModel().rows;
   const hasFilters = globalFilter.trim().length > 0 || columnFilters.length > 0;
+  const emptyText = isLoading ? loadingText : data.length === 0 ? "No rows to display." : "No rows match the current filters.";
 
   return <div className="data-grid">
     <div className="grid-toolbar">
       <label className="grid-search" title="Search all columns"><Search size={15} /><input aria-label="Search all columns" placeholder="Search all columns" value={globalFilter} onChange={(event) => setGlobalFilter(event.target.value)} /></label>
-      <span className="grid-count">{visibleRows.length} / {data.length}</span>
+      <span className="grid-count">{isLoading && data.length === 0 ? "Loading" : `${visibleRows.length} / ${data.length}`}</span>
       {hasFilters && <button className="grid-clear" title="Clear filters" onClick={() => {
         setGlobalFilter("");
         setColumnFilters([]);
@@ -86,7 +87,7 @@ export function DataTable({ headers, children }: { headers: string[]; children: 
         {header.column.getCanFilter() && <ColumnFilter header={header} />}
       </th>)}</tr>
     </Fragment>)}</thead><tbody>{visibleRows.length === 0
-      ? <tr><td colSpan={headers.length}><Empty text={data.length === 0 ? "No rows to display." : "No rows match the current filters."} /></td></tr>
+      ? <tr><td colSpan={headers.length}><Empty text={emptyText} /></td></tr>
       : visibleRows.map((row) => <tr key={row.original.id}>{row.getVisibleCells().map((cell, index) => <td key={cell.id} className={row.original.cells[index]?.className}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>)}</tr>)}</tbody></table></div>
   </div>;
 }

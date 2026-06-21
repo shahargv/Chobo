@@ -197,8 +197,51 @@ public sealed class BackupRestoreExecutionTests
         Assert.NotNull(table.SchemaDefinition);
         Assert.Empty(fixture.ClickHouse.BackupStartTables);
         Assert.Empty(fixture.StorageDeletion.Objects);
+        Assert.False(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "table-skipped"));
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "schema-only-tables-skipped" && x.EntityId == backupId.ToString()));
+        var summary = await fixture.Services.GetRequiredService<BackupApplicationService>().GetAsync(backupId, includeTables: false);
+        Assert.NotNull(summary);
+        Assert.Equal(1, summary!.TableCount);
+        Assert.Empty(summary.Tables);
     }
 
+    [Fact]
+    public async Task Manual_schema_only_backup_with_1000_tables_is_summarized_and_quick()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        for (var i = 0; i < 1000; i++)
+        {
+            fixture.ClickHouse.Inventory.Add(Table("large_schema", $"table_{i:0000}", "MergeTree"));
+        }
+
+        var backupId = await fixture.CreateManualBackupAsync(schemaOnly: true);
+        var elapsed = await MeasureAsync(() => fixture.RunBackupAsync(backupId));
+
+        fixture.Db.ChangeTracker.Clear();
+        var backup = await fixture.Db.Backups.SingleAsync(x => x.Id == backupId);
+        var tableCount = await fixture.Db.BackupTables.CountAsync(x => x.BackupId == backupId);
+        var shardCount = await fixture.Db.BackupTableShards.CountAsync(x => x.BackupTable!.BackupId == backupId);
+        var schemaDefinitions = await fixture.Db.SchemaDefinitions.CountAsync();
+        var tableSkippedAudits = await fixture.Db.AuditEntries.CountAsync(x => x.Action == "table-skipped" && x.OperationId == backupId.ToString());
+        var aggregateSkippedAudits = await fixture.Db.AuditEntries.CountAsync(x => x.Action == "schema-only-tables-skipped" && x.EntityId == backupId.ToString());
+        var summary = await fixture.Services.GetRequiredService<BackupApplicationService>().GetAsync(backupId, includeTables: false);
+        var detail = await fixture.Services.GetRequiredService<BackupApplicationService>().GetAsync(backupId, includeTables: true);
+
+        Assert.True(elapsed < TimeSpan.FromSeconds(10), $"Schema-only backup for 1,000 tables should be quick; elapsed {elapsed}.");
+        Assert.Equal(BackupRunStatus.Succeeded, backup.Status);
+        Assert.Equal(1000, tableCount);
+        Assert.Equal(0, shardCount);
+        Assert.Equal(1000, schemaDefinitions);
+        Assert.Empty(fixture.ClickHouse.BackupStartTables);
+        Assert.Equal(0, tableSkippedAudits);
+        Assert.Equal(1, aggregateSkippedAudits);
+        Assert.NotNull(summary);
+        Assert.Equal(1000, summary!.TableCount);
+        Assert.Empty(summary.Tables);
+        Assert.NotNull(detail);
+        Assert.Equal(1000, detail!.TableCount);
+        Assert.Equal(1000, detail.Tables.Count);
+    }
     [Fact]
     public async Task Schema_and_data_backup_only_starts_data_backup_for_merge_tree_engines()
     {
@@ -410,6 +453,29 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Backup_runner_prefers_shard_parallelism_before_starting_next_table()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 3, PollInterval = TimeSpan.FromMilliseconds(1) });
+        fixture.ClickHouse.StartDelay = TimeSpan.FromMilliseconds(40);
+        fixture.ClickHouse.Topology.Clear();
+        fixture.ClickHouse.Topology.Add(new ClickHouseShardReplicaInfo(1, "shard-1", 1, "source-s1", 9000, false, 0));
+        fixture.ClickHouse.Topology.Add(new ClickHouseShardReplicaInfo(2, "shard-2", 1, "source-s2", 9000, false, 0));
+        fixture.ClickHouse.Topology.Add(new ClickHouseShardReplicaInfo(3, "shard-3", 1, "source-s3", 9000, false, 0));
+        fixture.ClickHouse.Topology.Add(new ClickHouseShardReplicaInfo(4, "shard-4", 1, "source-s4", 9000, false, 0));
+        fixture.ClickHouse.Inventory.Add(Table("sales", "aaa_wide", "MergeTree"));
+        fixture.ClickHouse.Inventory.Add(Table("sales", "zzz_next", "MergeTree"));
+
+        var backup = await fixture.CreateManualBackupAsync();
+        await fixture.RunBackupAsync(backup);
+
+        Assert.Equal(3, fixture.ClickHouse.MaxConcurrentBackupStarts);
+        Assert.Equal(8, fixture.ClickHouse.BackupStartTables.Count);
+        Assert.Equal(["aaa_wide", "aaa_wide", "aaa_wide"], fixture.ClickHouse.BackupStartTables.Take(3).ToArray());
+        Assert.Equal(4, fixture.ClickHouse.BackupStartTables.Take(6).Count(x => x == "aaa_wide"));
+        Assert.Equal(2, fixture.ClickHouse.BackupStartTables.Take(6).Count(x => x == "zzz_next"));
+    }
+
+    [Fact]
     public async Task Backup_resume_continues_known_operation_ids_and_does_not_rerun_completed_tables()
     {
         await using var fixture = await TestFixture.CreateAsync();
@@ -589,6 +655,11 @@ public sealed class BackupRestoreExecutionTests
         Assert.NotNull(simulation);
         Assert.Equal(3, simulation!.Inventory.Count);
         Assert.Equal([new PolicyInventoryTable("sales", "orders")], simulation.Tables);
+        Assert.Equal(1, fixture.ClickHouse.GetTablesCallCount);
+        fixture.ClickHouse.Inventory.Add(Table("sales", "new_orders", "MergeTree"));
+        var cachedInventory = await service.ListInventoryAsync(fixture.SourceClusterId);
+        Assert.Equal(3, cachedInventory!.Tables.Count);
+        Assert.Equal(1, fixture.ClickHouse.GetTablesCallCount);
     }
 
     [Fact]
@@ -1813,6 +1884,13 @@ public sealed class BackupRestoreExecutionTests
         Assert.True(dto.CreatedAt <= DateTimeOffset.UtcNow);
     }
 
+    private static async Task<TimeSpan> MeasureAsync(Func<Task> action)
+    {
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        await action();
+        stopwatch.Stop();
+        return stopwatch.Elapsed;
+    }
     private static ClickHouseTableInfo Table(string database, string table, string engine, string columnsJson = "[]", string? schemaHash = null, string? createSql = null) =>
         new(database, table, engine, createSql ?? $"CREATE TABLE {database}.{table} (id UInt64) ENGINE = {engine} ORDER BY id", columnsJson, schemaHash ?? $"{database}.{table}.{engine}.{columnsJson}");
 
@@ -1867,6 +1945,7 @@ public sealed class BackupRestoreExecutionTests
         public List<string> RestoreStartTables { get; } = [];
         public List<string> ExecuteSql { get; } = [];
         public List<ClickHouseNodeEndpoint> GetTablesEndpoints { get; } = [];
+        public int GetTablesCallCount { get; private set; }
         public Dictionary<string, List<ClickHouseTableInfo>> InventoryByEndpoint { get; } = new(StringComparer.OrdinalIgnoreCase);
         public List<string> KilledQueries { get; } = [];
         public List<ClickHouseNodeEndpoint> ExecuteEndpoints { get; } = [];
@@ -1888,6 +1967,7 @@ public sealed class BackupRestoreExecutionTests
 
         public Task<IReadOnlyList<ClickHouseTableInfo>> GetTablesAsync(ClickHouseClusterEntity cluster, CancellationToken cancellationToken)
         {
+            GetTablesCallCount++;
             if (GetTablesException is not null)
             {
                 throw GetTablesException;
@@ -2113,6 +2193,7 @@ public sealed class BackupRestoreExecutionTests
                 .AddSingleton(storageDeletion)
                 .AddScoped<IBackupStorageOperations>(provider => provider.GetRequiredService<FakeBackupStorageOperations>())
                 .AddScoped<PolicySelectorEvaluationService>()
+                .AddMemoryCache()
                 .AddScoped<ActorContext>()
                 .AddScoped<IActorContext>(provider => provider.GetRequiredService<ActorContext>())
                 .AddScoped<IAuditService, AuditService>()
@@ -2449,6 +2530,7 @@ public sealed class BackupRestoreExecutionTests
                 backup.DeletedAt,
                 backup.DeletionError,
                 backup.DeletionAttemptCount,
+                backup.Tables.Count,
                 backup.Tables.Select(table => new BackupTableDto(
                     table.Id,
                     table.BackupId,
@@ -2552,17 +2634,6 @@ public sealed class BackupRestoreExecutionTests
         public override DateTimeOffset GetUtcNow() => utcNow;
     }
 }
-
-
-
-
-
-
-
-
-
-
-
 
 
 

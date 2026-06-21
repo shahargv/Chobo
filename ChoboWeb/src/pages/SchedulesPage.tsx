@@ -66,7 +66,7 @@ export function Schedules() {
   return (
     <Page title="Schedules" subtitle="Create and update automated backup schedules for existing policies." action={<button className="primary" onClick={() => { reset(); setShowForm(true); }}><Save size={16} /> Add schedule</button>}>
       <section className="panel">
-        <DataTable headers={["Name", "Policy", "Type", "Cron", "Timezone", "Enabled", "Actions"]}>
+        <DataTable headers={["Name", "Policy", "Type", "Cron", "Timezone", "Enabled", "Actions"]} isLoading={schedules.isLoading}>
           {(schedules.data ?? []).map((schedule) => (
             <tr key={schedule.id}>
               <td>{schedule.name}</td>

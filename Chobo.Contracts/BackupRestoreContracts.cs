@@ -54,6 +54,7 @@ public sealed record BackupDto(
     DateTimeOffset? DeletedAt,
     string? DeletionError,
     int DeletionAttemptCount,
+    int TableCount,
     IReadOnlyList<BackupTableDto> Tables);
 
 public sealed record BackupTableDto(

@@ -71,30 +71,18 @@ public sealed class BackupRunnerService(
                 }
             }
 
-            var maxDop = EffectiveMaxDop(backup.SourceCluster!);
-            _logger.Information("Executing backup {BackupId} with effective maxdop {MaxDop} and {TableCount} table(s).", backup.Id, maxDop, backup.Tables.Count);
-            if (maxDop == 1)
+            if (backup.ContentMode == BackupContentMode.SchemaOnly)
             {
-                foreach (var table in backup.Tables.Where(x => x.Status is BackupTableStatus.Queued or BackupTableStatus.Running).ToList())
-                {
-                    await RunTableAsync(backup.Id, table.Id, cancellationToken);
-                }
+                var skipped = await CompleteSchemaOnlyTablesAsync(backup.Id, cancellationToken);
+                _logger.Information("Backup {BackupId} is schema-only; marked {TableCount} table(s) complete without data backup execution.", backup.Id, skipped);
+                await audit.RecordAsync("schema-only-tables-skipped", AuditEntityType.Backup, backup.Id.ToString(), new { operationId = backup.Id, tableCount = skipped, reason = "schema-only" });
             }
             else
             {
-                using var semaphore = new SemaphoreSlim(maxDop, maxDop);
-                var tasks = backup.Tables
-                    .Where(x => x.Status is BackupTableStatus.Queued or BackupTableStatus.Running)
-                    .Select(async table =>
-                    {
-                        await semaphore.WaitAsync(cancellationToken);
-                        try { await RunTableAsync(backup.Id, table.Id, cancellationToken); }
-                        finally { semaphore.Release(); }
-                    })
-                    .ToList();
-                await Task.WhenAll(tasks);
+                var maxDop = EffectiveMaxDop(backup.SourceCluster!);
+                _logger.Information("Executing backup {BackupId} with effective maxdop {MaxDop} across shard work for {TableCount} table(s).", backup.Id, maxDop, backup.Tables.Count);
+                await RunBackupShardWorkAsync(backup.Id, maxDop, cancellationToken);
             }
-
             if (await db.Backups.Where(x => x.Id == backup.Id).Select(x => x.Status).FirstAsync(cancellationToken) == BackupRunStatus.Canceled)
             {
                 _logger.Information("Backup {BackupId} observed cancellation and will not overwrite canceled status.", backup.Id);
@@ -185,6 +173,16 @@ public sealed class BackupRunnerService(
         }
     }
 
+    private async Task<int> CompleteSchemaOnlyTablesAsync(Guid backupId, CancellationToken cancellationToken)
+    {
+        var now = DateTimeOffset.UtcNow;
+        return await db.BackupTables
+            .Where(x => x.BackupId == backupId && x.Status != BackupTableStatus.Succeeded)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(x => x.Status, BackupTableStatus.Succeeded)
+                .SetProperty(x => x.ClickHouseStatus, "SCHEMA_ONLY")
+                .SetProperty(x => x.CompletedAt, now), cancellationToken);
+    }
     private async Task RunTableInCurrentScopeAsync(BackupEntity backup, BackupTableEntity table, CancellationToken cancellationToken)
     {
         if (!table.DataBackedUp)
@@ -274,11 +272,20 @@ public sealed class BackupRunnerService(
         var selected = selectorEvaluation.Evaluate(selector, new PolicyInventory(selectableInventory.Select(x => new PolicyInventoryTable(x.Database, x.Table)).ToList()));
         _logger.Information("Backup {BackupId} selector matched {SelectedCount} table(s).", backup.Id, selected.Count);
         var selectedSet = selected.Select(x => ClickHouseBackupIdentity.Table(x.Database, x.Table)).ToHashSet(StringComparer.Ordinal);
+        var selectedTables = selectableInventory
+            .Where(x => selectedSet.Contains(ClickHouseBackupIdentity.Table(x.Database, x.Table)))
+            .ToList();
+        var selectedSchemaHashes = selectedTables
+            .Select(x => x.SchemaHash)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        var schemasByHash = await db.SchemaDefinitions
+            .Where(x => selectedSchemaHashes.Contains(x.SchemaHash))
+            .ToDictionaryAsync(x => x.SchemaHash, StringComparer.Ordinal, cancellationToken);
 
-        foreach (var table in selectableInventory.Where(x => selectedSet.Contains(ClickHouseBackupIdentity.Table(x.Database, x.Table))))
+        foreach (var table in selectedTables)
         {
-            var schema = await db.SchemaDefinitions.FirstOrDefaultAsync(x => x.SchemaHash == table.SchemaHash, cancellationToken);
-            if (schema is null)
+            if (!schemasByHash.TryGetValue(table.SchemaHash, out var schema))
             {
                 schema = new SchemaDefinitionEntity
                 {
@@ -289,9 +296,9 @@ public sealed class BackupRunnerService(
                     CreateTableSql = table.CreateTableSql,
                     ColumnsJson = table.ColumnsJson
                 };
+                schemasByHash[table.SchemaHash] = schema;
                 db.SchemaDefinitions.Add(schema);
-                await db.SaveChangesAsync(cancellationToken);
-                _logger.Information("Stored schema definition {SchemaDefinitionId} for {Database}.{Table} hash {SchemaHash}.", schema.Id, table.Database, table.Table, table.SchemaHash);
+                _logger.Debug("Prepared new schema definition {SchemaDefinitionId} for {Database}.{Table} hash {SchemaHash}.", schema.Id, table.Database, table.Table, table.SchemaHash);
             }
 
             var dataBackedUp = !schemaOnly && IsMergeTreeDataEngine(table.Engine);
@@ -350,7 +357,10 @@ public sealed class BackupRunnerService(
             }
 
             db.BackupTables.Add(backupTable);
-            _logger.Information("Prepared backup table {Database}.{Table} engine {Engine} dataBackedUp={DataBackedUp}.", table.Database, table.Table, table.Engine, dataBackedUp);
+            if (!schemaOnly)
+            {
+                _logger.Information("Prepared backup table {Database}.{Table} engine {Engine} dataBackedUp={DataBackedUp}.", table.Database, table.Table, table.Engine, dataBackedUp);
+            }
         }
 
         await db.SaveChangesAsync(cancellationToken);
@@ -361,7 +371,102 @@ public sealed class BackupRunnerService(
         await audit.RecordAsync("shards-prepared", AuditEntityType.Backup, backup.Id.ToString(), new { shardCount });
     }
 
-    private async Task RunTableAsync(Guid backupId, Guid tableId, CancellationToken cancellationToken)
+    private sealed record BackupShardWorkItem(Guid TableId, Guid ShardId);
+
+    private async Task RunBackupShardWorkAsync(Guid backupId, int maxDop, CancellationToken cancellationToken)
+    {
+        var workItems = await PrepareBackupTablesForShardWorkAsync(backupId, cancellationToken);
+        if (workItems.Count > 0)
+        {
+            var nextIndex = -1;
+            var workerCount = Math.Min(maxDop, workItems.Count);
+            var workers = Enumerable.Range(0, workerCount)
+                .Select(async _ =>
+                {
+                    while (true)
+                    {
+                        var itemIndex = Interlocked.Increment(ref nextIndex);
+                        if (itemIndex >= workItems.Count)
+                        {
+                            return;
+                        }
+
+                        var item = workItems[itemIndex];
+                        await RunShardAsync(backupId, item.TableId, item.ShardId, cancellationToken);
+                    }
+                })
+                .ToList();
+
+            await Task.WhenAll(workers);
+        }
+
+        using var statusScope = scopeFactory.CreateScope();
+        var statusDb = statusScope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+        if (await statusDb.Backups.Where(x => x.Id == backupId).Select(x => x.Status).FirstAsync(cancellationToken) == BackupRunStatus.Canceled)
+        {
+            _logger.Information("Backup {BackupId} observed cancellation before table finalization.", backupId);
+            return;
+        }
+
+        await FinalizeBackupTablesAsync(backupId, cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<BackupShardWorkItem>> PrepareBackupTablesForShardWorkAsync(Guid backupId, CancellationToken cancellationToken)
+    {
+        var backup = await db.Backups
+            .Include(x => x.SourceCluster).ThenInclude(x => x!.AccessNodes)
+            .Include(x => x.Tables).ThenInclude(x => x.Shards)
+            .FirstAsync(x => x.Id == backupId, cancellationToken);
+
+        var now = DateTimeOffset.UtcNow;
+        foreach (var table in backup.Tables.Where(x => x.Status is BackupTableStatus.Queued or BackupTableStatus.Running).OrderBy(x => x.Database).ThenBy(x => x.Table).ToList())
+        {
+            if (!table.DataBackedUp)
+            {
+                _logger.Information("Backup table {BackupTableId} {Database}.{Table} marked schema-only; skipping data backup.", table.Id, table.Database, table.Table);
+                table.Status = BackupTableStatus.Succeeded;
+                table.ClickHouseStatus = "SCHEMA_ONLY";
+                table.CompletedAt = now;
+                await audit.RecordAsync("table-skipped", AuditEntityType.BackupTable, table.Id.ToString(), new { reason = "schema-only", table.Database, table.Table });
+                continue;
+            }
+
+            if (table.Shards.Count == 0)
+            {
+                var node = backup.SourceCluster!.AccessNodes[0];
+                table.Shards.Add(new BackupTableShardEntity
+                {
+                    SourceShardNumber = 1,
+                    SourceShardName = "single",
+                    ReplicaNumber = 1,
+                    Host = node.Host,
+                    Port = node.Port,
+                    UseTls = node.UseTls,
+                    S3Path = table.S3Path
+                });
+            }
+
+            table.Status = BackupTableStatus.Running;
+            table.StartedAt ??= now;
+            _logger.Information("Backup table {BackupTableId} {Database}.{Table} started.", table.Id, table.Database, table.Table);
+            await audit.RecordAsync("table-started", AuditEntityType.BackupTable, table.Id.ToString(), new { table.Database, table.Table });
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+        await TryWriteIntermediateManifestAsync(backup.Id, cancellationToken);
+
+        return backup.Tables
+            .Where(x => x.DataBackedUp && (x.Status == BackupTableStatus.Queued || x.Status == BackupTableStatus.Running))
+            .OrderBy(x => x.Database)
+            .ThenBy(x => x.Table)
+            .SelectMany(table => table.Shards
+                .Where(shard => shard.Status is BackupTableStatus.Queued or BackupTableStatus.Running)
+                .OrderBy(shard => shard.SourceShardNumber)
+                .Select(shard => new BackupShardWorkItem(table.Id, shard.Id)))
+            .ToList();
+    }
+
+    private async Task RunShardAsync(Guid backupId, Guid tableId, Guid shardId, CancellationToken cancellationToken)
     {
         using var scope = scopeFactory.CreateScope();
         var scopedDb = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
@@ -372,117 +477,95 @@ public sealed class BackupRunnerService(
         var scopedManifests = scope.ServiceProvider.GetRequiredService<IBackupStorageManifestService>();
 
         var backup = await scopedDb.Backups
-            .Include(x => x.SourceCluster).ThenInclude(x => x!.AccessNodes)
+            .Include(x => x.SourceCluster)
             .Include(x => x.Target)
-            .Include(x => x.Tables).ThenInclude(x => x.Shards)
+            .Include(x => x.Tables.Where(table => table.Id == tableId)).ThenInclude(x => x.Shards.Where(shard => shard.Id == shardId))
             .FirstAsync(x => x.Id == backupId, cancellationToken);
-        var table = backup.Tables.Single(x => x.Id == tableId);
+        var table = backup.Tables.Single();
+        var shard = table.Shards.Single();
+
         if (backup.Status == BackupRunStatus.Canceled)
         {
-            _logger.Information("Backup table {BackupTableId} skipped because backup {BackupId} was canceled.", table.Id, backup.Id);
+            _logger.Information("Backup shard {BackupShardId} skipped because backup {BackupId} was canceled.", shard.Id, backup.Id);
             return;
         }
 
-
-        if (!table.DataBackedUp)
-        {
-            _logger.Information("Backup table {BackupTableId} {Database}.{Table} marked schema-only; skipping data backup.", table.Id, table.Database, table.Table);
-            table.Status = BackupTableStatus.Succeeded;
-            table.ClickHouseStatus = "SCHEMA_ONLY";
-            table.CompletedAt = DateTimeOffset.UtcNow;
-            await scopedDb.SaveChangesAsync(cancellationToken);
-            await scopedAudit.RecordAsync("table-skipped", AuditEntityType.BackupTable, table.Id.ToString(), new { reason = "schema-only", table.Database, table.Table });
-            await TryWriteIntermediateManifestAsync(scopedManifests, backup.Id, cancellationToken);
-            return;
-        }
-
-        if (table.Shards.Count == 0)
-        {
-            table.Shards.Add(new BackupTableShardEntity
-            {
-                SourceShardNumber = 1,
-                SourceShardName = "single",
-                ReplicaNumber = 1,
-                Host = backup.SourceCluster!.AccessNodes[0].Host,
-                Port = backup.SourceCluster.AccessNodes[0].Port,
-                UseTls = backup.SourceCluster.AccessNodes[0].UseTls,
-                S3Path = table.S3Path
-            });
-            await scopedDb.SaveChangesAsync(cancellationToken);
-        }
-
-        table.Status = BackupTableStatus.Running;
-        table.StartedAt ??= DateTimeOffset.UtcNow;
+        shard.Status = BackupTableStatus.Running;
+        shard.StartedAt ??= DateTimeOffset.UtcNow;
         await scopedDb.SaveChangesAsync(cancellationToken);
-        _logger.Information("Backup table {BackupTableId} {Database}.{Table} started.", table.Id, table.Database, table.Table);
-        await scopedAudit.RecordAsync("table-started", AuditEntityType.BackupTable, table.Id.ToString(), new { table.Database, table.Table });
+        await scopedAudit.RecordAsync("shard-started", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { table.Database, table.Table, sourceShard = shard.SourceShardNumber, sourceNode = $"{shard.Host}:{shard.Port}" });
 
-        foreach (var shard in table.Shards.Where(x => x.Status is BackupTableStatus.Queued or BackupTableStatus.Running).OrderBy(x => x.SourceShardNumber).ToList())
+        try
         {
-            if (await scopedDb.Backups.Where(x => x.Id == backup.Id).Select(x => x.Status).FirstAsync(cancellationToken) == BackupRunStatus.Canceled)
+            var endpoint = new ClickHouseNodeEndpoint(shard.Host, shard.Port, shard.UseTls);
+            if (!string.IsNullOrWhiteSpace(shard.ClickHouseOperationId))
             {
-                _logger.Information("Backup table {BackupTableId} stopped before shard {ShardNumber} because backup {BackupId} was canceled.", table.Id, shard.SourceShardNumber, backup.Id);
-                return;
-            }
-            shard.Status = BackupTableStatus.Running;
-            shard.StartedAt ??= DateTimeOffset.UtcNow;
-            await scopedDb.SaveChangesAsync(cancellationToken);
-            await scopedAudit.RecordAsync("shard-started", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { table.Database, table.Table, sourceShard = shard.SourceShardNumber, sourceNode = $"{shard.Host}:{shard.Port}" });
-
-            try
-            {
-                var endpoint = new ClickHouseNodeEndpoint(shard.Host, shard.Port, shard.UseTls);
-                if (!string.IsNullOrWhiteSpace(shard.ClickHouseOperationId))
+                var status = await scopedClickHouse.GetOperationStatusAsync(endpoint, backup.SourceCluster!, shard.ClickHouseOperationId, cancellationToken);
+                if (status.Exists)
                 {
-                    var status = await scopedClickHouse.GetOperationStatusAsync(endpoint, backup.SourceCluster!, shard.ClickHouseOperationId, cancellationToken);
-                    if (status.Exists)
-                    {
-                        await PollBackupShardAsync(scopedClickHouse, endpoint, backup.SourceCluster!, shard, status, scopedOptions.Value.PollInterval, cancellationToken);
-                        await scopedDb.SaveChangesAsync(cancellationToken);
-                        await scopedAudit.RecordAsync("shard-succeeded", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { table.Database, table.Table, sourceShard = shard.SourceShardNumber, clickHouseOperationId = shard.ClickHouseOperationId, shard.ClickHouseStatus });
-                        await TryWriteIntermediateManifestAsync(scopedManifests, backup.Id, cancellationToken);
-                        continue;
-                    }
-
-                    throw MissingOperationException(shard.ClickHouseOperationId);
+                    await PollBackupShardAsync(scopedClickHouse, endpoint, backup.SourceCluster!, shard, status, scopedOptions.Value.PollInterval, cancellationToken);
+                    await scopedDb.SaveChangesAsync(cancellationToken);
+                    await scopedAudit.RecordAsync("shard-succeeded", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { table.Database, table.Table, sourceShard = shard.SourceShardNumber, clickHouseOperationId = shard.ClickHouseOperationId, shard.ClickHouseStatus });
+                    await TryWriteIntermediateManifestAsync(scopedManifests, backup.Id, cancellationToken);
+                    return;
                 }
 
-                var baseBackupPath = await GetParentShardPathAsync(scopedDb, shard.ParentFullBackupTableShardId, cancellationToken);
-                var operation = await scopedClickHouse.StartBackupShardAsync(endpoint, backup.SourceCluster!, backup.Target!, table, shard, baseBackupPath, cancellationToken);
-                shard.ClickHouseOperationId = operation.OperationId;
-                shard.ClickHouseStatus = operation.Status;
-                table.ClickHouseOperationId ??= operation.OperationId;
-                table.ClickHouseStatus = operation.Status;
-                await scopedDb.SaveChangesAsync(cancellationToken);
-                await scopedAudit.RecordAsync("clickhouse-operation-submitted", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { clickHouseOperationId = operation.OperationId, operation.Status, sourceShard = shard.SourceShardNumber });
-                await scopedTestHooks.MaybeDelayBackupBeforePollAsync(cancellationToken);
-                await PollBackupShardAsync(scopedClickHouse, endpoint, backup.SourceCluster!, shard, new ClickHouseOperationStatus(true, operation.Status, null), scopedOptions.Value.PollInterval, cancellationToken);
-                await scopedDb.SaveChangesAsync(cancellationToken);
-                await scopedAudit.RecordAsync("shard-succeeded", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { table.Database, table.Table, sourceShard = shard.SourceShardNumber, clickHouseOperationId = shard.ClickHouseOperationId, shard.ClickHouseStatus });
-                await TryWriteIntermediateManifestAsync(scopedManifests, backup.Id, cancellationToken);
+                throw MissingOperationException(shard.ClickHouseOperationId);
             }
-            catch (Exception ex)
-            {
-                _logger.Error(ex, "Backup table {BackupTableId} {Database}.{Table} shard {ShardNumber} failed.", table.Id, table.Database, table.Table, shard.SourceShardNumber);
-                shard.Status = BackupTableStatus.Failed;
-                shard.Error = ex.Message;
-                shard.CompletedAt = DateTimeOffset.UtcNow;
-                await scopedDb.SaveChangesAsync(CancellationToken.None);
-                await scopedAudit.RecordAsync("shard-failed", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { error = ex.Message, sourceShard = shard.SourceShardNumber, clickHouseOperationId = shard.ClickHouseOperationId });
-                await TryWriteIntermediateManifestAsync(scopedManifests, backup.Id, CancellationToken.None);
-            }
+
+            var baseBackupPath = await GetParentShardPathAsync(scopedDb, shard.ParentFullBackupTableShardId, cancellationToken);
+            var operation = await scopedClickHouse.StartBackupShardAsync(endpoint, backup.SourceCluster!, backup.Target!, table, shard, baseBackupPath, cancellationToken);
+            shard.ClickHouseOperationId = operation.OperationId;
+            shard.ClickHouseStatus = operation.Status;
+            table.ClickHouseOperationId ??= operation.OperationId;
+            table.ClickHouseStatus = operation.Status;
+            await scopedDb.SaveChangesAsync(cancellationToken);
+            await scopedAudit.RecordAsync("clickhouse-operation-submitted", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { clickHouseOperationId = operation.OperationId, operation.Status, sourceShard = shard.SourceShardNumber });
+            await scopedTestHooks.MaybeDelayBackupBeforePollAsync(cancellationToken);
+            await PollBackupShardAsync(scopedClickHouse, endpoint, backup.SourceCluster!, shard, new ClickHouseOperationStatus(true, operation.Status, null), scopedOptions.Value.PollInterval, cancellationToken);
+            await scopedDb.SaveChangesAsync(cancellationToken);
+            await scopedAudit.RecordAsync("shard-succeeded", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { table.Database, table.Table, sourceShard = shard.SourceShardNumber, clickHouseOperationId = shard.ClickHouseOperationId, shard.ClickHouseStatus });
+            await TryWriteIntermediateManifestAsync(scopedManifests, backup.Id, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, "Backup table {BackupTableId} {Database}.{Table} shard {ShardNumber} failed.", table.Id, table.Database, table.Table, shard.SourceShardNumber);
+            shard.Status = BackupTableStatus.Failed;
+            shard.Error = ex.Message;
+            shard.CompletedAt = DateTimeOffset.UtcNow;
+            await scopedDb.SaveChangesAsync(CancellationToken.None);
+            await scopedAudit.RecordAsync("shard-failed", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { error = ex.Message, sourceShard = shard.SourceShardNumber, clickHouseOperationId = shard.ClickHouseOperationId });
+            await TryWriteIntermediateManifestAsync(scopedManifests, backup.Id, CancellationToken.None);
+        }
+    }
+
+    private async Task FinalizeBackupTablesAsync(Guid backupId, CancellationToken cancellationToken)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var scopedDb = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+        var scopedAudit = scope.ServiceProvider.GetRequiredService<IAuditService>();
+        var scopedManifests = scope.ServiceProvider.GetRequiredService<IBackupStorageManifestService>();
+        var tables = await scopedDb.BackupTables
+            .Include(x => x.Shards)
+            .Where(x => x.BackupId == backupId && x.DataBackedUp && (x.Status == BackupTableStatus.Queued || x.Status == BackupTableStatus.Running))
+            .OrderBy(x => x.Database)
+            .ThenBy(x => x.Table)
+            .ToListAsync(cancellationToken);
+
+        foreach (var table in tables)
+        {
+            table.Status = AggregateBackupTableStatus(table.Shards.Select(x => x.Status).ToList());
+            table.ClickHouseStatus = table.Shards.Any(x => x.Status == BackupTableStatus.Failed) ? "PARTIAL_OR_FAILED" : table.Shards.LastOrDefault()?.ClickHouseStatus;
+            table.Error = table.Status is BackupTableStatus.Failed or BackupTableStatus.PartiallySucceeded
+                ? BuildBackupShardFailureReason(table.Shards.Where(x => x.Status == BackupTableStatus.Failed).ToList())
+                : null;
+            table.CompletedAt = DateTimeOffset.UtcNow;
+            var tableAction = table.Status == BackupTableStatus.Succeeded ? "table-succeeded" : table.Status == BackupTableStatus.PartiallySucceeded ? "table-partially-succeeded" : "table-failed";
+            await scopedAudit.RecordAsync(tableAction, AuditEntityType.BackupTable, table.Id.ToString(), new { table.Database, table.Table, shardCount = table.Shards.Count, clickHouseOperationId = table.ClickHouseOperationId, failureReason = table.Error });
         }
 
-        table.Status = AggregateBackupTableStatus(table.Shards.Select(x => x.Status).ToList());
-        table.ClickHouseStatus = table.Shards.Any(x => x.Status == BackupTableStatus.Failed) ? "PARTIAL_OR_FAILED" : table.Shards.LastOrDefault()?.ClickHouseStatus;
-        table.Error = table.Status is BackupTableStatus.Failed or BackupTableStatus.PartiallySucceeded
-            ? BuildBackupShardFailureReason(table.Shards.Where(x => x.Status == BackupTableStatus.Failed).ToList())
-            : null;
-        table.CompletedAt = DateTimeOffset.UtcNow;
         await scopedDb.SaveChangesAsync(cancellationToken);
-        var tableAction = table.Status == BackupTableStatus.Succeeded ? "table-succeeded" : table.Status == BackupTableStatus.PartiallySucceeded ? "table-partially-succeeded" : "table-failed";
-        await scopedAudit.RecordAsync(tableAction, AuditEntityType.BackupTable, table.Id.ToString(), new { table.Database, table.Table, shardCount = table.Shards.Count, clickHouseOperationId = table.ClickHouseOperationId, failureReason = table.Error });
-        await TryWriteIntermediateManifestAsync(scopedManifests, backup.Id, cancellationToken);
+        await TryWriteIntermediateManifestAsync(scopedManifests, backupId, cancellationToken);
     }
 
     private async Task TryWriteIntermediateManifestAsync(IBackupStorageManifestService scopedManifests, Guid backupId, CancellationToken cancellationToken)
@@ -769,10 +852,4 @@ public sealed class BackupRunnerService(
         return options;
     }
 }
-
-
-
-
-
-
 

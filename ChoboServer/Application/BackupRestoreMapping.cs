@@ -5,7 +5,7 @@ namespace ChoboServer.Application;
 
 internal static class BackupRestoreMapping
 {
-    public static BackupDto ToDto(BackupEntity x) =>
+    public static BackupDto ToDto(BackupEntity x, int? tableCount = null, bool includeTables = true) =>
         new(
             x.Id,
             x.TriggerType,
@@ -34,7 +34,8 @@ internal static class BackupRestoreMapping
             x.DeletedAt,
             x.DeletionError,
             x.DeletionAttemptCount,
-            x.Tables.OrderBy(t => t.Database).ThenBy(t => t.Table).Select(ToDto).ToList());
+            tableCount ?? x.Tables.Count,
+            includeTables ? x.Tables.OrderBy(t => t.Database).ThenBy(t => t.Table).Select(ToDto).ToList() : []);
 
     public static BackupTableDto ToDto(BackupTableEntity x) =>
         new(

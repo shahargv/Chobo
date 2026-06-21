@@ -42,7 +42,7 @@ export function Targets() {
     {editing && <label className="checkbox-row"><input type="checkbox" checked={modifyCredentials} onChange={(event) => setModifyCredentials(event.target.checked)} /> Modify credentials</label>}
     {(!editing || modifyCredentials) && <Input label="Access key" value={draft.accessKey ?? ""} onChange={(value) => setDraft({ ...draft, accessKey: value || null })} />}
     {(!editing || modifyCredentials) && <Input label="Secret key" type="password" value={draft.secretKey ?? ""} onChange={(value) => setDraft({ ...draft, secretKey: value || null })} />}
-  </>} table={<DataTable headers={["Name", "Endpoint", "Bucket", "Addressing", "Prefix", "Actions"]}>{(targets.data ?? []).map((target) => <tr key={target.id}><td>{target.name}</td><td>{target.s3.endpoint}</td><td>{target.s3.bucket}</td><td>{target.s3.forcePathStyle ? "Path style" : "Virtual-host style"}</td><td>{target.s3.pathPrefix ?? ""}</td><td className="actions"><button className="ghost" onClick={() => {
+  </>} table={<DataTable headers={["Name", "Endpoint", "Bucket", "Addressing", "Prefix", "Actions"]} isLoading={targets.isLoading}>{(targets.data ?? []).map((target) => <tr key={target.id}><td>{target.name}</td><td>{target.s3.endpoint}</td><td>{target.s3.bucket}</td><td>{target.s3.forcePathStyle ? "Path style" : "Virtual-host style"}</td><td>{target.s3.pathPrefix ?? ""}</td><td className="actions"><button className="ghost" onClick={() => {
     setEditing(target);
     setShowForm(true);
     setModifyCredentials(false);

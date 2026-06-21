@@ -15,7 +15,7 @@ export function Backups() {
   const [selectedBackupId, setSelectedBackupId] = useState<string | null>(backupId ?? null);
   const [showManual, setShowManual] = useState(false);
   const [deleteBackupId, setDeleteBackupId] = useState<string | null>(null);
-  const backups = useQuery({ queryKey: ["backups"], queryFn: () => api.backups() });
+  const backups = useQuery({ queryKey: ["backups", "summary"], queryFn: () => api.backups({}, { includeTables: false }) });
   const schedules = useQuery({ queryKey: ["schedules"], queryFn: () => api.schedules() });
   const policies = useQuery({ queryKey: ["policies"], queryFn: () => api.policies() });
   const scheduleById = new Map((schedules.data ?? []).map((schedule) => [schedule.id, schedule]));
@@ -33,7 +33,7 @@ export function Backups() {
     <Page title="Backups" subtitle="Start manual backups, review backup history, and inspect table or shard results." action={<button className="primary" onClick={() => setShowManual(!showManual)}><Play size={16} /> Manual backup</button>}>
       {showManual && <ManualBackupPanel policies={policies.data ?? []} onQueued={() => { setShowManual(false); backups.refetch(); }} />}
       <section className="panel">
-        <DataTable headers={["Status", "Completion Time", "Type", "Initiated by", "Created", "Policy", "Tables", "Pinned", "Actions"]}>
+        <DataTable headers={["Status", "Completion Time", "Type", "Initiated by", "Created", "Policy", "Tables", "Pinned", "Actions"]} isLoading={backups.isLoading}>
           {(backups.data ?? []).map((backup) => (
             <tr key={backup.id}>
               <td><Status value={backup.status} /></td>
@@ -42,7 +42,7 @@ export function Backups() {
               <td>{backupInitiator(backup, scheduleById)}</td>
               <td>{formatTime(backup.createdAt)}</td>
               <td>{backupPolicyLink(backup.policyId, policyById)}</td>
-              <td>{backup.tables.length}</td>
+              <td>{backup.tableCount}</td>
               <td>{backup.isPinned ? "yes" : "no"}</td>
               <td className="actions">
                 <Link className="ghost" to={`/backups/${backup.id}`}>Details</Link>
@@ -65,13 +65,19 @@ function BackupDrawer({ backupId, onClose }: { backupId: string; onClose: () => 
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const backup = useQuery({
-    queryKey: ["backup", backupId],
-    queryFn: () => api.backup(backupId),
+    queryKey: ["backup", backupId, "summary"],
+    queryFn: () => api.backup(backupId, { includeTables: false }),
     refetchInterval: (query) => isBackupInExecutionPhase(query.state.data?.status) ? 3000 : false
   });
   const schedules = useQuery({ queryKey: ["schedules"], queryFn: () => api.schedules() });
   const scheduleById = new Map((schedules.data ?? []).map((schedule) => [schedule.id, schedule]));
   const current = backup.data;
+  const tableDetail = useQuery({
+    queryKey: ["backup", backupId, "tables"],
+    queryFn: () => api.backup(backupId, { includeTables: true }),
+    enabled: !!current && current.contentMode !== "SchemaOnly"
+  });
+  const tableRows = tableDetail.data?.tables ?? [];
   const isActive = isBackupInExecutionPhase(current?.status);
   const relatedLogs = useQuery({
     queryKey: ["backup-related-logs", backupId, current?.createdAt],
@@ -117,8 +123,8 @@ function BackupDrawer({ backupId, onClose }: { backupId: string; onClose: () => 
         </div>
         <section className="detail-section detail-section-tables">
           <h3>Tables and shards</h3>
-          <DataTable headers={["Table", "Engine", "Status", "Shards", "S3 path"]}>
-            {current.tables.map((table) => (
+          {current.contentMode === "SchemaOnly" ? <Empty text={`Schema-only backup captured ${current.tableCount} table schema${current.tableCount === 1 ? "" : "s"}; data backup execution was skipped.`} /> : <DataTable headers={["Table", "Engine", "Status", "Shards", "S3 path"]} isLoading={tableDetail.isLoading}>
+            {tableRows.map((table) => (
               <tr key={table.id}>
                 <td>{table.database}.{table.table}</td>
                 <td>{table.engine}</td>
@@ -127,11 +133,11 @@ function BackupDrawer({ backupId, onClose }: { backupId: string; onClose: () => 
                 <td className="mono wide-cell">{table.s3Path}</td>
               </tr>
             ))}
-          </DataTable>
+          </DataTable>}
         </section>
         <section className="detail-section detail-section-audit">
           <h3>Related audit</h3>
-          <DataTable headers={["Time", "Action", "Entity", "Details"]}>
+          <DataTable headers={["Time", "Action", "Entity", "Details"]} isLoading={relatedAudits.isLoading}>
             {backupAudits.map((entry) => (
               <tr key={entry.id}>
                 <td>{formatTimeSeconds(entry.timestamp)}</td>
@@ -144,13 +150,14 @@ function BackupDrawer({ backupId, onClose }: { backupId: string; onClose: () => 
         </section>
         <section className="detail-section detail-section-logs">
           <h3>Related logs</h3>
-          <DataTable headers={["Time", "Level", "Category", "Message"]}>
+          <DataTable headers={["Time", "Level", "Category", "Message", "Exception details"]} isLoading={relatedLogs.isLoading}>
             {backupLogs.map((entry) => (
               <tr key={entry.id}>
                 <td>{formatTimeSeconds(entry.timestamp)}</td>
                 <td>{entry.level}</td>
                 <td>{entry.category}</td>
                 <td className="wide-cell">{entry.message}</td>
+                <td className="mono wide-cell">{entry.exception ?? ""}</td>
               </tr>
             ))}
           </DataTable>

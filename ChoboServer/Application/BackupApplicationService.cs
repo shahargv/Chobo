@@ -96,12 +96,11 @@ public sealed class BackupApplicationService(
 
         return BackupRestoreMapping.ToDto(await LoadAsync(backup.Id, cancellationToken) ?? backup);
     }
-    public async Task<IReadOnlyList<BackupDto>> ListAsync(Guid? policyId, string? clusterName, string? tableName, BackupRunStatus? status, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<BackupDto>> ListAsync(Guid? policyId, string? clusterName, string? tableName, BackupRunStatus? status, bool includeTables = true, CancellationToken cancellationToken = default)
     {
-        var query = db.Backups
-            .Include(x => x.SourceCluster)
-            .Include(x => x.Tables).ThenInclude(x => x.Shards)
-            .AsQueryable();
+        var query = includeTables
+            ? db.Backups.Include(x => x.SourceCluster).Include(x => x.Tables).ThenInclude(x => x.Shards).AsQueryable()
+            : db.Backups.Include(x => x.SourceCluster).AsQueryable();
 
         if (policyId is not null)
         {
@@ -120,13 +119,36 @@ public sealed class BackupApplicationService(
             query = query.Where(x => x.Tables.Any(t => t.Table == tableName || t.Database + "." + t.Table == tableName));
         }
 
-        return (await query.OrderByDescending(x => x.CreatedAt).Take(200).ToListAsync(cancellationToken))
-            .Select(BackupRestoreMapping.ToDto)
+        if (includeTables)
+        {
+            return (await query.OrderByDescending(x => x.CreatedAt).Take(200).ToListAsync(cancellationToken))
+                .Select(backup => BackupRestoreMapping.ToDto(backup))
+                .ToList();
+        }
+
+        var summaries = await query
+            .OrderByDescending(x => x.CreatedAt)
+            .Take(200)
+            .Select(x => new { Backup = x, TableCount = x.Tables.Count })
+            .ToListAsync(cancellationToken);
+        return summaries
+            .Select(x => BackupRestoreMapping.ToDto(x.Backup, x.TableCount, includeTables: false))
             .ToList();
     }
 
-    public async Task<BackupDto?> GetAsync(Guid id, CancellationToken cancellationToken = default) =>
-        await LoadAsync(id, cancellationToken) is { } backup ? BackupRestoreMapping.ToDto(backup) : null;
+    public async Task<BackupDto?> GetAsync(Guid id, bool includeTables = true, CancellationToken cancellationToken = default)
+    {
+        if (includeTables)
+        {
+            return await LoadAsync(id, cancellationToken) is { } backup ? BackupRestoreMapping.ToDto(backup) : null;
+        }
+
+        var summary = await db.Backups
+            .Where(x => x.Id == id)
+            .Select(x => new { Backup = x, TableCount = x.Tables.Count })
+            .FirstOrDefaultAsync(cancellationToken);
+        return summary is null ? null : BackupRestoreMapping.ToDto(summary.Backup, summary.TableCount, includeTables: false);
+    }
 
     public async Task<BackupDto?> PinAsync(Guid id, CancellationToken cancellationToken = default)
     {

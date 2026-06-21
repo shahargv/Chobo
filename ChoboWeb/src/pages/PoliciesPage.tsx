@@ -27,15 +27,17 @@ export function Policies() {
     setShowForm(true);
   };
   useEffect(() => {
-    if (!policyId || !policies.data) return;
+    if (!policyId || !policies.data || editing?.id === policyId) return;
     const policy = policies.data.find((item) => item.id === policyId);
     if (policy) editPolicy(policy);
-  }, [policyId, policies.data]);
+  }, [policyId, policies.data, editing?.id]);
   const policyErrors = validatePolicyDraft(draft);
+  const simulationSourceClusterId = useDebouncedValue(draft.sourceClusterId, 350);
+  const simulationSelector = useDebouncedValue(draft.selector, 350);
   const simulation = useQuery({
-    queryKey: ["policy-simulation", draft.sourceClusterId, draft.selector],
-    queryFn: () => api.simulatePolicy({ sourceClusterId: draft.sourceClusterId, selector: draft.selector }),
-    enabled: showForm && draft.sourceClusterId.length > 0,
+    queryKey: ["policy-simulation", simulationSourceClusterId, simulationSelector],
+    queryFn: () => api.simulatePolicy({ sourceClusterId: simulationSourceClusterId, selector: simulationSelector }),
+    enabled: showForm && simulationSourceClusterId.length > 0,
     retry: false
   });
   const reset = () => {
@@ -77,7 +79,7 @@ export function Policies() {
       setShowForm(true);
     }}><Save size={16} /> Add policy</button>}>
       <section className="panel">
-        <DataTable headers={["Name", "Mode", "Source", "Backup Storage", "Rules", "Retention", "Actions"]}>
+        <DataTable headers={["Name", "Mode", "Source", "Backup Storage", "Rules", "Retention", "Actions"]} isLoading={policies.isLoading}>
           {(policies.data ?? []).map((policy) => (
             <tr key={policy.id}>
               <td>{policy.name}{policy.isSystemDefault && <span className="chip">system</span>}</td>
@@ -152,17 +154,34 @@ function SelectorBuilder({ selector, hasSource, inventory, selected, isLoading, 
           {hasSource && isLoading && <span className="hint">Loading tables from ClickHouse...</span>}
           {hasSource && !isLoading && error && <span className="field-error">{error}</span>}
           {hasSource && !isLoading && !error && inventory.length === 0 && <span className="hint">No tables were returned by ClickHouse for this cluster.</span>}
-          {hasSource && !isLoading && !error && inventory.length > 0 && <>
-            <h4>Tables selected</h4>
-            <span className="hint">{selected.length} of {inventory.length} table(s) will be backed up.</span>
-            {selected.map((table) => <span className="chip" key={`${table.database}.${table.table}`}>{table.database}.{table.table}</span>)}
-          </>}
+          {hasSource && !isLoading && !error && inventory.length > 0 && <SelectedTablesPreview inventoryCount={inventory.length} selected={selected} />}
         </div>
       </div>
     </div>
   );
 }
 
+
+function useDebouncedValue<T>(value: T, delayMs: number) {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setDebounced(value), delayMs);
+    return () => window.clearTimeout(timeout);
+  }, [value, delayMs]);
+  return debounced;
+}
+export function SelectedTablesPreview({ inventoryCount, selected }: { inventoryCount: number; selected: Array<{ database: string; table: string }> }) {
+  const [showAll, setShowAll] = useState(false);
+  useEffect(() => setShowAll(false), [selected]);
+  const visible = showAll ? selected : selected.slice(0, 100);
+  const hiddenCount = selected.length - visible.length;
+  return <>
+    <h4>Tables selected</h4>
+    <span className="hint">{selected.length} of {inventoryCount} table(s) will be backed up.</span>
+    {visible.map((table) => <span className="chip" key={`${table.database}.${table.table}`}>{table.database}.{table.table}</span>)}
+    {hiddenCount > 0 && <span className="hint">Showing first {visible.length}; {hiddenCount} more matched table(s) are included. <button className="link-button" onClick={() => setShowAll(true)}>Show all</button></span>}
+  </>;
+}
 function PatternEditor({ label, pattern, onChange }: { label: string; pattern: { kind: PolicyMatchKind; value: string }; onChange: (pattern: { kind: PolicyMatchKind; value: string }) => void }) {
   return (
     <div className="pattern-editor">
@@ -207,8 +226,3 @@ function validatePolicyDraft(draft: UpsertPolicyRequest) {
   if (draft.selector.rules.length === 0) errors.push("Add at least one selector rule.");
   return errors;
 }
-
-
-
-
-
