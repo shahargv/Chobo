@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Ban, Play, RefreshCw, RotateCcw } from "lucide-react";
-import type { BackupDto, BackupPolicyDto, BackupRunStatus, BackupType } from "../api/generated";
+import type { BackupDto, BackupPolicyDto, BackupRunStatus, BackupTableDto, BackupTableShardDto, BackupType } from "../api/generated";
 import { useApi } from "../api-context";
 import { ConfirmDialog, DataTable, Detail, Drawer, Empty, Page, Select, Status } from "../components/ui";
 import { formatCompletionTime, formatTime } from "../utils/format";
@@ -123,17 +123,7 @@ function BackupDrawer({ backupId, onClose }: { backupId: string; onClose: () => 
         </div>
         <section className="detail-section detail-section-tables">
           <h3>Tables and shards</h3>
-          {current.contentMode === "SchemaOnly" ? <Empty text={`Schema-only backup captured ${current.tableCount} table schema${current.tableCount === 1 ? "" : "s"}; data backup execution was skipped.`} /> : <DataTable headers={["Table", "Engine", "Status", "Shards", "S3 path"]} isLoading={tableDetail.isLoading}>
-            {tableRows.map((table) => (
-              <tr key={table.id}>
-                <td>{table.database}.{table.table}</td>
-                <td>{table.engine}</td>
-                <td><Status value={table.status} /></td>
-                <td>{table.shards.length}</td>
-                <td className="mono wide-cell">{table.s3Path}</td>
-              </tr>
-            ))}
-          </DataTable>}
+          {current.contentMode === "SchemaOnly" ? <Empty text={`Schema-only backup captured ${current.tableCount} table schema${current.tableCount === 1 ? "" : "s"}; data backup execution was skipped.`} /> : <BackupTablesTable tableRows={tableRows} isLoading={tableDetail.isLoading} />}
         </section>
         <section className="detail-section detail-section-audit">
           <h3>Related audit</h3>
@@ -166,6 +156,81 @@ function BackupDrawer({ backupId, onClose }: { backupId: string; onClose: () => 
       </>}
     </Drawer>
   );
+}
+
+export function BackupTablesTable({ tableRows, isLoading }: { tableRows: BackupTableDto[]; isLoading: boolean }) {
+  return <DataTable headers={["Table", "Engine", "Status", "Shard progress", "S3 path"]} isLoading={isLoading}>
+    {tableRows.flatMap((table) => {
+      const progress = summarizeBackupShards(table.shards);
+      const rows = [
+        <tr key={table.id}>
+          <td>{table.database}.{table.table}</td>
+          <td>{table.engine}</td>
+          <td><Status value={table.status} /></td>
+          <td>{formatShardProgress(progress)}</td>
+          <td className="mono wide-cell">{table.s3Path}</td>
+        </tr>
+      ];
+
+      if (table.shards.length > 1) {
+        rows.push(...table.shards
+          .slice()
+          .sort((left, right) => left.sourceShardNumber - right.sourceShardNumber || left.replicaNumber - right.replicaNumber)
+          .map((shard) => (
+            <tr key={`${table.id}-${shard.id}`}>
+              <td className="shard-subrow">Shard {shard.sourceShardNumber}{shard.sourceShardName ? ` (${shard.sourceShardName})` : ""}</td>
+              <td>replica {shard.replicaNumber}</td>
+              <td><Status value={shard.status} /></td>
+              <td>{formatShardEndpoint(shard)}</td>
+              <td className="mono wide-cell">{shard.s3Path}</td>
+            </tr>
+          )));
+      }
+
+      return rows;
+    })}
+  </DataTable>;
+}
+
+export type BackupShardProgressSummary = {
+  shardCount: number;
+  queued: number;
+  running: number;
+  completed: number;
+  succeeded: number;
+  failed: number;
+  skipped: number;
+};
+
+export function summarizeBackupShards(shards: BackupTableShardDto[]): BackupShardProgressSummary {
+  const summary: BackupShardProgressSummary = { shardCount: shards.length, queued: 0, running: 0, completed: 0, succeeded: 0, failed: 0, skipped: 0 };
+  for (const shard of shards) {
+    if (shard.status === "Queued") summary.queued += 1;
+    if (shard.status === "Running") summary.running += 1;
+    if (shard.status === "Succeeded") summary.succeeded += 1;
+    if (shard.status === "Failed") summary.failed += 1;
+    if (shard.status === "Skipped") summary.skipped += 1;
+  }
+  summary.completed = summary.succeeded + summary.failed + summary.skipped;
+  return summary;
+}
+
+function formatShardProgress(progress: BackupShardProgressSummary) {
+  if (progress.shardCount === 0) return "0 shards";
+  if (progress.shardCount === 1) {
+    if (progress.running === 1) return "1 shard running";
+    if (progress.queued === 1) return "1 shard queued";
+    if (progress.succeeded === 1) return "1 shard completed";
+    if (progress.failed === 1) return "1 shard failed";
+    if (progress.skipped === 1) return "1 shard skipped";
+    return "1 shard";
+  }
+
+  return `${progress.shardCount} shards: ${progress.queued} queued, ${progress.running} running, ${progress.completed} completed`;
+}
+
+function formatShardEndpoint(shard: BackupTableShardDto) {
+  return `${shard.host}:${shard.port}${shard.useTls ? " tls" : ""}`;
 }
 
 function isBackupDeleted(backup: BackupDto) {

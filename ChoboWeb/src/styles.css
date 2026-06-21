@@ -518,6 +518,10 @@ pre, .token-box {
 }
 .detail-section-tables .table-wrap { min-height: 180px; }
 .detail-section-tables table { min-width: 1120px; }
+.detail-section-tables .shard-subrow {
+  color: var(--muted);
+  padding-left: 28px;
+}
 .detail-section-audit table { min-width: 1420px; }
 .detail-section-logs table { min-width: 1680px; }
 .detail-section-audit .table-wrap,
