@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, ArrowRight, RotateCcw } from "lucide-react";
 import type { InitiateRestoreRequest } from "../../api/generated";
 import { useApi } from "../../api-context";
-import { Page } from "../../components/ui";
+import { ConfirmDialog, Page } from "../../components/ui";
 import type { RestoreMappingDraft, RestoreStep } from "./restoreTypes";
 import { BackupChoiceStep, DestinationStep, ImpactSummary, RestoreStepper, ReviewStep, ScopeStep } from "./RestoreWizardSteps";
 import { getMissingPreserveTargetShards, getRequestedBackupId, getSourceShardOptions, getTargetShardOptions, isBackupRestorable, restoreTargetTableName, validateRestoreRequest, validateStep } from "./restoreUtils";
@@ -17,10 +17,11 @@ export function RestoreWizard() {
   const backups = useQuery({ queryKey: ["backups"], queryFn: () => api.backups() });
   const clusters = useQuery({ queryKey: ["clusters"], queryFn: () => api.clusters() });
   const [step, setStep] = useState<RestoreStep>(0);
-  const [request, setRequest] = useState<InitiateRestoreRequest>({ backupId: "", targetClusterId: "", append: false, allowSchemaMismatch: false, layout: "Preserve", schemaOnly: false });
+  const [request, setRequest] = useState<InitiateRestoreRequest>({ backupId: "", targetClusterId: "", append: false, allowSchemaMismatch: false, layout: "Preserve", schemaOnly: false, confirmDestructive: false });
   const [mappings, setMappings] = useState<RestoreMappingDraft[]>([]);
   const [selectedSourceShards, setSelectedSourceShards] = useState<number[]>([]);
   const [selectedTargetShards, setSelectedTargetShards] = useState<number[]>([]);
+  const [showConfirm, setShowConfirm] = useState(false);
   const requestedBackupId = getRequestedBackupId(location.state);
   const isRedistribute = (request.layout ?? "Preserve") === "Redistribute";
   const targetTopology = useQuery({
@@ -111,7 +112,7 @@ export function RestoreWizard() {
   });
 
   const mutation = useMutation({
-    mutationFn: () => api.initiateRestore(restoreRequest()),
+    mutationFn: () => api.initiateRestore({ ...restoreRequest(), confirmDestructive: true }),
     onSuccess: (restore) => {
       showToast({ kind: "success", text: "Restore queued. Opening details." });
       queryClient.setQueryData(["restore", restore.id], restore);
@@ -120,6 +121,12 @@ export function RestoreWizard() {
     },
     onError: (error) => showToast({ kind: "error", text: String(error) })
   });
+
+  const queueRestore = () => setShowConfirm(true);
+  const confirmRestore = () => {
+    setShowConfirm(false);
+    mutation.mutate();
+  };
 
   return (
     <Page title="Start restore" subtitle="Choose a backup, destination cluster, tables, and shard layout for a restore." action={<Link className="secondary" to="/restores"><ArrowLeft size={16} /> Restore history</Link>}>
@@ -136,11 +143,12 @@ export function RestoreWizard() {
             <button className="ghost" disabled={step === 0} onClick={() => setStep((current) => Math.max(0, current - 1) as RestoreStep)}><ArrowLeft size={16} /> Back</button>
             {step < 3
               ? <button className="primary" disabled={stepErrors.length > 0} onClick={() => setStep((current) => Math.min(3, current + 1) as RestoreStep)}>Continue <ArrowRight size={16} /></button>
-              : <button className="primary" disabled={restoreErrors.length > 0 || mutation.isPending} onClick={() => mutation.mutate()}><RotateCcw size={16} /> Queue restore</button>}
+              : <button className="primary" disabled={restoreErrors.length > 0 || mutation.isPending} onClick={queueRestore}><RotateCcw size={16} /> Queue restore</button>}
           </div>
         </div>
         <ImpactSummary backup={selectedBackup} targetClusterName={clusterById.get(request.targetClusterId)?.name ?? "Not selected"} request={request} mappings={selectedMappings} sourceShardOptions={sourceShardOptions} selectedSourceShards={selectedSourceShards} targetShardOptions={targetShardOptions} selectedTargetShards={selectedTargetShards} errors={restoreErrors} />
       </section>
+      {showConfirm && <ConfirmDialog title="Confirm destructive restore" message="Queue this restore? It may append data, allow schema mismatch, or write into an existing target table." confirmLabel="Confirm restore" busy={mutation.isPending} onConfirm={confirmRestore} onCancel={() => setShowConfirm(false)} />}
     </Page>
   );
 }

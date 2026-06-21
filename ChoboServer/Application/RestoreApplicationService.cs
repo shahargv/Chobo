@@ -176,6 +176,15 @@ public sealed class RestoreApplicationService(
             restore.Tables.Add(restoreTable);
         }
 
+        if (!request.ConfirmDestructive)
+        {
+            var destructiveReasons = await GetDestructiveRestoreReasonsAsync(restore, targetCluster, cancellationToken);
+            if (destructiveReasons.Count > 0)
+            {
+                throw new ArgumentException($"This restore includes destructive actions and requires ConfirmDestructive=true. {string.Join(" ", destructiveReasons)}");
+            }
+        }
+
         using var operationCorrelationScope = OperationCorrelationContext.Push(restore.Id.ToString());
         using var operationLogScope = LogContext.PushProperty("OperationId", restore.Id.ToString());
 
@@ -237,6 +246,39 @@ public sealed class RestoreApplicationService(
         var killResults = await KillRestoreOperationsAsync(restore, cancellationToken);
         await audit.RecordAsync("canceled", AuditEntityType.Restore, id.ToString(), new { operationId = id, actor.UserId, actor.ActorName, killed = killResults.Killed, killFailures = killResults.Failures });
         return BackupRestoreMapping.ToDto(restore);
+    }
+
+    private async Task<IReadOnlyList<string>> GetDestructiveRestoreReasonsAsync(RestoreEntity restore, ClickHouseClusterEntity targetCluster, CancellationToken cancellationToken)
+    {
+        var reasons = new List<string>();
+        foreach (var table in restore.Tables)
+        {
+            var tableName = $"{table.TargetDatabase}.{table.TargetTable}";
+            if (table.AllowSchemaMismatch)
+            {
+                reasons.Add($"Schema mismatch is allowed for {tableName}.");
+            }
+            if (table.Append)
+            {
+                reasons.Add($"Data will be appended to existing table {tableName}.");
+                continue;
+            }
+            if (table.SchemaOnly)
+            {
+                continue;
+            }
+
+            var endpoint = table.Shards.Count == 0
+                ? new ClickHouseNodeEndpoint(targetCluster.AccessNodes[0].Host, targetCluster.AccessNodes[0].Port, targetCluster.AccessNodes[0].UseTls)
+                : new ClickHouseNodeEndpoint(table.Shards[0].TargetHost, table.Shards[0].TargetPort, table.Shards[0].TargetUseTls);
+            var existing = await clickHouse.GetTableAsync(endpoint, targetCluster, table.TargetDatabase, table.TargetTable, cancellationToken);
+            if (existing is not null)
+            {
+                reasons.Add($"Target table {tableName} already exists.");
+            }
+        }
+
+        return reasons.Distinct(StringComparer.Ordinal).ToList();
     }
 
     private async Task<(int Killed, IReadOnlyList<string> Failures)> KillRestoreOperationsAsync(RestoreEntity restore, CancellationToken cancellationToken)

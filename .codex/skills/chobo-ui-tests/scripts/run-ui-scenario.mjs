@@ -35,7 +35,7 @@ const plans = {
   details: ['bootstrap', 'cluster', 'storage', 'policy', 'backup', 'restore', 'details'],
   'logs-audit': ['bootstrap', 'cluster', 'storage', 'policy', 'backup', 'restore', 'logs-audit'],
   failure: ['bootstrap', 'failure'],
-  full: ['bootstrap', 'cluster', 'storage', 'policy', 'schedule-edit', 'backup', 'schema-browser', 'restore', 'logs-audit']
+  full: ['bootstrap', 'cluster', 'storage', 'policy', 'schedule-edit', 'backup', 'schema-browser', 'restore', 'logs-audit', 'backup-delete-confirmation']
 };
 
 function parseArgs(argv) {
@@ -172,6 +172,15 @@ async function main() {
   async function clickButton(name, options = {}) {
     const button = page.getByRole('button', { name });
     await button.first().click(options);
+  }
+
+  async function createExistingRestoreTarget() {
+    if (!env.ComposeFile || !env.ProjectName) {
+      throw new Error('Restore destructive-confirmation scenario requires ComposeFile and ProjectName to pre-create the restore target table.');
+    }
+    const query = `CREATE DATABASE IF NOT EXISTS ${data.restore.database}; CREATE TABLE IF NOT EXISTS ${data.restore.database}.${data.restore.table} (id UInt32, name String) ENGINE = MergeTree ORDER BY id`;
+    await execFileAsync('docker', ['compose', '-f', env.ComposeFile, '-p', env.ProjectName, 'exec', '-T', 'clickhouse-restore', 'clickhouse-client', '--multiquery', '-q', query], { cwd: env.RepoRoot, timeout: 30000 });
+    notes.push({ status: 'pass', text: `Pre-created ${data.restore.database}.${data.restore.table} so the restore confirmation covers an existing target table with append enabled.` });
   }
 
   async function controlByLabel(label, controlSelector = 'input,select,textarea') {
@@ -385,8 +394,10 @@ async function main() {
     await go('/schema');
     await expectText(/Schema Browser|Backup/i, 30000);
     await screenshot('schema-browser-empty-or-loading', 'Schema Browser tab is reachable and shows the backup selector before a backup is selected.');
-    const backupSelect = await controlByLabel('Backup', 'select');
-    await backupSelect.selectOption(state.backupId);
+    const backupSelect = page.locator('label select').nth(1);
+    await page.waitForFunction((select) => Array.from(select.options).some((option) => option.value), await backupSelect.elementHandle(), { timeout: 30000 });
+    const optionValues = await backupSelect.locator('option').evaluateAll((options) => options.map((option) => option.value).filter(Boolean));
+    await backupSelect.selectOption(optionValues.includes(state.backupId) ? state.backupId : optionValues[0]);
     await expectText(data.policy.database, 30000);
     await expectText(data.policy.table, 30000);
     await page.getByRole('button', { name: new RegExp(data.policy.table) }).first().click();
@@ -405,6 +416,7 @@ async function main() {
     notes.push({ status: 'pass', text: 'Schema Browser export buttons produced downloadable SQL files for all schema and the selected database.' });
   }
   async function runRestore() {
+    await createExistingRestoreTarget();
     await go('/restores/start');
     await page.locator('input[type="radio"]').first().check();
     await screenshot('restore-source-backup', 'Restore wizard starts by choosing the successful backup recovery point.');
@@ -418,19 +430,65 @@ async function main() {
     await mappingRow.locator('input[type="checkbox"]').first().check();
     await mappingRow.locator('input').nth(1).fill(data.restore.database);
     await mappingRow.locator('input').nth(2).fill(data.restore.table);
-    await screenshot('restore-scope-mapping', 'Restore scope selects the backed-up table and maps it to the expected restore table.');
+    await mappingRow.getByLabel(/Append to existing table/i).check();
+    await screenshot('restore-scope-mapping', 'Restore scope maps into a pre-existing target table and enables append, making this a destructive restore path.');
     await clickButton(/Continue/i);
-    await screenshot('restore-review', 'Restore review summarizes target, layout, table mapping, and risk options before queueing.');
+    await screenshot('restore-confirmation-ready', 'Restore review is ready; clicking Queue restore must show a visible destructive-action confirmation.');
     await clickButton(/Queue restore/i);
+    const dialog = page.getByRole('dialog', { name: /Confirm destructive restore/i });
+    await dialog.waitFor({ timeout: 10000 });
+    await screenshot('restore-confirmation-dialog', 'Visible in-app confirmation dialog is shown before appending into an existing restore table.');
+    await dialog.getByRole('button', { name: /Confirm restore/i }).click();
     await expectText(/Restore detail|Restores/i, 30000);
     const restore = await waitForStatus('restores', 'Succeeded', 120000);
     state.restoreId = restore.id;
     await go('/restores');
-    await screenshot('restore-succeeded-list', 'Restore history shows the restore succeeded.');
+    await screenshot('restore-succeeded-list', 'Restore history shows the destructive restore succeeded after confirmation.');
     await page.getByRole('link', { name: /Details/i }).first().click();
     await expectText(/Restore detail|Tables|Succeeded/i, 30000);
     await screenshot('restore-details', 'Restore detail page exposes terminal status and affected tables.');
     await verifyRestoredRows();
+  }
+
+  async function runBackupDeleteConfirmation() {
+    if (!state.backupId) {
+      const backups = await api('GET', 'backups');
+      state.backupId = backups[0]?.id ?? null;
+    }
+    if (!state.backupId) throw new Error('Backup delete confirmation scenario requires a completed backup id.');
+    await go('/backups');
+    const row = page.locator('tbody tr').filter({ has: page.getByRole('button', { name: /^Delete$/i }) }).first();
+    await row.waitFor({ timeout: 30000 });
+    await screenshot('backup-delete-confirmation-ready', 'Backup row is ready; clicking Delete must show a visible destructive-action confirmation before the API request is sent.');
+    await row.getByRole('button', { name: /^Delete$/i }).click();
+    let dialog = page.getByRole('dialog', { name: /Delete backup/i });
+    await dialog.waitFor({ timeout: 10000 });
+    await screenshot('backup-delete-confirmation-dialog-cancel', 'Visible in-app delete confirmation dialog is shown before deleting backup data.');
+    await dialog.getByRole('button', { name: /Cancel/i }).click();
+    await page.waitForTimeout(500);
+    const afterDismiss = await api('GET', `backups/${state.backupId}`);
+    if (/DeleteRequested|Deleted/.test(afterDismiss.status)) {
+      throw new Error(`Backup delete proceeded after confirmation was canceled. Status: ${afterDismiss.status}`);
+    }
+    await screenshot('backup-delete-canceled', 'Canceling the delete confirmation leaves the backup undeleted.');
+
+    await row.getByRole('button', { name: /^Delete$/i }).click();
+    dialog = page.getByRole('dialog', { name: /Delete backup/i });
+    await dialog.waitFor({ timeout: 10000 });
+    await screenshot('backup-delete-confirmation-dialog-confirm', 'Visible in-app delete confirmation dialog is shown before the confirmed destructive API request.');
+    await dialog.getByRole('button', { name: /Delete backup/i }).click();
+    const deadline = Date.now() + 30000;
+    let deleted = null;
+    while (Date.now() < deadline) {
+      deleted = await api('GET', `backups/${state.backupId}`);
+      if (/DeleteRequested|Deleted/.test(deleted.status)) break;
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    if (!deleted || !/DeleteRequested|Deleted/.test(deleted.status)) {
+      throw new Error(`Backup delete was not requested after confirmation. Last status: ${deleted?.status}`);
+    }
+    await go('/backups');
+    await screenshot('backup-delete-confirmed', 'Accepting the delete confirmation sends confirmDestructive and the backup enters a delete state.');
   }
 
   async function verifyRestoredRows() {
@@ -494,6 +552,7 @@ async function main() {
       else if (step === 'restore') await runRestore();
       else if (step === 'details') await runDetails();
       else if (step === 'logs-audit') await runLogsAudit();
+      else if (step === 'backup-delete-confirmation') await runBackupDeleteConfirmation();
       else if (step === 'failure') await runFailure();
     }
     await writeArtifacts('passed');

@@ -773,3 +773,56 @@ pre, .token-box {
   .schema-browser-grid, .detail-list.compact { grid-template-columns: 1fr; }
   .schema-sql { min-height: 260px; }
 }
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(20, 31, 44, .42);
+}
+.confirm-dialog {
+  width: min(520px, 100%);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px;
+  padding: 18px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #fff;
+  box-shadow: 0 18px 50px rgba(20, 31, 44, .24);
+}
+.confirm-icon {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: #e7f3f6;
+  color: var(--accent-strong);
+}
+.confirm-icon.danger {
+  background: #fde3df;
+  color: var(--bad);
+}
+.confirm-content {
+  display: grid;
+  gap: 10px;
+}
+.confirm-content h2 {
+  margin: 0;
+  font-size: 18px;
+}
+.confirm-content p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
