@@ -101,7 +101,27 @@ export function SchemaBrowserPage() {
 }
 
 function SchemaSql({ table }: { table: SchemaTableDto }) {
-  return <pre className="schema-sql"><code>{table.createTableSql}</code></pre>;
+  const [formattedSql, setFormattedSql] = useState(table.createTableSql);
+
+  useEffect(() => {
+    let isCurrent = true;
+    setFormattedSql(table.createTableSql);
+    void formatSchemaSql(table.createTableSql).then((sql) => {
+      if (isCurrent) setFormattedSql(sql);
+    });
+    return () => { isCurrent = false; };
+  }, [table.createTableSql]);
+
+  return <pre className="schema-sql"><code>{formattedSql}</code></pre>;
+}
+
+async function formatSchemaSql(sql: string) {
+  try {
+    const { format } = await import("sql-formatter");
+    return format(sql, { language: "clickhouse", tabWidth: 2, expressionWidth: 40 });
+  } catch {
+    return sql;
+  }
 }
 
 function downloadText(fileName: string, text: string) {
