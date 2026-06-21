@@ -7,6 +7,7 @@ export function InstallScreen({ onInstall }: { onInstall: () => Promise<InstallR
   const [installed, setInstalled] = useState<InstallResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState<string | null>(null);
 
   const install = async () => {
     setInstalling(true);
@@ -22,9 +23,15 @@ export function InstallScreen({ onInstall }: { onInstall: () => Promise<InstallR
 
   const copyToken = async () => {
     if (!installed) return;
-    await navigator.clipboard.writeText(installed.accessToken);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 2500);
+    setCopyError(null);
+    try {
+      await copyTextToClipboard(installed.accessToken);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2500);
+    } catch {
+      setCopied(false);
+      setCopyError("Could not copy the token. Select it and copy it manually.");
+    }
   };
 
   if (installed) {
@@ -39,6 +46,7 @@ export function InstallScreen({ onInstall }: { onInstall: () => Promise<InstallR
             <button className="secondary" type="button" onClick={copyToken}><Clipboard size={16} /> {copied ? "Copied" : "Copy token"}</button>
             <button className="primary" type="button" onClick={() => window.location.reload()}><Check size={16} /> Ready to start</button>
           </div>
+          {copyError && <div className="field-error">{copyError}</div>}
           <p className="install-note">Keep it in a password manager. After this screen, sign in with the token above.</p>
         </section>
       </div>
@@ -56,4 +64,37 @@ export function InstallScreen({ onInstall }: { onInstall: () => Promise<InstallR
       </section>
     </div>
   );
+}
+
+export async function copyTextToClipboard(text: string) {
+  if (navigator.clipboard?.writeText && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // Fall back for browsers that expose the API but deny writes in this context.
+    }
+  }
+
+  if (copyTextWithTextArea(text)) return;
+
+  throw new Error("Clipboard copy failed.");
+}
+
+function copyTextWithTextArea(text: string) {
+  const textArea = document.createElement("textarea");
+  textArea.value = text;
+  textArea.setAttribute("readonly", "");
+  textArea.style.position = "fixed";
+  textArea.style.top = "0";
+  textArea.style.left = "-9999px";
+  document.body.appendChild(textArea);
+  textArea.focus();
+  textArea.select();
+
+  try {
+    return document.execCommand("copy");
+  } finally {
+    document.body.removeChild(textArea);
+  }
 }
