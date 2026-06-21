@@ -2,7 +2,6 @@
 
 ChoboServer reads configuration from `appsettings.json`, optional environment-specific appsettings files, `CHOBO_APPSETTINGS_PATH`, environment variables, and command-line arguments.
 
-Runtime services use typed options under `ChoboServer/Options`.
 
 ## Configuration Sources
 
@@ -10,7 +9,6 @@ Default appsettings:
 
 ```text
 ChoboServer/appsettings.json
-ChoboServer/appsettings.Development.json
 ```
 
 Optional external settings file:
@@ -42,7 +40,7 @@ When `CHOBO_APPSETTINGS_PATH` is set, Chobo also adds standard environment varia
 
 `Chobo:Init:AdminUser` and `Chobo:Init:AccessToken` bootstrap the first user and access token when the database is initialized.
 
-If the data directory contains the `_initialized` marker but `chobo.db` is missing, Chobo treats this as a local SQLite loss scenario. It starts with a fresh SQLite database and fresh local encrypted credential state, writes a warning log, and bootstraps the configured initial admin/token again. Backup metadata is not imported automatically; add an S3 target and run `ChoboCli backups recover` to rebuild backup records from storage manifests.
+If the data directory contains the `_initialized` marker but `chobo.db` is missing, Chobo treats this as a local SQLite loss scenario. It starts with a fresh SQLite database and writes a warning log. Stored credentials must be re-entered. Backup metadata is not imported automatically; add an S3 target and run `ChoboCli backups recover` to rebuild backup records from storage manifests.
 
 Environment aliases:
 
@@ -192,18 +190,7 @@ CHOBO_SQLITE_SELF_BACKUP_POLL_INTERVAL
 ```
 
 
-## Local Debug Endpoint Rewrites
 
-When `ChoboServer` runs on the host machine while ClickHouse and MinIO run in Docker Compose, some addresses have two valid forms:
-
-- the host-running server reaches ClickHouse through published ports such as `localhost:18111`;
-- ClickHouse topology can report Docker DNS names such as `clickhouse-cluster-s1-r1:9000`;
-- the host-running server stores and tests MinIO through `http://localhost:9000`;
-- ClickHouse `BACKUP` and `RESTORE` SQL running inside the container reaches MinIO through `http://minio:9000`.
-
-`Chobo:EndpointRewrites` translates those boundaries without changing stored production configuration. `ClickHouse` rules rewrite each reported ClickHouse node before the server connects to that node. `S3ForClickHouse` rules rewrite S3 object URLs only when embedding them in ClickHouse `BACKUP`/`RESTORE` SQL; normal server-side S3 operations still use the target endpoint as configured.
-
-`ChoboServer/appsettings.Development.json` includes mappings for `resources/debug/docker-compose.yml`, including the single-node ClickHouse service and each cluster replica. It also stores local development data and logs under `C:/tmp/Chobo` instead of the repository.
 ## Serilog
 
 Default production logging writes to console and rolling files:
@@ -232,9 +219,6 @@ Chobo also writes application logs into SQLite through its application log sink.
 ChoboCli logs show --last 500
 ```
 
-## Test Hooks
-
-`Chobo:TestHooks:Enabled` and `CHOBO_TEST_HOOKS_ENABLED` are for test scenarios. Leave test hooks disabled in production.
 
 ## Configuration Example
 

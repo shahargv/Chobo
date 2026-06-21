@@ -1,16 +1,16 @@
-# Chobo - ClickHouse Backups Orchestrator 
+# Chobo - ClickHouse Backup and Restore Orchestrator 
 
 Chobo is for DBAs who run ClickHouse clusters and need backups they can schedule, inspect, and restore without building their own orchestration. Add your ClickHouse cluster, add your S3-compatible backup storage, create a backup policy, then run it manually or on a schedule from the web UI or CLI.
 
 ## Screenshots
 
-![Dashboard showing running work and upcoming schedules](docs/assets/readme/dashboard.png)
+![Dashboard showing running work and upcoming schedules](docs/user/assets/readme/dashboard.png)
 
-![Backup details with table, shard, log, and audit context](docs/assets/readme/backup-detail.png)
+![Backup details with table, shard, log, and audit context](docs/user/assets/readme/backup-detail.png)
 
-![Schema browser showing captured ClickHouse DDL](docs/assets/readme/schema-browser.png)
+![Schema browser showing a selected backup and captured CREATE TABLE SQL](docs/user/assets/readme/schema-browser.png)
 
-![Restore workflow and restore details](docs/assets/readme/restore-workflow.png)
+![Restore details showing a succeeded restore](docs/user/assets/restores/restore-details.png)
 
 ## Start Using Chobo
 
@@ -46,7 +46,11 @@ Open `http://localhost:8080` and complete the first-run setup.
 
 Then follow:
 
-- [Production setup](docs/ProductionSetup.md)
-- [Configuration](docs/Configuration.md)
-- [Setting up backups](docs/Backups.md)
-- [Restoring](docs/Restoring.md)
+- [Installation](docs/user/Installation.md)
+- [Onboarding and initial configuration](docs/user/Onboarding.md)
+- [Policies and scheduling](docs/user/PoliciesAndScheduling.md)
+- [Backups](docs/user/Backups.md)
+- [Restores](docs/user/Restores.md)
+- [Security](docs/user/Security.md)
+
+Developer material is kept separately under [developer documentation](docs/developer/README.md).
