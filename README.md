@@ -21,6 +21,29 @@ docker pull shahargv/chobo:server-latest
 docker pull shahargv/chobo:cli-latest
 ```
 
+Create a persistent data volume and a stable 32-byte encryption key:
+
+```bash
+docker volume create chobo-data
+export CHOBO_ENCRYPTION_KEY_BASE64="$(openssl rand -base64 32)"
+```
+
+Run ChoboServer on port `8080` with its data directory mounted:
+
+```bash
+docker run -d \
+  --name chobo-server \
+  --restart unless-stopped \
+  -p 8080:8080 \
+  -v chobo-data:/var/lib/chobo \
+  -e ASPNETCORE_URLS=http://0.0.0.0:8080 \
+  -e CHOBO_DATA_DIRECTORY=/var/lib/chobo \
+  -e CHOBO_ENCRYPTION_KEY_BASE64="$CHOBO_ENCRYPTION_KEY_BASE64" \
+  shahargv/chobo:server-latest
+```
+
+Open `http://localhost:8080` and complete the first-run setup.
+
 Then follow:
 
 - [Production setup](docs/ProductionSetup.md)
