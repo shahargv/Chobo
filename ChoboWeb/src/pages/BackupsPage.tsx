@@ -4,7 +4,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { Ban, Play, RefreshCw, RotateCcw } from "lucide-react";
 import type { BackupDto, BackupPolicyDto, BackupRunStatus, BackupType } from "../api/generated";
 import { useApi } from "../api-context";
-import { DataTable, Detail, Drawer, Empty, Page, Select, Status } from "../components/ui";
+import { ConfirmDialog, DataTable, Detail, Drawer, Empty, Page, Select, Status } from "../components/ui";
 import { formatCompletionTime, formatTime } from "../utils/format";
 import { isBackupStatusRestorable } from "./restores/restoreUtils";
 
@@ -14,6 +14,7 @@ export function Backups() {
   const navigate = useNavigate();
   const [selectedBackupId, setSelectedBackupId] = useState<string | null>(backupId ?? null);
   const [showManual, setShowManual] = useState(false);
+  const [deleteBackupId, setDeleteBackupId] = useState<string | null>(null);
   const backups = useQuery({ queryKey: ["backups"], queryFn: () => api.backups() });
   const schedules = useQuery({ queryKey: ["schedules"], queryFn: () => api.schedules() });
   const policies = useQuery({ queryKey: ["policies"], queryFn: () => api.policies() });
@@ -24,7 +25,7 @@ export function Backups() {
   }, [backupId]);
   const mutation = useMutation({
     mutationFn: ({ id, action }: { id: string; action: "pin" | "unpin" | "delete" | "cancel" }) =>
-      action === "pin" ? api.pinBackup(id) : action === "unpin" ? api.unpinBackup(id) : action === "cancel" ? api.cancelBackup(id) : api.deleteBackup(id),
+      action === "pin" ? api.pinBackup(id) : action === "unpin" ? api.unpinBackup(id) : action === "cancel" ? api.cancelBackup(id) : api.deleteBackup(id, false, true),
     onSuccess: () => { backups.refetch(); showToast({ kind: "success", text: "Backup updated." }); },
     onError: (error) => showToast({ kind: "error", text: String(error) })
   });
@@ -47,12 +48,13 @@ export function Backups() {
                 <Link className="ghost" to={`/backups/${backup.id}`}>Details</Link>
                 {!isBackupDeleted(backup) && <button className="ghost" onClick={() => mutation.mutate({ id: backup.id, action: backup.isPinned ? "unpin" : "pin" })}>{backup.isPinned ? "Unpin" : "Pin"}</button>}
                 {isBackupInExecutionPhase(backup.status) && <button className="danger" onClick={() => mutation.mutate({ id: backup.id, action: "cancel" })}><Ban size={16} /> Cancel</button>}
-                {!isBackupDeleted(backup) && <button className="danger" onClick={() => mutation.mutate({ id: backup.id, action: "delete" })}>Delete</button>}
+                {!isBackupDeleted(backup) && <button className="danger" onClick={() => setDeleteBackupId(backup.id)}>Delete</button>}
               </td>
             </tr>
           ))}
         </DataTable>
       </section>
+      {deleteBackupId && <ConfirmDialog title="Delete backup" message="Delete this backup and its stored backup data?" confirmLabel="Delete backup" busy={mutation.isPending} onCancel={() => setDeleteBackupId(null)} onConfirm={() => { mutation.mutate({ id: deleteBackupId, action: "delete" }); setDeleteBackupId(null); }} />}
       {selectedBackupId && <BackupDrawer backupId={selectedBackupId} onClose={() => { setSelectedBackupId(null); navigate("/backups"); }} />}
     </Page>
   );

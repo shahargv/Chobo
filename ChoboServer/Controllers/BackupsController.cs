@@ -58,11 +58,11 @@ public sealed class BackupsController(
         catch (ArgumentException ex) { return BadRequest(new ErrorResponse(ex.Message)); }
     }
     [HttpDelete("backups/{id:guid}")]
-    public async Task<ActionResult<BackupDto>> Delete(Guid id, [FromQuery] bool force, CancellationToken cancellationToken)
+    public async Task<ActionResult<BackupDto>> Delete(Guid id, [FromQuery] bool force, [FromQuery] bool confirmDestructive, CancellationToken cancellationToken)
     {
         try
         {
-            var result = await backups.RequestDeleteAsync(id, force, cancellationToken);
+            var result = await backups.RequestDeleteAsync(id, force, confirmDestructive, cancellationToken);
             return result is null ? NotFound() : result;
         }
         catch (ArgumentException ex) { return BadRequest(new ErrorResponse(ex.Message)); }

@@ -129,7 +129,7 @@ Use the UI-generated cron expression and verify the UI says it is valid and show
 - Target database: `backup_single_restore`
 - Target table: `restored_orders`
 - Mode: Schema + data
-- Append: false
+- Append: false for a normal restore; true when testing destructive confirmation against a pre-created target table
 - Allow schema mismatch: false
 
 ## Optional Sharded Values

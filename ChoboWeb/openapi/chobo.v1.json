@@ -348,6 +348,13 @@
             "schema": {
               "type": "boolean"
             }
+          },
+          {
+            "name": "confirmDestructive",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -4662,6 +4669,9 @@
               "format": "int32"
             },
             "nullable": true
+          },
+          "confirmDestructive": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false

@@ -296,6 +296,7 @@ public sealed class BackupRestoreExecutionTests
         Assert.DoesNotContain(summaries, x => x.Id == deletedBackupId);
         Assert.DoesNotContain(summaries, x => x.Id == oldBackupId);
     }
+
     [Fact]
     public async Task Incremental_backup_uses_parent_full_table_and_falls_back_to_full_for_new_table()
     {
@@ -789,7 +790,7 @@ public sealed class BackupRestoreExecutionTests
         var actor = fixture.Services.GetRequiredService<ActorContext>();
         actor.ActorName = "operator";
         actor.UserId = Guid.NewGuid();
-        var dto = await fixture.Services.GetRequiredService<BackupApplicationService>().RequestDeleteAsync(backup.Id);
+        var dto = await fixture.Services.GetRequiredService<BackupApplicationService>().RequestDeleteAsync(backup.Id, confirmDestructive: true);
 
         Assert.NotNull(dto);
         Assert.Equal(BackupRunStatus.ManualDeleteRequested, dto!.Status);
@@ -797,6 +798,21 @@ public sealed class BackupRestoreExecutionTests
         Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "delete-requested" && x.EntityId == backup.Id.ToString()));
     }
 
+    [Fact]
+    public async Task Manual_delete_requires_destructive_confirmation()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Succeeded, "backup-op", true)
+        ]);
+        backup.Status = BackupRunStatus.Succeeded;
+        await fixture.Db.SaveChangesAsync();
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(() => fixture.Services.GetRequiredService<BackupApplicationService>().RequestDeleteAsync(backup.Id));
+
+        Assert.Contains("ConfirmDestructive=true", error.Message);
+        Assert.Equal(BackupRunStatus.Succeeded, (await fixture.Db.Backups.SingleAsync(x => x.Id == backup.Id)).Status);
+    }
     [Fact]
     public async Task Background_cleanup_deletes_manual_request_and_keeps_records()
     {
@@ -978,9 +994,9 @@ public sealed class BackupRestoreExecutionTests
         var incremental = await fixture.SeedDependentIncrementalAsync(policy.Id, full, DateTimeOffset.UtcNow.AddHours(-1), isPinned: true);
 
         var service = fixture.Services.GetRequiredService<BackupApplicationService>();
-        await Assert.ThrowsAsync<ArgumentException>(() => service.RequestDeleteAsync(full.Id));
+        await Assert.ThrowsAsync<ArgumentException>(() => service.RequestDeleteAsync(full.Id, confirmDestructive: true));
 
-        await service.RequestDeleteAsync(full.Id, force: true);
+        await service.RequestDeleteAsync(full.Id, force: true, confirmDestructive: true);
         fixture.Db.ChangeTracker.Clear();
         Assert.Equal(BackupRunStatus.ManualDeleteRequested, (await fixture.Db.Backups.SingleAsync(x => x.Id == full.Id)).Status);
         Assert.Equal(BackupRunStatus.ManualDeleteRequested, (await fixture.Db.Backups.SingleAsync(x => x.Id == incremental.Id)).Status);
@@ -1053,6 +1069,7 @@ public sealed class BackupRestoreExecutionTests
         Assert.Contains(backup.Tables.Single().S3Path, fixture.StorageDeletion.DeletedDirectories);
         Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "backup-cleanup-succeeded" && x.EntityId == backup.Id.ToString()));
     }
+
     [Fact]
     public async Task Garbage_collector_deletes_failed_incremental_without_deleting_parent_full()
     {
@@ -1173,6 +1190,56 @@ public sealed class BackupRestoreExecutionTests
         }
     }
 
+    [Fact]
+    public async Task Restore_with_schema_mismatch_allowed_requires_destructive_confirmation()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Succeeded, "backup-op", true)
+        ]);
+        backup.Status = BackupRunStatus.Succeeded;
+        await fixture.Db.SaveChangesAsync();
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(() => fixture.Services.GetRequiredService<RestoreApplicationService>().InitiateAsync(new InitiateRestoreRequest(
+            backup.Id,
+            fixture.TargetClusterId,
+            null,
+            null,
+            "restored",
+            "orders_copy",
+            false,
+            true)));
+
+        Assert.Contains("ConfirmDestructive=true", error.Message);
+        Assert.Contains("Schema mismatch", error.Message);
+        Assert.False(await fixture.Db.Restores.AnyAsync());
+    }
+
+    [Fact]
+    public async Task Restore_to_existing_target_table_requires_destructive_confirmation()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Succeeded, "backup-op", true)
+        ]);
+        backup.Status = BackupRunStatus.Succeeded;
+        await fixture.Db.SaveChangesAsync();
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(() => fixture.Services.GetRequiredService<RestoreApplicationService>().InitiateAsync(new InitiateRestoreRequest(
+            backup.Id,
+            fixture.TargetClusterId,
+            null,
+            null,
+            null,
+            null,
+            false,
+            false)));
+
+        Assert.Contains("ConfirmDestructive=true", error.Message);
+        Assert.Contains("already exists", error.Message);
+        Assert.False(await fixture.Db.Restores.AnyAsync());
+    }
     [Fact]
     public async Task Restore_can_select_multiple_tables_with_target_mappings()
     {
@@ -1430,6 +1497,7 @@ public sealed class BackupRestoreExecutionTests
             TargetShards: [2, 2])));
         Assert.Contains("TargetShards must not contain duplicates", error.Message);
     }
+
     [Fact]
     public async Task Restore_table_mappings_can_override_table_options()
     {
@@ -1454,7 +1522,8 @@ public sealed class BackupRestoreExecutionTests
             Tables: [
                 new RestoreTableMappingRequest(tables[0].Id, "restored", "items_schema", SchemaOnly: true),
                 new RestoreTableMappingRequest(tables[1].Id, "restored", "orders_append", Append: true, AllowSchemaMismatch: true)
-            ]));
+            ],
+            ConfirmDestructive: true));
 
         var schemaOnly = Assert.Single(restore.Tables, x => x.SourceTable == "items");
         Assert.True(schemaOnly.SchemaOnly);
@@ -1546,6 +1615,7 @@ public sealed class BackupRestoreExecutionTests
         Assert.Contains(operationAudits.Items, x => x.Action == "table-succeeded");
         Assert.All(operationAudits.Items, x => Assert.Equal(backupId.ToString(), x.Details.GetProperty("operationId").GetString()));
     }
+
     [Fact]
     public async Task Operation_id_is_persisted_before_backup_polling_finishes()
     {
@@ -1843,10 +1913,10 @@ public sealed class BackupRestoreExecutionTests
         public Task<IReadOnlyList<string>> GetClusterNamesAsync(ClickHouseClusterEntity cluster, CancellationToken cancellationToken) =>Task.FromResult<IReadOnlyList<string>>(["test_cluster"]);
 
         public Task<ClickHouseTableInfo?> GetTableAsync(ClickHouseClusterEntity cluster, string database, string table, CancellationToken cancellationToken) =>
-            Task.FromResult<ClickHouseTableInfo?>(null);
+            Task.FromResult(Inventory.FirstOrDefault(x => x.Database == database && x.Table == table));
 
         public Task<ClickHouseTableInfo?> GetTableAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string database, string table, CancellationToken cancellationToken) =>
-            GetTableAsync(cluster, database, table, cancellationToken);
+            Task.FromResult((InventoryByEndpoint.TryGetValue(EndpointKey(endpoint), out var inventory) ? inventory : Inventory).FirstOrDefault(x => x.Database == database && x.Table == table));
 
         public Task ExecuteAsync(ClickHouseClusterEntity cluster, string sql, CancellationToken cancellationToken)
         {

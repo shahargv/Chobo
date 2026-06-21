@@ -115,7 +115,7 @@ export class ChoboApiClient {
   manualBackup(request: ManualBackupRequest) { return this.post<BackupDto>("backups/manual", request); }
   pinBackup(id: string) { return this.post<BackupDto>(`backups/${id}/pin`, {}); }
   unpinBackup(id: string) { return this.post<BackupDto>(`backups/${id}/unpin`, {}); }
-  deleteBackup(id: string, force = false) { return this.delete<BackupDto>(`backups/${id}${force ? "?force=true" : ""}`); }
+  deleteBackup(id: string, force = false, confirmDestructive = false) { return this.delete<BackupDto>(`backups/${id}${query({ force: force ? true : undefined, confirmDestructive: confirmDestructive ? true : undefined })}`); }
   cancelBackup(id: string) { return this.post<BackupDto>(`backups/${id}/cancel`, {}); }
   recoverBackupFromPath(request: RecoverBackupMetadataFromPathRequest) { return this.post<BackupMetadataRecoveryResult>("backups/recover/from-path", request); }
   recoverBackupFromScan(request: RecoverBackupMetadataScanRequest) { return this.post<BackupMetadataRecoveryResult>("backups/recover/scan", request); }
@@ -181,7 +181,7 @@ export class ChoboApiClient {
   }
 }
 
-function query(values: Record<string, string | number | undefined | null>) {
+function query(values: Record<string, string | number | boolean | undefined | null>) {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(values)) {
     if (value !== undefined && value !== null && `${value}` !== "") params.set(key, `${value}`);
