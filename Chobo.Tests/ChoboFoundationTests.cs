@@ -897,6 +897,77 @@ public sealed class ChoboFoundationTests
     }
 
     [Fact]
+    public async Task Backup_api_summarizes_schema_only_1000_table_backup_without_loading_tables()
+    {
+        await using var factory = CreateFactory();
+        var client = AuthenticatedClient(factory);
+        Guid backupId;
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+            var cluster = new ClickHouseClusterEntity
+            {
+                Name = "large-source",
+                Mode = ClusterMode.SingleInstance,
+                AccessNodes = [new ClickHouseAccessNodeEntity { Host = "localhost", Port = 9000 }]
+            };
+            var backup = new BackupEntity
+            {
+                TriggerType = BackupTriggerType.Manual,
+                Status = BackupRunStatus.Succeeded,
+                BackupType = BackupType.Full,
+                ContentMode = BackupContentMode.SchemaOnly,
+                SourceCluster = cluster,
+                CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-1),
+                StartedAt = DateTimeOffset.UtcNow.AddMinutes(-1),
+                CompletedAt = DateTimeOffset.UtcNow
+            };
+            for (var i = 0; i < 1000; i++)
+            {
+                var tableName = $"table_{i:0000}";
+                backup.Tables.Add(new BackupTableEntity
+                {
+                    Database = "large_schema",
+                    Table = tableName,
+                    Engine = "MergeTree",
+                    DataBackedUp = false,
+                    Status = BackupTableStatus.Succeeded,
+                    ClickHouseStatus = "SCHEMA_ONLY",
+                    CompletedAt = backup.CompletedAt,
+                    S3Path = $"schema-only/large_schema/{tableName}",
+                    SchemaDefinition = new SchemaDefinitionEntity
+                    {
+                        SchemaHash = $"large_schema.{tableName}.schema",
+                        Database = "large_schema",
+                        Table = tableName,
+                        Engine = "MergeTree",
+                        CreateTableSql = $"CREATE TABLE large_schema.{tableName} (id UInt64) ENGINE = MergeTree ORDER BY id",
+                        ColumnsJson = "[]"
+                    }
+                });
+            }
+
+            db.Backups.Add(backup);
+            await db.SaveChangesAsync();
+            backupId = backup.Id;
+        }
+
+        var list = await client.GetFromJsonAsync<List<BackupDto>>("/api/v1/backups?includeTables=false", JsonOptions);
+        var summary = await client.GetFromJsonAsync<BackupDto>($"/api/v1/backups/{backupId}?includeTables=false", JsonOptions);
+        var detail = await client.GetFromJsonAsync<BackupDto>($"/api/v1/backups/{backupId}?includeTables=true", JsonOptions);
+
+        var listed = Assert.Single(list!, x => x.Id == backupId);
+        Assert.Equal(1000, listed.TableCount);
+        Assert.Empty(listed.Tables);
+        Assert.NotNull(summary);
+        Assert.Equal(1000, summary!.TableCount);
+        Assert.Empty(summary.Tables);
+        Assert.NotNull(detail);
+        Assert.Equal(1000, detail!.TableCount);
+        Assert.Equal(1000, detail.Tables.Count);
+    }
+    [Fact]
     public async Task Policy_schedule_logs_and_clear_paths_work()
     {
         await using var factory = CreateFactory();

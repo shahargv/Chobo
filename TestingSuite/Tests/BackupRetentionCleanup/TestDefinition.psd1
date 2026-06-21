@@ -132,7 +132,7 @@
         @{
             Name = 'manual-delete'
             Type = 'Cli'
-            Args = @('backups', 'delete', '--id', '{manualBackup.id}')
+            Args = @('backups', 'delete', '--id', '{manualBackup.id}', '--confirm-destructive')
             ExpectJson = @(
                 @{ Path = 'status'; Equals = 'ManualDeleteRequested' }
             )

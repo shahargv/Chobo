@@ -118,7 +118,7 @@ Command-line equivalent:
 dotnet run --project .\ChoboServer\ChoboServer.csproj --launch-profile debug-local
 ```
 
-If you need an explicit environment-based run instead of the launch profile, use `resources\debug\chobo-server.env` as the source of truth for the stable AES key and startup token:
+If you need an explicit environment-based run instead of the launch profile, use `resources\debug\chobo-server.env` as the source of truth for the stable AES key, startup token, and `CHOBO_DATA_DIRECTORY` used with this Docker Compose setup:
 
 ```powershell
 Get-Content .\resources\debug\chobo-server.env | ForEach-Object {

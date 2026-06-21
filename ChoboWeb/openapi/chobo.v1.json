@@ -254,6 +254,14 @@
             "schema": {
               "$ref": "#/components/schemas/BackupRunStatus"
             }
+          },
+          {
+            "name": "includeTables",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": true
+            }
           }
         ],
         "responses": {
@@ -302,6 +310,14 @@
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "includeTables",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": true
             }
           }
         ],
@@ -3017,6 +3033,10 @@
             "nullable": true
           },
           "deletionAttemptCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "tableCount": {
             "type": "integer",
             "format": "int32"
           },

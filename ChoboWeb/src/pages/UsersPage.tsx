@@ -19,7 +19,7 @@ export function UsersPage() {
   return (
     <Page title="Users" subtitle="Create users, manage API tokens, and deactivate access when it is no longer needed." action={<button className="primary" onClick={() => setShowForm(true)}><Users size={16} /> Add user</button>}>
       <section className="panel">
-        <DataTable headers={["User", "Active", "Created", "Actions"]}>{(users.data ?? []).map((user) => <tr key={user.id}><td>{user.userName}</td><td>{user.isActive ? "yes" : "no"}</td><td>{formatTime(user.createdAt)}</td><td className="actions"><UserActions user={user} /></td></tr>)}</DataTable>
+        <DataTable headers={["User", "Active", "Created", "Actions"]} isLoading={users.isLoading}>{(users.data ?? []).map((user) => <tr key={user.id}><td>{user.userName}</td><td>{user.isActive ? "yes" : "no"}</td><td>{formatTime(user.createdAt)}</td><td className="actions"><UserActions user={user} /></td></tr>)}</DataTable>
       </section>
       {showForm && (
       <section className="panel form-panel">

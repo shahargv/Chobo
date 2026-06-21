@@ -12,7 +12,7 @@ export function RestoreDetailPage() {
   const { restoreId = "" } = useParams();
   const queryClient = useQueryClient();
   const clusters = useQuery({ queryKey: ["clusters"], queryFn: () => api.clusters() });
-  const backups = useQuery({ queryKey: ["backups"], queryFn: () => api.backups() });
+  const backups = useQuery({ queryKey: ["backups", "summary"], queryFn: () => api.backups({}, { includeTables: false }) });
   const restore = useQuery({
     queryKey: ["restore", restoreId],
     queryFn: () => api.restore(restoreId),
@@ -69,7 +69,7 @@ export function RestoreDetailPage() {
         </section>
         <section className="panel detail-section restore-detail-section restore-detail-tables">
           <h2>Affected tables</h2>
-          <DataTable headers={["Status", "Source", "Target", "Mode", "Options", "Started", "Completed", "Failure"]}>
+          <DataTable headers={["Status", "Source", "Target", "Mode", "Options", "Started", "Completed", "Failure"]} isLoading={restore.isLoading}>
             {current.tables.map((table) => (
               <tr key={table.id}>
                 <td><Status value={table.status} /></td>
@@ -86,7 +86,7 @@ export function RestoreDetailPage() {
         </section>
         <section className="panel detail-section restore-detail-section restore-detail-shards">
           <h2>Status by table and shard</h2>
-          <DataTable headers={["Status", "Table", "Source shard", "Target shard", "Target node", "Restore table", "ClickHouse", "Failure"]}>
+          <DataTable headers={["Status", "Table", "Source shard", "Target shard", "Target node", "Restore table", "ClickHouse", "Failure"]} isLoading={restore.isLoading}>
             {current.tables.flatMap((table) => table.shards.map((shard) => (
               <tr key={shard.id}>
                 <td><Status value={shard.status} /></td>
@@ -103,20 +103,21 @@ export function RestoreDetailPage() {
         </section>
         <section className="panel detail-section restore-detail-section restore-detail-logs">
           <div className="section-head"><h2>Log messages</h2><span className="hint">{logs.length} of {relatedLogs.data?.totalCount ?? logs.length} shown for this restore operation.</span></div>
-          <DataTable headers={["Time", "Level", "Category", "Message"]}>
+          <DataTable headers={["Time", "Level", "Category", "Message", "Exception details"]} isLoading={relatedLogs.isLoading}>
             {logs.map((entry) => (
               <tr key={entry.id}>
                 <td>{formatTimeSeconds(entry.timestamp)}</td>
                 <td>{entry.level}</td>
                 <td>{entry.category}</td>
                 <td className="wide-cell">{entry.message}</td>
+                <td className="mono wide-cell">{entry.exception ?? ""}</td>
               </tr>
             ))}
           </DataTable>
         </section>
         <section className="panel detail-section restore-detail-section restore-detail-audit">
           <div className="section-head"><h2>Audit messages</h2><span className="hint">{audits.length} of {relatedAudits.data?.totalCount ?? audits.length} shown for this restore operation.</span></div>
-          <DataTable headers={["Time", "Actor", "Action", "Entity", "Details"]}>
+          <DataTable headers={["Time", "Actor", "Action", "Entity", "Details"]} isLoading={relatedAudits.isLoading}>
             {audits.map((entry) => (
               <tr key={entry.id}>
                 <td>{formatTimeSeconds(entry.timestamp)}</td>
