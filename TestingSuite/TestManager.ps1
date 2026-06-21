@@ -4,10 +4,12 @@ param(
     [string]$OutputDirectory,
     [int]$GlobalTimeoutSeconds = 1800,
     [int]$TestTimeoutSeconds = 300,
+    [int]$RunAllConcurrency = 3,
     [switch]$ListTests,
     [switch]$KeepEnvironment,
     [switch]$NoCleanupOnSuccess,
-    [switch]$CleanTestResults
+    [switch]$CleanTestResults,
+    [switch]$SkipPreclean
 )
 
 $ErrorActionPreference = 'Stop'
@@ -29,6 +31,10 @@ if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
 }
 
 $OutputRoot = [System.IO.Path]::GetFullPath($OutputDirectory)
+
+if ($RunAllConcurrency -lt 1) {
+    throw 'RunAllConcurrency must be at least 1.'
+}
 
 if ($CleanTestResults -and (Test-Path -LiteralPath $OutputRoot)) {
     $resolvedOutputRoot = [System.IO.Path]::GetFullPath((Resolve-Path -LiteralPath $OutputRoot).Path)
@@ -166,11 +172,23 @@ function Invoke-ChoboRunAllTests {
     $runStarted = Get-Date
     $results = New-Object System.Collections.Generic.List[object]
     $hostPwsh = (Get-Process -Id $PID).Path
-
+    $pending = [System.Collections.Queue]::new()
     foreach ($test in $tests) {
-        $safeName = ($test.Name -replace '[^a-zA-Z0-9-]', '-').ToLowerInvariant()
-        $childTestId = "$TestId-$safeName"
-        Write-Host "Running $($test.Name) as $childTestId"
+        $pending.Enqueue($test)
+    }
+    $running = New-Object System.Collections.Generic.List[object]
+
+    Remove-ChoboSystemTestContainers
+
+    function Start-ChoboRunAllChild {
+        param(
+            [Parameter(Mandatory)] $Test,
+            [Parameter(Mandatory)] [string]$HostPwsh
+        )
+
+        $safeName = ($Test.Name -replace '[^a-zA-Z0-9-]', '-').ToLowerInvariant()
+        $childTestId = "$script:TestId-$safeName"
+        Write-Host "Starting $($Test.Name) as $childTestId"
 
         $arguments = @(
             '-NoProfile',
@@ -183,11 +201,14 @@ function Invoke-ChoboRunAllTests {
             '-OutputDirectory',
             $OutputDirectory,
             '-TestName',
-            $test.Name,
+            $Test.Name,
             '-GlobalTimeoutSeconds',
             "$GlobalTimeoutSeconds",
             '-TestTimeoutSeconds',
-            "$TestTimeoutSeconds"
+            "$TestTimeoutSeconds",
+            '-RunAllConcurrency',
+            "$RunAllConcurrency",
+            '-SkipPreclean'
         )
         if ($NoCleanupOnSuccess) {
             $arguments += '-NoCleanupOnSuccess'
@@ -198,16 +219,81 @@ function Invoke-ChoboRunAllTests {
 
         $stdoutPath = Join-Path $LogsDirectory "run-all-$safeName.stdout.log"
         $stderrPath = Join-Path $LogsDirectory "run-all-$safeName.stderr.log"
-        $run = Invoke-ChoboProcess -FileName $hostPwsh -Arguments $arguments -WorkingDirectory $RepoRoot -TimeoutSeconds $GlobalTimeoutSeconds -StdOutPath $stdoutPath -StdErrPath $stderrPath
+        $job = Start-ThreadJob -ArgumentList $HostPwsh, $arguments, $RepoRoot, $GlobalTimeoutSeconds, $stdoutPath, $stderrPath -ScriptBlock {
+            param($FileName, $Arguments, $WorkingDirectory, $TimeoutSeconds, $StdOutPath, $StdErrPath)
+
+            $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+            $startInfo.FileName = $FileName
+            foreach ($argument in $Arguments) {
+                [void]$startInfo.ArgumentList.Add($argument)
+            }
+            $startInfo.WorkingDirectory = $WorkingDirectory
+            $startInfo.UseShellExecute = $false
+            $startInfo.RedirectStandardOutput = $true
+            $startInfo.RedirectStandardError = $true
+
+            $process = [System.Diagnostics.Process]::new()
+            $process.StartInfo = $startInfo
+            [void]$process.Start()
+
+            $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+            $stderrTask = $process.StandardError.ReadToEndAsync()
+            $completed = if ($TimeoutSeconds -gt 0) {
+                $process.WaitForExit($TimeoutSeconds * 1000)
+            } else {
+                $process.WaitForExit()
+                $true
+            }
+
+            if (-not $completed) {
+                try {
+                    $process.Kill($true)
+                } catch {
+                }
+            }
+
+            $stdout = $stdoutTask.GetAwaiter().GetResult()
+            $stderr = $stderrTask.GetAwaiter().GetResult()
+
+            if ($StdOutPath) {
+                Set-Content -Path $StdOutPath -Value $stdout -NoNewline
+            }
+            if ($StdErrPath) {
+                Set-Content -Path $StdErrPath -Value $stderr -NoNewline
+            }
+
+            [pscustomobject]@{
+                ExitCode = if ($completed) { $process.ExitCode } else { 124 }
+                TimedOut = -not $completed
+                StdOut = $stdout
+                StdErr = $stderr
+            }
+        }
+
+        [pscustomobject]@{
+            Job = $job
+            Test = $Test.Name
+            ChildTestId = $childTestId
+            ChildOutputDirectory = Join-Path $OutputDirectory $childTestId
+        }
+    }
+
+    function Complete-ChoboRunAllChild {
+        param(
+            [Parameter(Mandatory)] $Child
+        )
+
+        $run = Receive-Job -Job $Child.Job
+        Remove-Job -Job $Child.Job -Force
+
         if ($run.StdOut) {
             Write-Host $run.StdOut
         }
         if ($run.StdErr) {
-            Write-Error $run.StdErr
+            Write-Warning $run.StdErr
         }
 
-        $childOutputDirectory = Join-Path $OutputDirectory $childTestId
-        $childResultsPath = Join-Path $childOutputDirectory 'results.json'
+        $childResultsPath = Join-Path $Child.ChildOutputDirectory 'results.json'
         if (Test-Path -LiteralPath $childResultsPath) {
             $childSummary = Get-Content -LiteralPath $childResultsPath -Raw | ConvertFrom-Json
             foreach ($result in @($childSummary.Results)) {
@@ -219,29 +305,44 @@ function Invoke-ChoboRunAllTests {
                     StartedAt = $result.StartedAt
                     FinishedAt = $result.FinishedAt
                     DurationSeconds = $result.DurationSeconds
-                    ArtifactDirectory = Join-Path $childOutputDirectory ("artifacts/{0}" -f $result.Test)
-                    RunId = $childTestId
+                    ArtifactDirectory = Join-Path $Child.ChildOutputDirectory ("artifacts/{0}" -f $result.Test)
+                    RunId = $Child.ChildTestId
                 })
             }
+            return
+        }
+
+        $errorText = if ($run.TimedOut) {
+            "Global timeout of $GlobalTimeoutSeconds seconds expired."
+        } elseif ($run.StdErr) {
+            $run.StdErr
         } else {
-            $errorText = if ($run.TimedOut) {
-                "Global timeout of $GlobalTimeoutSeconds seconds expired."
-            } elseif ($run.StdErr) {
-                $run.StdErr
-            } else {
-                "Test manager failed with exit code $($run.ExitCode)."
-            }
-            $results.Add([pscustomobject]@{
-                Test = $test.Name
-                Status = 'Failed'
-                TimedOut = [bool]$run.TimedOut
-                Error = $errorText
-                StartedAt = $null
-                FinishedAt = (Get-Date).ToString('o')
-                DurationSeconds = $null
-                ArtifactDirectory = $childOutputDirectory
-                RunId = $childTestId
-            })
+            "Test manager failed with exit code $($run.ExitCode)."
+        }
+        $results.Add([pscustomobject]@{
+            Test = $Child.Test
+            Status = 'Failed'
+            TimedOut = [bool]$run.TimedOut
+            Error = $errorText
+            StartedAt = $null
+            FinishedAt = (Get-Date).ToString('o')
+            DurationSeconds = $null
+            ArtifactDirectory = $Child.ChildOutputDirectory
+            RunId = $Child.ChildTestId
+        })
+    }
+
+    Write-Host "Running $($tests.Count) test(s) with concurrency $RunAllConcurrency"
+    while ($pending.Count -gt 0 -or $running.Count -gt 0) {
+        while ($pending.Count -gt 0 -and $running.Count -lt $RunAllConcurrency) {
+            $running.Add((Start-ChoboRunAllChild -Test $pending.Dequeue() -HostPwsh $hostPwsh))
+        }
+
+        $completedJob = Wait-Job -Job @($running | ForEach-Object { $_.Job }) -Any
+        $completedChildren = @($running | Where-Object { $_.Job.Id -eq $completedJob.Id })
+        foreach ($child in $completedChildren) {
+            [void]$running.Remove($child)
+            Complete-ChoboRunAllChild -Child $child
         }
     }
 
@@ -252,6 +353,7 @@ function Invoke-ChoboRunAllTests {
         FinishedAt = $runFinished.ToString('o')
         DurationSeconds = [math]::Round(($runFinished - $runStarted).TotalSeconds, 3)
         TestTimeoutSeconds = $TestTimeoutSeconds
+        RunAllConcurrency = $RunAllConcurrency
         Total = $results.Count
         Passed = @($results | Where-Object Status -eq 'Passed').Count
         Failed = @($results | Where-Object Status -ne 'Passed').Count
@@ -296,7 +398,9 @@ try {
         exit 0
     }
 
-    Remove-ChoboSystemTestContainers
+    if (-not $SkipPreclean) {
+        Remove-ChoboSystemTestContainers
+    }
 
     Import-Module (Join-Path $SuiteRoot 'Infra/ComposeGenerator.psm1') -Force
     $environment = New-ChoboComposeEnvironment -SuiteRoot $SuiteRoot -RepoRoot $RepoRoot -OutputDirectory $OutputDirectory -TestName $TestName
@@ -371,7 +475,9 @@ try {
         if ($down.ExitCode -ne 0) {
             Write-Warning "Docker Compose cleanup failed. See $LogsDirectory."
         }
-        Remove-ChoboSystemTestContainers
+        if (-not $SkipPreclean) {
+            Remove-ChoboSystemTestContainers
+        }
     } elseif ($KeepEnvironment -and $ComposeFile) {
         Write-Host "Environment kept: docker compose -f `"$ComposeFile`" -p $ProjectName ps"
     }

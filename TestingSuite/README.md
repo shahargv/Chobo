@@ -20,6 +20,7 @@ Common commands:
 .\TestingSuite\TestManager.ps1 -TestId dev-failure-001 -TestName FailingBasicTest
 .\TestingSuite\TestManager.ps1 -TestId dev-smoke-001 -OutputDirectory C:\tmp\chobo-results
 .\TestingSuite\TestManager.ps1 -TestId dev-smoke-001 -GlobalTimeoutSeconds 1800 -TestTimeoutSeconds 300
+.\TestingSuite\TestManager.ps1 -TestId dev-runall-001 -RunAllConcurrency 3
 .\TestingSuite\TestManager.ps1 -TestId dev-smoke-001 -KeepEnvironment
 .\TestingSuite\TestManager.ps1 -TestId dev-final-001 -TestName SmokeCreateTables -CleanTestResults
 ```
@@ -27,6 +28,8 @@ Common commands:
 `TestId` is the run identifier. If omitted, one is generated from timestamp and GUID. Results default to `.artifacts/TestResults/<test-id>`. If `-OutputDirectory` is supplied, results go to `<output-directory>/<test-id>`.
 
 `GlobalTimeoutSeconds` caps Compose startup plus runner execution. `TestTimeoutSeconds` is the default timeout per test. A test can override it with `TimeoutSeconds`.
+
+When running the full suite without `-TestName`, `TestManager.ps1` runs up to three tests concurrently by default. Override that with `-RunAllConcurrency <n>` when a machine needs more or less Docker pressure.
 
 `CleanTestResults` clears the configured result root before creating the current run directory. Use it for the final successful verification run to avoid accumulating old artifacts. Avoid it while debugging a failure you still need to inspect.
 

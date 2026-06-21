@@ -14,3 +14,4 @@ ChoboWeb/*.tsbuildinfo
 ChoboWeb/vite.config.js
 ChoboWeb/vite.config.d.ts
 
+*.DotSettings.user
