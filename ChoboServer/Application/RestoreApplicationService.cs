@@ -271,10 +271,17 @@ public sealed class RestoreApplicationService(
             var endpoint = table.Shards.Count == 0
                 ? new ClickHouseNodeEndpoint(targetCluster.AccessNodes[0].Host, targetCluster.AccessNodes[0].Port, targetCluster.AccessNodes[0].UseTls)
                 : new ClickHouseNodeEndpoint(table.Shards[0].TargetHost, table.Shards[0].TargetPort, table.Shards[0].TargetUseTls);
-            var existing = await clickHouse.GetTableAsync(endpoint, targetCluster, table.TargetDatabase, table.TargetTable, cancellationToken);
-            if (existing is not null)
+            try
             {
-                reasons.Add($"Target table {tableName} already exists.");
+                var existing = await clickHouse.GetTableAsync(endpoint, targetCluster, table.TargetDatabase, table.TargetTable, cancellationToken);
+                if (existing is not null)
+                {
+                    reasons.Add($"Target table {tableName} already exists.");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.Warning(ex, "Could not check whether restore target table {TableName} already exists on {Host}:{Port}; restore initiation will continue and execution will report target connectivity failures.", tableName, endpoint.Host, endpoint.Port);
             }
         }
 
@@ -445,5 +452,3 @@ public sealed class RestoreApplicationService(
         return options;
     }
 }
-
-

@@ -7,6 +7,7 @@ import { DataTable, Input, Page } from "../components/ui";
 
 type EntryPageState = { offset: number; limit: number; startTime: string; endTime: string };
 type EntryQueryParams = { startTime?: string; endTime?: string; offset: number; limit: number };
+type EntryCell = string | { text: string; className?: string };
 
 export function Logs() {
   const { api, showToast } = useApi();
@@ -22,8 +23,14 @@ export function Logs() {
     isFetching={logs.isFetching}
     onRefresh={() => logs.refetch()}
     onClear={(before) => api.clearLogs(before).then(() => showToast({ kind: "success", text: "Logs cleared." })).then(() => logs.refetch())}
-    headers={["Time", "Level", "Category", "Message"]}
-    rows={(logs.data?.items ?? []).map((log) => [formatTimeSeconds(log.timestamp), log.level, log.category, log.message])} />;
+    headers={["Time", "Level", "Category", "Message", "Exception details"]}
+    rows={(logs.data?.items ?? []).map((log) => [
+      formatTimeSeconds(log.timestamp),
+      log.level,
+      log.category,
+      log.message,
+      { text: log.exception ?? "", className: "mono wide-cell" }
+    ])} />;
 }
 
 export function Audit() {
@@ -44,7 +51,7 @@ export function Audit() {
     rows={(audits.data?.items ?? []).map((audit: AuditEntryDto) => [formatTimeSeconds(audit.timestamp), audit.actorName, audit.action, `${audit.entityType}:${audit.entityId ?? ""}`, JSON.stringify(audit.details)])} />;
 }
 
-function EntriesPage({ title, page, setPage, result, isFetching, onRefresh, onClear, headers, rows }: { title: string; page: EntryPageState; setPage: (updater: EntryPageState | ((current: EntryPageState) => EntryPageState)) => void; result?: PagedResultDto<unknown>; isFetching: boolean; onRefresh: () => void; onClear: (before: string) => void; headers: string[]; rows: string[][] }) {
+function EntriesPage({ title, page, setPage, result, isFetching, onRefresh, onClear, headers, rows }: { title: string; page: EntryPageState; setPage: (updater: EntryPageState | ((current: EntryPageState) => EntryPageState)) => void; result?: PagedResultDto<unknown>; isFetching: boolean; onRefresh: () => void; onClear: (before: string) => void; headers: string[]; rows: EntryCell[][] }) {
   const totalCount = result?.totalCount ?? 0;
   const limit = result?.limit ?? page.limit;
   const offset = result?.offset ?? page.offset;
@@ -65,8 +72,12 @@ function EntriesPage({ title, page, setPage, result, isFetching, onRefresh, onCl
         <Input label="Page size" type="number" value={`${page.limit}`} onChange={(value) => updatePage({ limit: Math.max(1, Number(value) || 200) })} />
         <button className="secondary" disabled={isFetching} onClick={onRefresh}><RefreshCw size={16} /> Refresh</button>
       </div>
-      <DataTable headers={headers}>
-        {rows.map((row, index) => <tr key={offset + index}>{row.map((cell, cellIndex) => <td key={headers[cellIndex] ?? cellIndex}>{cell}</td>)}</tr>)}
+      <DataTable headers={headers} isLoading={isFetching && rows.length === 0}>
+        {rows.map((row, index) => <tr key={offset + index}>{row.map((cell, cellIndex) => {
+          const value = typeof cell === "string" ? cell : cell.text;
+          const className = typeof cell === "string" ? undefined : cell.className;
+          return <td key={headers[cellIndex] ?? cellIndex} className={className}>{value}</td>;
+        })}</tr>)}
       </DataTable>
       <div className="entry-page-bar">
         <div className="pager-buttons">

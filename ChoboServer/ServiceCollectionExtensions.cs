@@ -114,6 +114,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IBackupStorageOperations, BackupStorageOperations>();
         services.AddScoped<IApplicationLogStore, ApplicationLogStore>();
         services.AddScoped<IAuditStore, AuditStore>();
+        services.AddMemoryCache();
         services.AddSingleton<ITestHookCoordinator, TestHookCoordinator>();
         services.AddScoped<IUnitOfWork, EfUnitOfWork>();
         services.AddScoped<IUserRepository, UserRepository>();
@@ -178,5 +179,3 @@ public static class ServiceCollectionExtensions
         }
     }
 }
-
-

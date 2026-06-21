@@ -23,13 +23,14 @@ public sealed class BackupsController(
         [FromQuery] string? clusterName,
         [FromQuery] string? tableName,
         [FromQuery] BackupRunStatus? status,
-        CancellationToken cancellationToken) =>
-        backups.ListAsync(policyId, clusterName, tableName, status, cancellationToken);
+        [FromQuery] bool includeTables = true,
+        CancellationToken cancellationToken = default) =>
+        backups.ListAsync(policyId, clusterName, tableName, status, includeTables, cancellationToken);
 
     [HttpGet("backups/{id:guid}")]
-    public async Task<ActionResult<BackupDto>> Get(Guid id, CancellationToken cancellationToken)
+    public async Task<ActionResult<BackupDto>> Get(Guid id, [FromQuery] bool includeTables = true, CancellationToken cancellationToken = default)
     {
-        var result = await backups.GetAsync(id, cancellationToken);
+        var result = await backups.GetAsync(id, includeTables, cancellationToken);
         return result is null ? NotFound() : result;
     }
 

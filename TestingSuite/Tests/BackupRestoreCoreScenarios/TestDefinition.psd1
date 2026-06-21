@@ -287,7 +287,7 @@
         @{
             Name = 'restore-append'
             Type = 'Cli'
-            Args = @('restore', 'initiate', '--backup-id', '{backup.id}', '--target-cluster-id', '{restoreCluster.id}', '--table-mappings-json', '[{"backupTableId":"{backupDone.tables.4.id}","targetDatabase":"backup_core_restore","targetTable":"append_orders","schemaOnly":false,"append":true,"allowSchemaMismatch":false}]')
+            Args = @('restore', 'initiate', '--backup-id', '{backup.id}', '--target-cluster-id', '{restoreCluster.id}', '--table-mappings-json', '[{"backupTableId":"{backupDone.tables.4.id}","targetDatabase":"backup_core_restore","targetTable":"append_orders","schemaOnly":false,"append":true,"allowSchemaMismatch":false}]', '--confirm-destructive')
             SaveJsonAs = 'appendRestore'
             ExpectJson = @(
                 @{ Path = 'id'; NotEmpty = $true }
@@ -308,7 +308,7 @@
         @{
             Name = 'restore-existing-compatible-without-append-fails'
             Type = 'Cli'
-            Args = @('restore', 'initiate', '--backup-id', '{backup.id}', '--target-cluster-id', '{restoreCluster.id}', '--database', 'backup_core_source', '--table', 'orders', '--target-database', 'backup_core_restore', '--target-table', 'compatible_existing_orders')
+            Args = @('restore', 'initiate', '--backup-id', '{backup.id}', '--target-cluster-id', '{restoreCluster.id}', '--database', 'backup_core_source', '--table', 'orders', '--target-database', 'backup_core_restore', '--target-table', 'compatible_existing_orders', '--confirm-destructive')
             SaveJsonAs = 'existingNoAppendRestore'
             ExpectJson = @(
                 @{ Path = 'id'; NotEmpty = $true }
@@ -328,7 +328,7 @@
         @{
             Name = 'restore-append-missing-table-fails'
             Type = 'Cli'
-            Args = @('restore', 'initiate', '--backup-id', '{backup.id}', '--target-cluster-id', '{restoreCluster.id}', '--database', 'backup_core_source', '--table', 'orders', '--target-database', 'backup_core_restore', '--target-table', 'missing_append_orders', '--append')
+            Args = @('restore', 'initiate', '--backup-id', '{backup.id}', '--target-cluster-id', '{restoreCluster.id}', '--database', 'backup_core_source', '--table', 'orders', '--target-database', 'backup_core_restore', '--target-table', 'missing_append_orders', '--append', '--confirm-destructive')
             SaveJsonAs = 'appendMissingRestore'
             ExpectJson = @(
                 @{ Path = 'id'; NotEmpty = $true }
@@ -348,7 +348,7 @@
         @{
             Name = 'restore-mismatch-allowed'
             Type = 'Cli'
-            Args = @('restore', 'initiate', '--backup-id', '{backup.id}', '--target-cluster-id', '{restoreCluster.id}', '--database', 'backup_core_source', '--table', 'orders', '--target-database', 'backup_core_restore', '--target-table', 'mismatch_allowed_orders', '--append', '--allow-schema-mismatch')
+            Args = @('restore', 'initiate', '--backup-id', '{backup.id}', '--target-cluster-id', '{restoreCluster.id}', '--database', 'backup_core_source', '--table', 'orders', '--target-database', 'backup_core_restore', '--target-table', 'mismatch_allowed_orders', '--append', '--allow-schema-mismatch', '--confirm-destructive')
             SaveJsonAs = 'mismatchAllowedRestore'
             RetryTimeoutSeconds = 6
             RetryIntervalSeconds = 1
@@ -393,7 +393,7 @@
         @{
             Name = 'restore-mismatch-fails'
             Type = 'Cli'
-            Args = @('restore', 'initiate', '--backup-id', '{backup.id}', '--target-cluster-id', '{restoreCluster.id}', '--database', 'backup_core_source', '--table', 'orders', '--target-database', 'backup_core_restore', '--target-table', 'bad_orders', '--append')
+            Args = @('restore', 'initiate', '--backup-id', '{backup.id}', '--target-cluster-id', '{restoreCluster.id}', '--database', 'backup_core_source', '--table', 'orders', '--target-database', 'backup_core_restore', '--target-table', 'bad_orders', '--append', '--confirm-destructive')
             SaveJsonAs = 'mismatchRestore'
             RetryTimeoutSeconds = 6
             RetryIntervalSeconds = 1
@@ -594,6 +594,3 @@
 
     Cleanup = @()
 }
-
-
-

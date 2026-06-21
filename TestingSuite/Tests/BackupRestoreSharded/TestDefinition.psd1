@@ -136,7 +136,7 @@
         @{
             Name = 'restore-partial-shard-failure'
             Type = 'Cli'
-            Args = @('restore', 'initiate', '--backup-id', '{backup.id}', '--target-cluster-id', '{restoreCluster.id}', '--database', 'backup_sharded_source', '--table', 'orders_local', '--target-database', 'backup_sharded_partial', '--target-table', 'orders_local', '--layout', 'preserve', '--append')
+            Args = @('restore', 'initiate', '--backup-id', '{backup.id}', '--target-cluster-id', '{restoreCluster.id}', '--database', 'backup_sharded_source', '--table', 'orders_local', '--target-database', 'backup_sharded_partial', '--target-table', 'orders_local', '--layout', 'preserve', '--append', '--confirm-destructive')
             SaveJsonAs = 'partialRestore'
             ExpectJson = @(
                 @{ Path = 'layout'; Equals = 'Preserve' }
@@ -179,7 +179,7 @@
         @{
             Name = 'restore-append-single-shard'
             Type = 'Cli'
-            Args = @('restore', 'initiate', '--backup-id', '{backup.id}', '--target-cluster-id', '{singleCluster.id}', '--database', 'backup_sharded_source', '--table', 'orders_local', '--target-database', 'backup_sharded_single', '--target-table', 'append_orders', '--layout', 'single-node', '--source-shard', '1', '--append')
+            Args = @('restore', 'initiate', '--backup-id', '{backup.id}', '--target-cluster-id', '{singleCluster.id}', '--database', 'backup_sharded_source', '--table', 'orders_local', '--target-database', 'backup_sharded_single', '--target-table', 'append_orders', '--layout', 'single-node', '--source-shard', '1', '--append', '--confirm-destructive')
             SaveJsonAs = 'appendRestore'
             ExpectJson = @(
                 @{ Path = 'append'; Equals = $true }

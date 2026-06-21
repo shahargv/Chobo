@@ -170,6 +170,8 @@ button:disabled, .primary:disabled, .secondary:disabled, .ghost:disabled, .dange
 .primary:disabled:hover { background: var(--accent); }
 .secondary { background: #e7f3f6; color: var(--accent-strong); }
 .ghost { background: transparent; color: var(--accent-strong); }
+.link-button { display: inline; width: auto; min-height: 0; padding: 0; border: 0; background: transparent; color: var(--accent-strong); box-shadow: none; font: inherit; line-height: inherit; text-decoration: underline; vertical-align: baseline; }
+.link-button:hover { background: transparent; }
 .danger { background: #fde3df; color: var(--bad); }
 .selected { background: #d7eef4; color: var(--accent-strong); border: 1px solid #8dc9d6; }
 .actions, .actions-panel { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
@@ -453,6 +455,7 @@ pre, .token-box {
   .page { padding: 16px; }
 }
 .entries-panel { display: grid; gap: 10px; }
+.entries-panel table { min-width: 1480px; }
 .entry-filter-bar {
   display: grid;
   grid-template-columns: repeat(3, minmax(180px, 240px)) auto;
@@ -516,7 +519,7 @@ pre, .token-box {
 .detail-section-tables .table-wrap { min-height: 180px; }
 .detail-section-tables table { min-width: 1120px; }
 .detail-section-audit table { min-width: 1420px; }
-.detail-section-logs table { min-width: 1280px; }
+.detail-section-logs table { min-width: 1680px; }
 .detail-section-audit .table-wrap,
 .detail-section-logs .table-wrap {
   min-height: 300px;
@@ -723,7 +726,7 @@ pre, .token-box {
 }
 .restore-detail-tables table { min-width: 1180px; }
 .restore-detail-shards table { min-width: 1360px; }
-.restore-detail-logs table { min-width: 1280px; }
+.restore-detail-logs table { min-width: 1680px; }
 .restore-detail-audit table { min-width: 1420px; }
 
 

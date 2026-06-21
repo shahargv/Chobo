@@ -56,7 +56,7 @@ export function GarbageCollectorPage() {
       </section>
       <section className="panel">
         <div className="section-head"><h2>Cleanup audit</h2><span className="hint">{entries.length} cleanup-related audit records shown.</span></div>
-        <DataTable headers={["Time", "Actor", "Action", "Entity", "Details"]}>
+        <DataTable headers={["Time", "Actor", "Action", "Entity", "Details"]} isLoading={audits.isLoading}>
           {entries.map((entry) => (
             <tr key={entry.id}>
               <td>{formatTime(entry.timestamp)}</td>
