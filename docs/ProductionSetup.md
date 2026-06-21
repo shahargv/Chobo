@@ -20,10 +20,8 @@ Expose ChoboServer to operators on port `8080` unless you intentionally choose a
 | Direction | Port | Purpose |
 | --- | --- | --- |
 | Browser or CLI to ChoboServer | `8080/tcp` | Web GUI, API, `/health`, and metrics endpoint. |
-| Browser to ChoboServer | `8081/tcp` | Optional GUI-only port when `CHOBO_WEB_GUI_PORT=8081` is configured. |
-| ChoboServer to ClickHouse | `8123/tcp` or `8443/tcp` | ClickHouse HTTP or HTTPS endpoint. Chobo also accepts `9000` and maps it to `8123`, and accepts TLS `9440` and maps it to `8443`. |
-| ClickHouse nodes to S3 | provider-specific, commonly `443/tcp` or `9000/tcp` | ClickHouse writes and reads backup objects directly. |
-| ChoboServer to S3 | provider-specific, commonly `443/tcp` or `9000/tcp` | Retention cleanup, failed-backup cleanup, manual delete, and metadata recovery. |
+
+Do not publish ClickHouse, S3, or other backend service ports from the ChoboServer container unless your own infrastructure requires it. ChoboServer only needs network access to the ClickHouse HTTP(S) endpoints and S3-compatible storage endpoints that you configure; ClickHouse nodes also need their own network path to the S3 endpoint because ClickHouse performs the actual backup and restore object I/O.
 
 Put ChoboServer behind your normal TLS termination layer for production. Chobo uses bearer-token authentication for the API and GUI, but production traffic should still be protected with TLS.
 
@@ -72,12 +70,6 @@ The `/var/lib/chobo` mount is required for production. It contains the SQLite me
 -e CHOBO_APPSETTINGS_PATH=/etc/chobo/appsettings.Production.json
 ```
 
-If you want the GUI on a separate port from the API, set `CHOBO_WEB_GUI_PORT=8081` and publish both ports:
-
-```bash
--p 8080:8080 -p 8081:8081 -e CHOBO_WEB_GUI_PORT=8081
-```
-
 ## Docker Compose Example
 
 A minimal production-style Compose file for ChoboServer:
@@ -106,8 +98,6 @@ Run it with:
 ```bash
 CHOBO_ENCRYPTION_KEY_BASE64=<base64-32-byte-key> docker compose up -d
 ```
-
-Add `"8081:8081"` to `ports` and `CHOBO_WEB_GUI_PORT: 8081` to `environment` only when you want a separate GUI listener.
 
 ## First Web GUI Setup
 
