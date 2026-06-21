@@ -41,7 +41,7 @@ ChoboCli backups unpin --id <backup-id>
 Pinned backups can still be manually deleted with force:
 
 ```powershell
-ChoboCli backups delete --id <backup-id> --force
+ChoboCli backups delete --id <backup-id> --force --confirm-destructive
 ```
 
 Without `--force`, Chobo rejects manual deletion of a pinned backup.
@@ -51,7 +51,7 @@ Without `--force`, Chobo rejects manual deletion of a pinned backup.
 Request deletion:
 
 ```powershell
-ChoboCli backups delete --id <backup-id>
+ChoboCli backups delete --id <backup-id> --confirm-destructive
 ```
 
 Queued and running backups cannot be deleted.
@@ -203,3 +203,30 @@ ChoboCli backups unpin --id <backup-id>
 ```
 
 
+
+## Manual Garbage Collection
+
+The failed-backup garbage collector normally runs in the background. You can inspect it or trigger one run manually from the CLI.
+
+```powershell
+ChoboCli gc status
+ChoboCli gc run
+```
+
+Example status output:
+
+```json
+{
+  "isRunning": false,
+  "currentRunReason": "scheduled",
+  "lastStartedAt": "2026-06-21T03:00:00Z",
+  "lastCompletedAt": "2026-06-21T03:00:02Z",
+  "lastError": null,
+  "lastMarkedCount": 1,
+  "lastPendingCleanupCount": 1,
+  "lastCleanedCount": 1,
+  "lastFailedCount": 0
+}
+```
+
+Run it manually after fixing an S3 credential or endpoint problem that previously blocked failed-backup cleanup. If `lastFailedCount` stays above zero, inspect `ChoboCli logs show --last 500` and the affected backup records before retrying repeatedly.

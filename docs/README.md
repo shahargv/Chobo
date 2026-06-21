@@ -1,23 +1,31 @@
 # Chobo Documentation
 
-Chobo is a backup and restore orchestration service for ClickHouse. It helps operators define what should be protected, run backups on demand or on schedule, track backup and restore history, and restore data into the right ClickHouse environment when needed.
+Chobo is a backup and restore orchestration service for ClickHouse. The documentation is split by audience.
 
-Chobo is designed around operational workflows: configure storage and clusters, create backup policies, run or schedule backups, inspect results, and restore tables with enough status and audit information to understand what happened.
+## User Documentation
 
-Start here:
+Use these guides when you operate Chobo for ClickHouse backups and restores:
 
-- [Production setup](ProductionSetup.md)
-- [Configuration](Configuration.md)
-- [Setting up backups](Backups.md)
-- [Restoring](Restoring.md)
-- [Backup lifecycle management](BackupLifecycleManagement.md)
-- [Releasing](Releasing.md)
+- [User docs index](user/README.md)
+- [Installation](user/Installation.md)
+- [Onboarding and initial configuration](user/Onboarding.md)
+- [Policies and scheduling](user/PoliciesAndScheduling.md)
+- [Backups](user/Backups.md)
+- [Restores](user/Restores.md)
+- [Users and access control](user/UsersAndAccessControl.md)
+- [Logs and audits](user/LogsAndAudits.md)
+- [Schema browser](user/SchemaBrowser.md)
+- [Security](user/Security.md)
+- [Configuration reference](user/Configuration.md)
+- [Backup lifecycle management](user/BackupLifecycle.md)
+- [Troubleshooting](user/Troubleshooting.md)
 
-Additional local-development material:
+## Developer Documentation
 
-- [Local debugging instructions](DebuggingInstructions.MD)
-- [System test suite](SystemTestSuite.md)
-- [Codex development notes](CodexDevelopment.md)
+Use these guides when you develop, test, or release Chobo:
 
-
-Data export/import excludes audit entries and application logs, and imported ClickHouse/S3 credentials must be re-entered so they are encrypted with the current server key.
+- [Developer docs index](developer/README.md)
+- [Local debugging instructions](developer/DebuggingInstructions.md)
+- [System test suite](developer/SystemTestSuite.md)
+- [Releasing](developer/Releasing.md)
+- [Codex development notes](developer/CodexDevelopment.md)
