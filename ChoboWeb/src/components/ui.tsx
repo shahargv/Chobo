@@ -12,7 +12,7 @@ import {
   type Header,
   type SortingState
 } from "@tanstack/react-table";
-import { ArrowDown, ArrowUp, ArrowUpDown, Save, Search, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, Save, Search, X } from "lucide-react";
 
 export function Page({ title, subtitle, action, children }: { title: string; subtitle: string; action?: ReactNode; children: ReactNode }) {
   return <div className="page"><div className="page-head"><div><h1>{title}</h1><p>{subtitle}</p></div>{action}</div>{children}</div>;
@@ -152,6 +152,22 @@ export function Drawer({ title, onClose, children, className }: { title: string;
   return <div className="drawer-backdrop" onClick={onClose}><aside className={`drawer ${className ?? ""}`} onClick={(event) => event.stopPropagation()}><div className="drawer-head"><h2>{title}</h2><button className="ghost" onClick={onClose}>Close</button></div>{children}</aside></div>;
 }
 
+
+export function ConfirmDialog({ title, message, confirmLabel, cancelLabel = "Cancel", tone = "danger", busy = false, onConfirm, onCancel }: { title: string; message: string; confirmLabel: string; cancelLabel?: string; tone?: "danger" | "primary"; busy?: boolean; onConfirm: () => void; onCancel: () => void }) {
+  return <div className="modal-backdrop" role="presentation" onClick={onCancel}>
+    <section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title" onClick={(event) => event.stopPropagation()}>
+      <div className={`confirm-icon ${tone}`}><AlertTriangle size={22} /></div>
+      <div className="confirm-content">
+        <h2 id="confirm-dialog-title">{title}</h2>
+        <p>{message}</p>
+        <div className="confirm-actions">
+          <button className="ghost" disabled={busy} onClick={onCancel}>{cancelLabel}</button>
+          <button className={tone === "danger" ? "danger" : "primary"} disabled={busy} onClick={onConfirm}>{confirmLabel}</button>
+        </div>
+      </div>
+    </section>
+  </div>;
+}
 export function Empty({ text }: { text: string }) {
   return <div className="empty">{text}</div>;
 }

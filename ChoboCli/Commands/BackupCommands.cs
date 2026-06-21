@@ -61,8 +61,11 @@ public sealed class BackupsCommands : CliSubject
     private static Task<object?> DeleteAsync(CommandContext context)
     {
         var id = context.Command.Options.Required("--id");
-        var force = context.Command.Options.Has("--force") ? "?force=true" : "";
-        return CommandHelpers.WithClient(context, client => client.DeleteAsync($"backups/{id}{force}"));
+        var query = new List<string>();
+        if (context.Command.Options.Has("--force")) query.Add("force=true");
+        if (context.Command.Options.Has("--confirm-destructive")) query.Add("confirmDestructive=true");
+        var suffix = query.Count == 0 ? "" : "?" + string.Join("&", query);
+        return CommandHelpers.WithClient(context, client => client.DeleteAsync($"backups/{id}{suffix}"));
     }
 
     private static Task<object?> CancelAsync(CommandContext context) =>

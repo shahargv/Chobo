@@ -163,7 +163,7 @@ public sealed class BackupApplicationService(
         return BackupRestoreMapping.ToDto(backup);
     }
 
-    public async Task<BackupDto?> RequestDeleteAsync(Guid id, bool force = false, CancellationToken cancellationToken = default)
+    public async Task<BackupDto?> RequestDeleteAsync(Guid id, bool force = false, bool confirmDestructive = false, CancellationToken cancellationToken = default)
     {
         var backup = await LoadAsync(id, cancellationToken);
         if (backup is null)
@@ -173,6 +173,10 @@ public sealed class BackupApplicationService(
         if (backup.Status is BackupRunStatus.Queued or BackupRunStatus.Running)
         {
             throw new ArgumentException("Queued or running backups cannot be deleted.");
+        }
+        if (!confirmDestructive)
+        {
+            throw new ArgumentException("Deleting a backup is destructive and requires ConfirmDestructive=true.");
         }
         if (backup.IsPinned && !force)
         {
