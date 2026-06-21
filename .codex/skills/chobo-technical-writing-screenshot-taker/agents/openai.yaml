@@ -1,0 +1,4 @@
+interface:
+  display_name: "Chobo Documentation Screenshots"
+  short_description: "Capture Chobo GUI screenshots for documentation."
+  default_prompt: "Use $chobo-technical-writing-screenshot-taker to capture documentation screenshots for the requested Chobo GUI flow."
