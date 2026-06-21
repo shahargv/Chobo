@@ -5,6 +5,7 @@ using Chobo.Contracts;
 using ChoboServer.Data;
 using ChoboServer.Repositories;
 using ChoboServer.Services;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace ChoboServer.Application;
 
@@ -13,11 +14,13 @@ public sealed class PolicyApplicationService(
     IClusterRepository clusters,
     ITargetRepository targets,
     IClickHouseAdapter clickHouse,
+    IMemoryCache memoryCache,
     IUnitOfWork unitOfWork,
     IAuditService audit,
     PolicySelectorEvaluationService selectorEvaluation)
 {
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
+    private static readonly TimeSpan InventoryCacheDuration = TimeSpan.FromMinutes(5);
 
     public async Task<IReadOnlyList<BackupPolicyDto>> ListAsync() =>
         (await policies.ListActiveAsync()).Select(ToDto).ToList();
@@ -104,8 +107,16 @@ public sealed class PolicyApplicationService(
             return null;
         }
 
-        var inventory = await clickHouse.GetTablesAsync(cluster, cancellationToken);
-        return new PolicyInventory(inventory.Select(x => new PolicyInventoryTable(x.Database, x.Table)).ToList());
+        return await memoryCache.GetOrCreateAsync(
+            $"policy-inventory:{sourceClusterId:N}",
+            async entry =>
+            {
+                entry.AbsoluteExpirationRelativeToNow = InventoryCacheDuration;
+                var inventory = await clickHouse.GetTablesAsync(cluster, cancellationToken);
+                return new PolicyInventory(inventory
+                    .Select(x => new PolicyInventoryTable(x.Database, x.Table))
+                    .ToList());
+            });
     }
 
     public async Task<PolicySimulationDto?> SimulateAsync(PolicySimulationRequest request, CancellationToken cancellationToken = default)
@@ -232,6 +243,3 @@ public sealed class PolicyApplicationService(
         return options;
     }
 }
-
-
-

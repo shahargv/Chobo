@@ -79,6 +79,16 @@
             )
         }
         @{
+            Name = 'show-backup-single-shard-progress'
+            Type = 'Cli'
+            Args = @('backups', 'progress', '--id', '{backup.id}')
+            ExpectTextContains = @(
+                'backup_single_source.source_orders'
+                'shard=Succeeded'
+            )
+            ExpectTextNotContains = 'shards=1 queued='
+        }
+        @{
             Name = 'start-restore'
             Type = 'Cli'
             Args = @('restore', 'initiate', '--backup-id', '{backup.id}', '--target-cluster-id', '{restoreCluster.id}', '--database', 'backup_single_source', '--table', 'source_orders', '--target-database', 'backup_single_restore', '--target-table', 'restored_orders')

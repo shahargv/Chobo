@@ -12,7 +12,7 @@ export function Dashboard() {
   const targets = useQuery({ queryKey: ["targets"], queryFn: () => api.targets() });
   const policies = useQuery({ queryKey: ["policies"], queryFn: () => api.policies() });
   const allSchedules = useQuery({ queryKey: ["schedules"], queryFn: () => api.schedules() });
-  const backups = useQuery({ queryKey: ["backups"], queryFn: () => api.backups() });
+  const backups = useQuery({ queryKey: ["backups", "summary"], queryFn: () => api.backups({}, { includeTables: false }) });
   const restores = useQuery({ queryKey: ["restores"], queryFn: () => api.restores() });
   const running = dashboard.data?.runningBackups ?? [];
   const schedules = dashboard.data?.schedules ?? [];
@@ -40,7 +40,7 @@ export function Dashboard() {
       </div>
       <section className="panel">
         <h2>Running backups</h2>
-        <DataTable headers={["Status", "Policy", "Started", "Tables", "Shards", "Failure"]}>
+        <DataTable headers={["Status", "Policy", "Started", "Tables", "Shards", "Failure"]} isLoading={dashboard.isLoading}>
           {running.map((backup) => (
             <tr key={backup.backupId}>
               <td><Status value={backup.status} /></td>
@@ -56,13 +56,14 @@ export function Dashboard() {
       <section className="panel two-col">
         <div>
           <h2>Latest backups</h2>
-          <DataTable headers={["Status", "Created", "Completed", "Type", "Tables", "Failure"]}>
+          <DataTable headers={["Status", "Created", "Completed", "Type", "Tables", "Failure"]} isLoading={backups.isLoading}>
             {latestBackups.map((backup) => (
               <tr key={backup.id}>
                 <td><Status value={backup.status} /></td>
                 <td>{formatTime(backup.createdAt)}</td>
+                <td>{formatCompletionTime(backup.endedAt ?? backup.deletedAt, backup.startedAt, backup.createdAt)}</td>
                 <td>{backup.backupType}</td>
-                <td>{backup.tables.length}</td>
+                <td>{backup.tableCount}</td>
                 <td>{backup.failureReason ?? backup.error ?? ""}</td>
               </tr>
             ))}

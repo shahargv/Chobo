@@ -88,6 +88,15 @@
             )
         }
         @{
+            Name = 'show-backup-shard-progress'
+            Type = 'Cli'
+            Args = @('backups', 'progress', '--id', '{backup.id}')
+            ExpectTextContains = @(
+                'backup_sharded_source.orders_local'
+                'shards=2 queued=0 running=0 completed=2 succeeded=2 failed=0 skipped=0'
+            )
+        }
+        @{
             Name = 'restore-preserve'
             Type = 'Cli'
             Args = @('restore', 'initiate', '--backup-id', '{backup.id}', '--target-cluster-id', '{restoreCluster.id}', '--database', 'backup_sharded_source', '--table', 'orders_local', '--target-database', 'backup_sharded_restore', '--target-table', 'orders_local')
@@ -136,7 +145,7 @@
         @{
             Name = 'restore-partial-shard-failure'
             Type = 'Cli'
-            Args = @('restore', 'initiate', '--backup-id', '{backup.id}', '--target-cluster-id', '{restoreCluster.id}', '--database', 'backup_sharded_source', '--table', 'orders_local', '--target-database', 'backup_sharded_partial', '--target-table', 'orders_local', '--layout', 'preserve', '--append')
+            Args = @('restore', 'initiate', '--backup-id', '{backup.id}', '--target-cluster-id', '{restoreCluster.id}', '--database', 'backup_sharded_source', '--table', 'orders_local', '--target-database', 'backup_sharded_partial', '--target-table', 'orders_local', '--layout', 'preserve', '--append', '--confirm-destructive')
             SaveJsonAs = 'partialRestore'
             ExpectJson = @(
                 @{ Path = 'layout'; Equals = 'Preserve' }
@@ -179,7 +188,7 @@
         @{
             Name = 'restore-append-single-shard'
             Type = 'Cli'
-            Args = @('restore', 'initiate', '--backup-id', '{backup.id}', '--target-cluster-id', '{singleCluster.id}', '--database', 'backup_sharded_source', '--table', 'orders_local', '--target-database', 'backup_sharded_single', '--target-table', 'append_orders', '--layout', 'single-node', '--source-shard', '1', '--append')
+            Args = @('restore', 'initiate', '--backup-id', '{backup.id}', '--target-cluster-id', '{singleCluster.id}', '--database', 'backup_sharded_source', '--table', 'orders_local', '--target-database', 'backup_sharded_single', '--target-table', 'append_orders', '--layout', 'single-node', '--source-shard', '1', '--append', '--confirm-destructive')
             SaveJsonAs = 'appendRestore'
             ExpectJson = @(
                 @{ Path = 'append'; Equals = $true }
