@@ -49,6 +49,8 @@ Docker images are published to `docker.io/shahargv/chobo`.
    - `chobo-cli-linux-x64.zip`
    - `chobo-server-win-x64.zip`
    - `chobo-server-linux-x64.zip`
+   - `chobo-server-docker-v1.2.3.tar`
+   - `chobo-cli-docker-v1.2.3.tar`
    - `SHA256SUMS.txt`
 
 5. Verify Docker Hub tags:
@@ -62,7 +64,7 @@ Docker images are published to `docker.io/shahargv/chobo`.
 
 Use the `Release` workflow's manual dispatch when a release needs to be rebuilt from the selected commit. Enter the version without the leading `v`, for example `1.2.3`.
 
-The workflow creates or updates the GitHub Release for tag `v1.2.3`, uploads zipped binary artifacts and checksums, and publishes the Docker Hub images.
+The workflow creates or updates the GitHub Release for tag `v1.2.3`, uploads zipped binary artifacts, Docker image tar files, and checksums, and publishes the Docker Hub images.
 
 ## Version Stamping
 
