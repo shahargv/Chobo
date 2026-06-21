@@ -5,6 +5,7 @@ riderModule.iml
 /_ReSharper.Caches/
 .artifacts/
 .idea
+*.lscache
 Chobo.Tests/TestResults
 ChoboServer/logs/
 ChoboServer/data-*/
