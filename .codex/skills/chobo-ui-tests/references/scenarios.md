@@ -76,9 +76,11 @@ Prerequisite: successful backup.
 4. Use a valid single-node layout.
 5. Select `backup_single_source.source_orders`.
 6. Set target database `backup_single_restore` and target table `restored_orders`.
-7. Review impact, execute, and wait for Succeeded in restore history.
-8. Open restore details.
-9. Verify restored rows with SQL.
+7. Pre-create the target table before the restore when testing destructive confirmation, enable Append to existing table, and screenshot the visible in-app confirmation dialog before confirming.
+8. Wait for Succeeded in restore history.
+9. Open restore details.
+10. Verify restored rows with SQL.
+11. When destructive confirmation behavior is in scope, test backup deletion by screenshotting the visible in-app delete confirmation, canceling once and verifying the backup remains undeleted, then confirming it and verifying the backup enters a delete-requested/deleted state.
 
 ## details
 
@@ -90,7 +92,7 @@ Open backup details and restore details directly. Confirm the records are unders
 
 Prerequisite: any mutating scenario.
 
-Open Logs and Audit. Test recent records, search/filter affordances, time window behavior, and pagination. Confirm records exist for install, cluster/storage/policy/schedule changes, backup, and restore.
+Open Logs and Audit. Test recent records, search/filter affordances, time window behavior, and pagination. Confirm records exist for install, cluster/storage/policy/schedule changes, backup, restore, and destructive confirmation-backed actions when they are part of the run.
 
 ## failure
 

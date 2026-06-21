@@ -35,7 +35,8 @@ public sealed class RestoreCommand : CliSubject
             tableMappings,
             context.Command.Options.Has("--schema-only"),
             sourceShards,
-            targetShards);
+            targetShards,
+            context.Command.Options.Has("--confirm-destructive"));
         return CommandHelpers.WithClient(context, client => client.PostAsync("restores/initiate", request));
     }
 
