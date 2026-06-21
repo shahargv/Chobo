@@ -36,9 +36,9 @@ ChoboCli users remove-token --id <user-id> --token-id <token-id>
 
 ```powershell
 ChoboCli clusters list
-ChoboCli clusters add --name prod --mode Cluster --node ch1:9000,ch2:9000 --username default --password secret --backup-restore-maxdop 3 --clickhouse-cluster-name prod_cluster
-ChoboCli clusters add --name local --mode SingleInstance --host localhost --port 9000
-ChoboCli clusters update --id <cluster-id> --name prod --mode Cluster --node ch1:9000,ch2:9000
+ChoboCli clusters add --name prod --mode Cluster --node ch1:8123,ch2:8123 --username default --password secret --backup-restore-maxdop 3 --clickhouse-cluster-name prod_cluster
+ChoboCli clusters add --name local --mode SingleInstance --host localhost --port 8123
+ChoboCli clusters update --id <cluster-id> --name prod --mode Cluster --node ch1:8123,ch2:8123
 ChoboCli clusters update-credentials --id <cluster-id> --username default --password secret
 ChoboCli clusters test-connection --id <cluster-id>
 ChoboCli clusters remove --id <cluster-id>
@@ -46,7 +46,7 @@ ChoboCli clusters remove --id <cluster-id>
 
 Credentials are write-only and are never printed by `clusters list`.
 
-ChoboServer uses the official `ClickHouse.Driver` ADO.NET package over HTTP(S). For compatibility, configured native-default ports are accepted: `9000` maps to HTTP `8123`, and TLS `9440` maps to HTTPS `8443`. Pass a custom HTTP(S) port directly when your ClickHouse deployment uses one.
+ChoboServer uses the official `ClickHouse.Driver` ADO.NET package over HTTP(S). Enter the ClickHouse HTTP or HTTPS port that ChoboServer can reach, such as `8123` for standard HTTP deployments.
 
 For `Cluster` mode, `--clickhouse-cluster-name` should match the ClickHouse `system.clusters.cluster` value that describes the shards and replicas. Chobo uses that topology during backup/restore to choose one representative replica per shard. If the option is omitted, Chobo can auto-discover the name only when `system.clusters` contains exactly one cluster definition.
 
@@ -54,8 +54,8 @@ For `Cluster` mode, `--clickhouse-cluster-name` should match the ClickHouse `sys
 
 ```powershell
 ChoboCli targets list
-ChoboCli targets add-s3 --name minio --endpoint http://localhost:9000 --bucket data-bucket --access-key key --secret-key secret --force-path-style
-ChoboCli targets update-s3 --id <target-id> --name minio --endpoint http://localhost:9000 --bucket data-bucket
+ChoboCli targets add-s3 --name object-store --endpoint https://s3-compatible.example.com --bucket chobo-backups --access-key key --secret-key secret --force-path-style
+ChoboCli targets update-s3 --id <target-id> --name object-store --endpoint https://s3-compatible.example.com --bucket chobo-backups
 ChoboCli targets test-connection --id <target-id>
 ChoboCli targets remove --id <target-id>
 ```
@@ -161,7 +161,7 @@ The dashboard shows active backup runs, every schedule with last-run status and 
 
 The same server surface also exposes flat general metrics at `/api/v1/metrics`, available through `ChoboCli metrics show`. Metrics include seconds since the last successful backup completed for each policy, for example `Policies.TimeSecondsSinceLastPolicyBackup.nightly`, plus partial and failed backup counters per policy.
 
-## Backups And Restores
+## Backups and restores
 
 ```powershell
 ChoboCli backup manual --cluster-id <cluster-id> --target-id <target-id> --selector-file .\policy-selector.json
@@ -178,12 +178,12 @@ ChoboCli schema show --backup-id <backup-id> --database sales --table orders
 ChoboCli schema export --backup-id <backup-id> --database sales
 
 ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-id> --target-table restored_orders
-ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-id> --append
+ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-id> --append --confirm-destructive
 ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-id> --layout preserve
 ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-id> --layout redistribute
 ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-id> --layout single-node --source-shard 1
 ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-id> --layout preserve --target-shard 2
-ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-id> --table-mappings-json '[{"backupTableId":"<table-id>","targetDatabase":"restore","targetTable":"orders_restore","schemaOnly":false,"append":true,"allowSchemaMismatch":true}]'
+ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-id> --table-mappings-json '[{"backupTableId":"<table-id>","targetDatabase":"restore","targetTable":"orders_restore","schemaOnly":false,"append":true,"allowSchemaMismatch":true}]' --confirm-destructive
 ChoboCli restores list
 ChoboCli restores show --id <restore-id>
 ChoboCli restores wait --id <restore-id> --timeout-seconds 300 --poll-seconds 2
@@ -233,6 +233,6 @@ ChoboCli config export --output .\chobo-config.json
 ChoboCli config import --file .\chobo-config.json
 ```
 
-`data` includes logs and audits. `config` excludes logs and audits.
+`data` exports all restorable Chobo metadata except audit entries and application logs. `config` is configuration-only and does not preserve backup/restore history.
 
 

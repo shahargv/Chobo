@@ -1,0 +1,4 @@
+interface:
+  display_name: "Chobo Documentation"
+  short_description: "DBA-first Chobo docs workflow"
+  default_prompt: "Use $chobo-documentation to improve Chobo user documentation for DBAs."
