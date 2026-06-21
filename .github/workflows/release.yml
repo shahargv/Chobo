@@ -109,47 +109,74 @@ jobs:
         shell: pwsh
         run: ./scripts/Build-Artifacts.ps1 -Configuration Release -Version '${{ needs.prepare.outputs.version }}'
 
-      - name: Upload binary artifacts
-        uses: actions/upload-artifact@v6
-        with:
-          name: chobo-release-${{ needs.prepare.outputs.version }}
-          path: |
-            .artifacts/build/Release/*.zip
-            .artifacts/build/Release/SHA256SUMS.txt
-          if-no-files-found: error
-          retention-days: 90
-
       - name: Login to Docker Hub
         uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push server image
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: ChoboServer/Dockerfile
-          push: true
-          build-args: |
-            BUILD_VERSION=${{ needs.prepare.outputs.version }}
-            INFORMATIONAL_VERSION=${{ needs.prepare.outputs.informational_version }}
-          tags: |
-            ${{ env.DOCKER_IMAGE }}:server-v${{ needs.prepare.outputs.version }}
-            ${{ env.DOCKER_IMAGE }}:server-latest
+      - name: Build, save, and push Docker images
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          INFORMATIONAL_VERSION: ${{ needs.prepare.outputs.informational_version }}
+        run: |
+          set -euo pipefail
 
-      - name: Build and push CLI image
-        uses: docker/build-push-action@v7
+          output_dir=".artifacts/build/Release"
+          mkdir -p "$output_dir"
+
+          server_version_tag="${DOCKER_IMAGE}:server-v${RELEASE_VERSION}"
+          server_latest_tag="${DOCKER_IMAGE}:server-latest"
+          cli_version_tag="${DOCKER_IMAGE}:cli-v${RELEASE_VERSION}"
+          cli_latest_tag="${DOCKER_IMAGE}:cli-latest"
+
+          docker build \
+            --file ChoboServer/Dockerfile \
+            --build-arg "BUILD_VERSION=${RELEASE_VERSION}" \
+            --build-arg "INFORMATIONAL_VERSION=${INFORMATIONAL_VERSION}" \
+            --tag "$server_version_tag" \
+            --tag "$server_latest_tag" \
+            .
+          docker save --output "$output_dir/chobo-server-docker-v${RELEASE_VERSION}.tar" "$server_version_tag"
+          docker push "$server_version_tag"
+          docker push "$server_latest_tag"
+
+          docker build \
+            --file ChoboCli/Dockerfile \
+            --build-arg "BUILD_VERSION=${RELEASE_VERSION}" \
+            --build-arg "INFORMATIONAL_VERSION=${INFORMATIONAL_VERSION}" \
+            --tag "$cli_version_tag" \
+            --tag "$cli_latest_tag" \
+            .
+          docker save --output "$output_dir/chobo-cli-docker-v${RELEASE_VERSION}.tar" "$cli_version_tag"
+          docker push "$cli_version_tag"
+          docker push "$cli_latest_tag"
+
+      - name: Update release checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          output_dir=".artifacts/build/Release"
+          checksum_file="$output_dir/SHA256SUMS.txt"
+          : > "$checksum_file"
+
+          for file in "$output_dir"/*.zip "$output_dir"/*.tar; do
+            hash="$(sha256sum "$file" | awk '{print $1}')"
+            printf '%s  %s\n' "$hash" "$(basename "$file")" >> "$checksum_file"
+          done
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v6
         with:
-          context: .
-          file: ChoboCli/Dockerfile
-          push: true
-          build-args: |
-            BUILD_VERSION=${{ needs.prepare.outputs.version }}
-            INFORMATIONAL_VERSION=${{ needs.prepare.outputs.informational_version }}
-          tags: |
-            ${{ env.DOCKER_IMAGE }}:cli-v${{ needs.prepare.outputs.version }}
-            ${{ env.DOCKER_IMAGE }}:cli-latest
+          name: chobo-release-${{ needs.prepare.outputs.version }}
+          path: |
+            .artifacts/build/Release/*.zip
+            .artifacts/build/Release/*.tar
+            .artifacts/build/Release/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Publish GitHub release
         env:
@@ -164,6 +191,8 @@ jobs:
           Docker images:
           - [server-v$RELEASE_VERSION](https://hub.docker.com/r/shahargv/chobo/tags?name=server-v$RELEASE_VERSION)
           - [cli-v$RELEASE_VERSION](https://hub.docker.com/r/shahargv/chobo/tags?name=cli-v$RELEASE_VERSION)
+
+          Offline Docker image tar files are attached to this release.
           EOF
 
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
@@ -175,5 +204,5 @@ jobs:
             gh release edit "$RELEASE_TAG" --notes-file release-notes.md
           fi
 
-          gh release upload "$RELEASE_TAG" .artifacts/build/Release/*.zip .artifacts/build/Release/SHA256SUMS.txt --clobber
+          gh release upload "$RELEASE_TAG" .artifacts/build/Release/*.zip .artifacts/build/Release/*.tar .artifacts/build/Release/SHA256SUMS.txt --clobber
 
