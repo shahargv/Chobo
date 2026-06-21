@@ -94,7 +94,7 @@ After the GitHub Actions release workflow completes, verify:
 
 - the workflow run passed all jobs;
 - the GitHub Release for `v<version>` exists;
-- release assets include all four zip files and `SHA256SUMS.txt`;
+- release assets include all four zip files, both Docker image tar files, and `SHA256SUMS.txt`;
 - Docker Hub tags exist:
   - `shahargv/chobo:server-v<version>`
   - `shahargv/chobo:server-latest`
