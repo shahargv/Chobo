@@ -1,3 +1,4 @@
+using System.Text;
 using Chobo.Contracts;
 using ChoboCli.Cli;
 
@@ -41,6 +42,7 @@ public sealed class BackupsCommands : CliSubject
     {
         Verb("list", "List backups.", ListAsync);
         Verb("show", "Show one backup.", ShowAsync);
+        Verb("progress", "Show table and shard progress for one backup.", ProgressAsync);
         Verb("wait", "Wait for a backup to finish.", WaitAsync);
         Verb("delete", "Request deletion for one backup.", DeleteAsync);
         Verb("cancel", "Cancel a queued or running backup.", CancelAsync);
@@ -57,6 +59,14 @@ public sealed class BackupsCommands : CliSubject
 
     private static Task<object?> ShowAsync(CommandContext context) =>
         CommandHelpers.WithClient(context, client => client.GetAsync($"backups/{context.Command.Options.Required("--id")}"));
+
+    private static Task<object?> ProgressAsync(CommandContext context) =>
+        CommandHelpers.WithClient(context, async client =>
+        {
+            var backup = await client.GetAsync<BackupDto>($"backups/{context.Command.Options.Required("--id")}")
+                ?? throw new InvalidOperationException("Backup was not found.");
+            return FormatProgress(backup);
+        });
 
     private static Task<object?> DeleteAsync(CommandContext context)
     {
@@ -126,6 +136,51 @@ public sealed class BackupsCommands : CliSubject
         }
 
         return current;
+    }
+
+    private static string FormatProgress(BackupDto backup)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine($"Backup {backup.Id} {backup.Status} tables={backup.TableCount}");
+        if (backup.ContentMode == BackupContentMode.SchemaOnly)
+        {
+            builder.AppendLine($"  schema-only backup captured {backup.TableCount} table schema{(backup.TableCount == 1 ? "" : "s")}; shard data backup was skipped.");
+            return builder.ToString().TrimEnd();
+        }
+
+        if (backup.Tables.Count == 0)
+        {
+            builder.AppendLine("  table details are not available in this response.");
+            return builder.ToString().TrimEnd();
+        }
+
+        foreach (var table in backup.Tables.OrderBy(x => x.Database).ThenBy(x => x.Table))
+        {
+            builder.AppendLine($"  {table.Database}.{table.Table}  {table.Status}  {FormatShardProgress(table.Shards)}");
+        }
+
+        return builder.ToString().TrimEnd();
+    }
+
+    private static string FormatShardProgress(IReadOnlyList<BackupTableShardDto> shards)
+    {
+        if (shards.Count == 0)
+        {
+            return "shards=0";
+        }
+
+        if (shards.Count == 1)
+        {
+            return $"shard={shards[0].Status}";
+        }
+
+        var queued = shards.Count(x => x.Status == BackupTableStatus.Queued);
+        var running = shards.Count(x => x.Status == BackupTableStatus.Running);
+        var succeeded = shards.Count(x => x.Status == BackupTableStatus.Succeeded);
+        var failed = shards.Count(x => x.Status == BackupTableStatus.Failed);
+        var skipped = shards.Count(x => x.Status == BackupTableStatus.Skipped);
+        var completed = succeeded + failed + skipped;
+        return $"shards={shards.Count} queued={queued} running={running} completed={completed} succeeded={succeeded} failed={failed} skipped={skipped}";
     }
 
     private static string BackupQuery(OptionBag options)
