@@ -163,7 +163,7 @@
         @{
             Name = 'show-audit'
             Type = 'Cli'
-            Args = @('audit', 'show', '--last', '500')
+            Args = @('audit', 'show', '--last', '10000')
             ExpectJson = @(
                 @{ Path = 'items'; ContainsObject = @{ action = 'pin'; entityType = 'backup' } }
                 @{ Path = 'items'; ContainsObject = @{ action = 'unpin'; entityType = 'backup' } }
