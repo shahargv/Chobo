@@ -471,8 +471,8 @@ public sealed class BackupRestoreExecutionTests
         Assert.Equal(3, fixture.ClickHouse.MaxConcurrentBackupStarts);
         Assert.Equal(8, fixture.ClickHouse.BackupStartTables.Count);
         Assert.Equal(["aaa_wide", "aaa_wide", "aaa_wide"], fixture.ClickHouse.BackupStartTables.Take(3).ToArray());
-        Assert.Equal(4, fixture.ClickHouse.BackupStartTables.Take(6).Count(x => x == "aaa_wide"));
-        Assert.Equal(2, fixture.ClickHouse.BackupStartTables.Take(6).Count(x => x == "zzz_next"));
+        Assert.Equal(4, fixture.ClickHouse.BackupStartTables.Count(x => x == "aaa_wide"));
+        Assert.Equal(4, fixture.ClickHouse.BackupStartTables.Count(x => x == "zzz_next"));
     }
 
     [Fact]
@@ -2052,12 +2052,15 @@ public sealed class BackupRestoreExecutionTests
             }
 
             var operationId = $"backup-{table.Table}-s{shard.SourceShardNumber}-{Guid.NewGuid():N}";
-            if (!DropStartedBackupOperation)
+            lock (_lock)
             {
-                KnownOperations[operationId] = NextBackupStatus;
-                if (!string.IsNullOrWhiteSpace(NextBackupError))
+                if (!DropStartedBackupOperation)
                 {
-                    OperationErrors[operationId] = NextBackupError;
+                    KnownOperations[operationId] = NextBackupStatus;
+                    if (!string.IsNullOrWhiteSpace(NextBackupError))
+                    {
+                        OperationErrors[operationId] = NextBackupError;
+                    }
                 }
             }
             return new ClickHouseOperationResult(operationId, "CREATING_BACKUP");
@@ -2072,14 +2075,18 @@ public sealed class BackupRestoreExecutionTests
 
         public Task<ClickHouseOperationResult> StartRestoreShardAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, BackupTargetEntity target, RestoreTableShardEntity table, BackupTableEntity backupTable, BackupTableShardEntity backupShard, CancellationToken cancellationToken)
         {
-            RestoreStartTables.Add(backupTable.Table);
-            var operationId = $"restore-{backupTable.Table}-s{backupShard.SourceShardNumber}-{Guid.NewGuid():N}";
-            if (!DropStartedRestoreOperation)
+            string operationId;
+            lock (_lock)
             {
-                KnownOperations[operationId] = NextRestoreStatus;
-                if (!string.IsNullOrWhiteSpace(NextRestoreError))
+                RestoreStartTables.Add(backupTable.Table);
+                operationId = $"restore-{backupTable.Table}-s{backupShard.SourceShardNumber}-{Guid.NewGuid():N}";
+                if (!DropStartedRestoreOperation)
                 {
-                    OperationErrors[operationId] = NextRestoreError;
+                    KnownOperations[operationId] = NextRestoreStatus;
+                    if (!string.IsNullOrWhiteSpace(NextRestoreError))
+                    {
+                        OperationErrors[operationId] = NextRestoreError;
+                    }
                 }
             }
             return Task.FromResult(new ClickHouseOperationResult(operationId, "RESTORING"));
@@ -2098,15 +2105,21 @@ public sealed class BackupRestoreExecutionTests
                 await _releaseStatus.Task.WaitAsync(cancellationToken);
             }
 
-            return KnownOperations.TryGetValue(operationId, out var status)
-                ? new ClickHouseOperationStatus(true, status, OperationErrors.GetValueOrDefault(operationId))
-                : new ClickHouseOperationStatus(false, null, null);
+            lock (_lock)
+            {
+                return KnownOperations.TryGetValue(operationId, out var status)
+                    ? new ClickHouseOperationStatus(true, status, OperationErrors.GetValueOrDefault(operationId))
+                    : new ClickHouseOperationStatus(false, null, null);
+            }
         }
 
         public Task KillQueryAsync(ClickHouseClusterEntity cluster, string queryId, CancellationToken cancellationToken)
         {
-            KilledQueries.Add(queryId);
-            KnownOperations[queryId] = "CANCELLED";
+            lock (_lock)
+            {
+                KilledQueries.Add(queryId);
+                KnownOperations[queryId] = "CANCELLED";
+            }
             return Task.CompletedTask;
         }
 
@@ -2157,7 +2170,7 @@ public sealed class BackupRestoreExecutionTests
 
     private sealed class TestFixture : IAsyncDisposable
     {
-        private readonly SqliteConnection _connection;
+        private readonly string _dataDirectory;
         public IServiceProvider Services { get; }
         public ChoboDbContext Db { get; }
         public FakeClickHouseAdapter ClickHouse { get; }
@@ -2166,9 +2179,9 @@ public sealed class BackupRestoreExecutionTests
         public Guid TargetClusterId { get; }
         public Guid TargetId { get; }
 
-        private TestFixture(SqliteConnection connection, IServiceProvider services, ChoboDbContext db, FakeClickHouseAdapter clickHouse, FakeBackupStorageOperations storageDeletion, Guid sourceClusterId, Guid targetClusterId, Guid targetId)
+        private TestFixture(string dataDirectory, IServiceProvider services, ChoboDbContext db, FakeClickHouseAdapter clickHouse, FakeBackupStorageOperations storageDeletion, Guid sourceClusterId, Guid targetClusterId, Guid targetId)
         {
-            _connection = connection;
+            _dataDirectory = dataDirectory;
             Services = services;
             Db = db;
             ClickHouse = clickHouse;
@@ -2180,14 +2193,19 @@ public sealed class BackupRestoreExecutionTests
 
         public static async Task<TestFixture> CreateAsync(int? clusterMaxDop = null, ChoboBackupRestoreOptions? options = null, TimeProvider? timeProvider = null)
         {
-            var connection = new SqliteConnection("DataSource=:memory:");
-            await connection.OpenAsync();
+            var dataDirectory = Path.Combine(Path.GetTempPath(), "chobo-tests", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dataDirectory);
+            var dbPath = Path.Combine(dataDirectory, "chobo.db");
+            var connectionString = new SqliteConnectionStringBuilder
+            {
+                DataSource = dbPath,
+                DefaultTimeout = 60
+            }.ToString();
             var fake = new FakeClickHouseAdapter();
             var storageDeletion = new FakeBackupStorageOperations();
             var services = new ServiceCollection()
-                .AddSingleton(connection)
-                .AddDbContext<ChoboDbContext>((provider, builder) => builder.UseSqlite(provider.GetRequiredService<SqliteConnection>()))
-                .AddDbContextFactory<ChoboDbContext>((provider, builder) => builder.UseSqlite(provider.GetRequiredService<SqliteConnection>()), ServiceLifetime.Scoped)
+                .AddDbContext<ChoboDbContext>(builder => builder.UseSqlite(connectionString))
+                .AddDbContextFactory<ChoboDbContext>(builder => builder.UseSqlite(connectionString), ServiceLifetime.Scoped)
                 .AddSingleton(fake)
                 .AddScoped<IClickHouseAdapter>(provider => provider.GetRequiredService<FakeClickHouseAdapter>())
                 .AddSingleton(storageDeletion)
@@ -2216,8 +2234,6 @@ public sealed class BackupRestoreExecutionTests
                 .AddScoped<RestoreRunnerService>()
                 .AddScoped<BackupCleanupService>()
                 .AddSingleton<IBackupRestoreQueues, BackupRestoreQueues>()
-                // The in-memory SQLite fixture shares one open connection across scoped DbContexts.
-                // Keep default runner work serial so table workers do not contend for that test-only connection.
                 .AddSingleton(Options.Create(options ?? new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1), SchedulerInterval = TimeSpan.FromSeconds(1) }))
                 .AddSingleton(Options.Create(new RetentionManagementOptions { Interval = TimeSpan.FromSeconds(1), MaxDop = 2 }))
                 .AddSingleton(Options.Create(new BackupsGarbageCollectorOptions { Interval = TimeSpan.FromSeconds(1), MaxDop = 2 }))
@@ -2260,7 +2276,7 @@ public sealed class BackupRestoreExecutionTests
             });
             await db.SaveChangesAsync();
 
-            return new TestFixture(connection, services, db, fake, storageDeletion, sourceClusterId, targetClusterId, targetId);
+            return new TestFixture(dataDirectory, services, db, fake, storageDeletion, sourceClusterId, targetClusterId, targetId);
         }
 
         public async Task<Guid> CreateManualBackupAsync(PolicySelector? selector = null, string actorName = "system", Guid? actorUserId = null, bool schemaOnly = false)
@@ -2495,6 +2511,15 @@ public sealed class BackupRestoreExecutionTests
             if (Services is IDisposable disposable)
             {
                 disposable.Dispose();
+            }
+
+            try
+            {
+                Directory.Delete(_dataDirectory, recursive: true);
+            }
+            catch
+            {
+                // Best-effort cleanup for temp test databases.
             }
         }
     }
