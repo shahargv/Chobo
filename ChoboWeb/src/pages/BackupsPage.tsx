@@ -14,7 +14,7 @@ export function Backups() {
   const navigate = useNavigate();
   const [selectedBackupId, setSelectedBackupId] = useState<string | null>(backupId ?? null);
   const [showManual, setShowManual] = useState(false);
-  const [deleteBackupId, setDeleteBackupId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<BackupDto | null>(null);
   const backups = useQuery({ queryKey: ["backups", "summary"], queryFn: () => api.backups({}, { includeTables: false }) });
   const schedules = useQuery({ queryKey: ["schedules"], queryFn: () => api.schedules() });
   const policies = useQuery({ queryKey: ["policies"], queryFn: () => api.policies() });
@@ -24,9 +24,13 @@ export function Backups() {
     setSelectedBackupId(backupId ?? null);
   }, [backupId]);
   const mutation = useMutation({
-    mutationFn: ({ id, action }: { id: string; action: "pin" | "unpin" | "delete" | "cancel" }) =>
-      action === "pin" ? api.pinBackup(id) : action === "unpin" ? api.unpinBackup(id) : action === "cancel" ? api.cancelBackup(id) : api.deleteBackup(id, false, true),
-    onSuccess: () => { backups.refetch(); showToast({ kind: "success", text: "Backup updated." }); },
+    mutationFn: ({ id, action, force = false }: { id: string; action: "pin" | "unpin" | "delete" | "cancel"; force?: boolean }) =>
+      action === "pin" ? api.pinBackup(id) : action === "unpin" ? api.unpinBackup(id) : action === "cancel" ? api.cancelBackup(id) : api.deleteBackup(id, { force, confirmDestructive: true }),
+    onSuccess: (_backup, variables) => {
+      if (variables.action === "delete") setDeleteTarget(null);
+      backups.refetch();
+      showToast({ kind: "success", text: variables.action === "delete" ? "Backup delete requested." : "Backup updated." });
+    },
     onError: (error) => showToast({ kind: "error", text: String(error) })
   });
   return (
@@ -48,13 +52,13 @@ export function Backups() {
                 <Link className="ghost" to={`/backups/${backup.id}`}>Details</Link>
                 {!isBackupDeleted(backup) && <button className="ghost" onClick={() => mutation.mutate({ id: backup.id, action: backup.isPinned ? "unpin" : "pin" })}>{backup.isPinned ? "Unpin" : "Pin"}</button>}
                 {isBackupInExecutionPhase(backup.status) && <button className="danger" onClick={() => mutation.mutate({ id: backup.id, action: "cancel" })}><Ban size={16} /> Cancel</button>}
-                {!isBackupDeleted(backup) && <button className="danger" onClick={() => setDeleteBackupId(backup.id)}>Delete</button>}
+                {!isBackupDeleted(backup) && <button className="danger" onClick={() => setDeleteTarget(backup)}>Delete</button>}
               </td>
             </tr>
           ))}
         </DataTable>
       </section>
-      {deleteBackupId && <ConfirmDialog title="Delete backup" message="Delete this backup and its stored backup data?" confirmLabel="Delete backup" busy={mutation.isPending} onCancel={() => setDeleteBackupId(null)} onConfirm={() => { mutation.mutate({ id: deleteBackupId, action: "delete" }); setDeleteBackupId(null); }} />}
+      {deleteTarget && <ConfirmDialog title="Delete backup" message={deleteBackupMessage(deleteTarget)} confirmLabel={deleteTarget.isPinned ? "Force delete backup" : "Delete backup"} busy={mutation.isPending} onCancel={() => setDeleteTarget(null)} onConfirm={() => mutation.mutate({ id: deleteTarget.id, action: "delete", force: deleteTarget.isPinned })} />}
       {selectedBackupId && <BackupDrawer backupId={selectedBackupId} onClose={() => { setSelectedBackupId(null); navigate("/backups"); }} />}
     </Page>
   );
@@ -231,6 +235,11 @@ function formatShardProgress(progress: BackupShardProgressSummary) {
 
 function formatShardEndpoint(shard: BackupTableShardDto) {
   return `${shard.host}:${shard.port}${shard.useTls ? " tls" : ""}`;
+}
+
+function deleteBackupMessage(backup: BackupDto) {
+  const pinnedText = backup.isPinned ? " This backup is pinned, so confirming will force the delete request." : "";
+  return `Delete backup ${backup.id} and its stored backup data? This is destructive and cannot be undone.${pinnedText}`;
 }
 
 function isBackupDeleted(backup: BackupDto) {

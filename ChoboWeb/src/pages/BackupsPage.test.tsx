@@ -1,8 +1,11 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { describe, expect, it } from "vitest";
-import type { BackupTableDto, BackupTableShardDto } from "../api/generated";
-import { BackupTablesTable, summarizeBackupShards } from "./BackupsPage";
+import { MemoryRouter } from "react-router-dom";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { describe, expect, it, vi } from "vitest";
+import type { BackupDto, BackupTableDto, BackupTableShardDto } from "../api/generated";
+import { ApiContext } from "../api-context";
+import { Backups, BackupTablesTable, summarizeBackupShards } from "./BackupsPage";
 
 const baseShard = (overrides: Partial<BackupTableShardDto>): BackupTableShardDto => ({
   id: overrides.id ?? crypto.randomUUID(),
@@ -91,3 +94,96 @@ describe("BackupTablesTable", () => {
     host.remove();
   });
 });
+describe("Backups destructive delete flow", () => {
+  it("shows confirmation and sends confirmDestructive for non-pinned backup deletes", async () => {
+    const backup = baseBackup({ id: "backup-delete-id", isPinned: false });
+    const deleteBackup = vi.fn(async () => ({ ...backup, status: "ManualDeleteRequested" as const }));
+    const api = {
+      backups: vi.fn(async () => [backup]),
+      schedules: vi.fn(async () => []),
+      policies: vi.fn(async () => []),
+      deleteBackup,
+      pinBackup: vi.fn(),
+      unpinBackup: vi.fn(),
+      cancelBackup: vi.fn()
+    };
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={["/backups"]}>
+            <ApiContext.Provider value={{ api: api as never, showToast: vi.fn() }}>
+              <Backups />
+            </ApiContext.Provider>
+          </MemoryRouter>
+        </QueryClientProvider>
+      );
+    });
+    await flushUi();
+
+    const deleteButton = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "Delete") as HTMLButtonElement | undefined;
+    expect(deleteButton).toBeTruthy();
+    await act(async () => {
+      deleteButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(host.textContent).toContain("Delete backup backup-delete-id");
+    expect(host.textContent).toContain("This is destructive and cannot be undone.");
+    const confirmButton = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "Delete backup") as HTMLButtonElement | undefined;
+    expect(confirmButton).toBeTruthy();
+
+    await act(async () => {
+      confirmButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushUi();
+
+    expect(deleteBackup).toHaveBeenCalledWith("backup-delete-id", { force: false, confirmDestructive: true });
+
+    await act(async () => root.unmount());
+    queryClient.clear();
+    host.remove();
+  });
+});
+
+async function flushUi() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+function baseBackup(overrides: Partial<BackupDto> = {}): BackupDto {
+  return {
+    id: overrides.id ?? "backup-id",
+    triggerType: overrides.triggerType ?? "Manual",
+    status: overrides.status ?? "Succeeded",
+    backupType: overrides.backupType ?? "Full",
+    contentMode: overrides.contentMode ?? "SchemaAndData",
+    sourceClusterId: overrides.sourceClusterId ?? "source-cluster-id",
+    targetId: overrides.targetId ?? "target-id",
+    policyId: overrides.policyId ?? null,
+    scheduleId: overrides.scheduleId ?? null,
+    requestedByUserId: overrides.requestedByUserId ?? null,
+    requestedByName: overrides.requestedByName ?? "operator",
+    manualRequestJson: overrides.manualRequestJson ?? null,
+    createdAt: overrides.createdAt ?? "2026-06-22T00:00:00Z",
+    startedAt: overrides.startedAt ?? "2026-06-22T00:01:00Z",
+    endedAt: overrides.endedAt ?? "2026-06-22T00:02:00Z",
+    error: overrides.error ?? null,
+    failureReason: overrides.failureReason ?? null,
+    isPinned: overrides.isPinned ?? false,
+    pinnedAt: overrides.pinnedAt ?? null,
+    pinnedByUserId: overrides.pinnedByUserId ?? null,
+    pinnedByName: overrides.pinnedByName ?? null,
+    deletionReason: overrides.deletionReason ?? null,
+    deletionRequestedAt: overrides.deletionRequestedAt ?? null,
+    deletionStartedAt: overrides.deletionStartedAt ?? null,
+    deletedAt: overrides.deletedAt ?? null,
+    deletionError: overrides.deletionError ?? null,
+    deletionAttemptCount: overrides.deletionAttemptCount ?? 0,
+    tableCount: overrides.tableCount ?? 1,
+    tables: overrides.tables ?? []
+  };
+}

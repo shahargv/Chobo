@@ -115,7 +115,7 @@ export class ChoboApiClient {
   manualBackup(request: ManualBackupRequest) { return this.post<BackupDto>("backups/manual", request); }
   pinBackup(id: string) { return this.post<BackupDto>(`backups/${id}/pin`, {}); }
   unpinBackup(id: string) { return this.post<BackupDto>(`backups/${id}/unpin`, {}); }
-  deleteBackup(id: string, force = false, confirmDestructive = false) { return this.delete<BackupDto>(`backups/${id}${query({ force: force ? true : undefined, confirmDestructive: confirmDestructive ? true : undefined })}`); }
+  deleteBackup(id: string, options: { force?: boolean; confirmDestructive: true }) { return this.delete<BackupDto>(`backups/${id}${query({ force: options.force ? true : undefined, confirmDestructive: true })}`); }
   cancelBackup(id: string) { return this.post<BackupDto>(`backups/${id}/cancel`, {}); }
   recoverBackupFromPath(request: RecoverBackupMetadataFromPathRequest) { return this.post<BackupMetadataRecoveryResult>("backups/recover/from-path", request); }
   recoverBackupFromScan(request: RecoverBackupMetadataScanRequest) { return this.post<BackupMetadataRecoveryResult>("backups/recover/scan", request); }
