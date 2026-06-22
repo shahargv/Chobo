@@ -55,6 +55,7 @@ public sealed record BackupDto(
     string? DeletionError,
     int DeletionAttemptCount,
     int TableCount,
+    long? BackupSizeBytes,
     IReadOnlyList<BackupTableDto> Tables);
 
 public sealed record BackupTableDto(
@@ -69,6 +70,7 @@ public sealed record BackupTableDto(
     bool DataBackedUp,
     Guid? SchemaDefinitionId,
     string S3Path,
+    long? BackupSizeBytes,
     BackupTableStatus Status,
     string? ClickHouseOperationId,
     string? ClickHouseStatus,
@@ -90,6 +92,7 @@ public sealed record BackupTableShardDto(
     int Port,
     bool UseTls,
     string S3Path,
+    long? BackupSizeBytes,
     BackupTableStatus Status,
     string? ClickHouseOperationId,
     string? ClickHouseStatus,

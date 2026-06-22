@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 import type { BackupDto, BackupTableDto, BackupTableShardDto } from "../api/generated";
 import { ApiContext } from "../api-context";
-import { Backups, BackupTablesTable, summarizeBackupShards } from "./BackupsPage";
+import { Backups, BackupTablesTable, calculateBackupSizeBytes, calculateTableSizeBytes, summarizeBackupShards } from "./BackupsPage";
 
 const baseShard = (overrides: Partial<BackupTableShardDto>): BackupTableShardDto => ({
   id: overrides.id ?? crypto.randomUUID(),
@@ -20,6 +20,7 @@ const baseShard = (overrides: Partial<BackupTableShardDto>): BackupTableShardDto
   port: overrides.port ?? 9000,
   useTls: overrides.useTls ?? false,
   s3Path: overrides.s3Path ?? "s3://backup/table/shard",
+  backupSizeBytes: overrides.backupSizeBytes ?? 0,
   status: overrides.status ?? "Queued",
   clickHouseOperationId: overrides.clickHouseOperationId ?? null,
   clickHouseStatus: overrides.clickHouseStatus ?? null,
@@ -40,6 +41,7 @@ const baseTable = (overrides: Partial<BackupTableDto> & { shards: BackupTableSha
   dataBackedUp: overrides.dataBackedUp ?? true,
   schemaDefinitionId: overrides.schemaDefinitionId ?? "schema-id",
   s3Path: overrides.s3Path ?? "s3://backup/table",
+  backupSizeBytes: overrides.backupSizeBytes ?? 0,
   status: overrides.status ?? "Running",
   clickHouseOperationId: overrides.clickHouseOperationId ?? null,
   clickHouseStatus: overrides.clickHouseStatus ?? null,
@@ -54,16 +56,18 @@ describe("BackupTablesTable", () => {
     const single = baseTable({
       id: "single-table",
       table: "single_orders",
-      shards: [baseShard({ id: "single-shard", status: "Succeeded" })]
+      backupSizeBytes: 1536,
+      shards: [baseShard({ id: "single-shard", sourceShardName: "single", status: "Succeeded", backupSizeBytes: 1536 })]
     });
     const sharded = baseTable({
       id: "wide-table",
       table: "wide_orders",
+      backupSizeBytes: 2048,
       shards: [
-        baseShard({ id: "queued-1", sourceShardNumber: 1, sourceShardName: "s1", status: "Queued" }),
-        baseShard({ id: "queued-2", sourceShardNumber: 2, sourceShardName: "s2", status: "Queued" }),
-        baseShard({ id: "running-3", sourceShardNumber: 3, sourceShardName: "s3", status: "Running" }),
-        baseShard({ id: "done-4", sourceShardNumber: 4, sourceShardName: "s4", status: "Succeeded" })
+        baseShard({ id: "queued-1", sourceShardNumber: 1, sourceShardName: "s1", status: "Queued", backupSizeBytes: 0 }),
+        baseShard({ id: "queued-2", sourceShardNumber: 2, sourceShardName: "s2", status: "Queued", backupSizeBytes: 0 }),
+        baseShard({ id: "running-3", sourceShardNumber: 3, sourceShardName: "s3", status: "Running", backupSizeBytes: 0 }),
+        baseShard({ id: "done-4", sourceShardNumber: 4, sourceShardName: "s4", status: "Succeeded", backupSizeBytes: 2048 })
       ]
     });
     const host = document.createElement("div");
@@ -85,10 +89,13 @@ describe("BackupTablesTable", () => {
     });
     expect(host.textContent).toContain("sales.single_orders");
     expect(host.textContent).toContain("1 shard completed");
+    expect(host.textContent).toContain("1.5 KB");
     expect(host.textContent).toContain("sales.wide_orders");
     expect(host.textContent).toContain("4 shards: 2 queued, 1 running, 1 completed");
     expect(host.textContent).toContain("Shard 1 (s1)");
-    expect(host.textContent).not.toContain("Shard 1 (single)");
+    expect(host.textContent).toContain("Shard 1 (single)");
+    expect(calculateTableSizeBytes(single)).toBe(1536);
+    expect(calculateBackupSizeBytes([single, sharded])).toBe(3584);
 
     await act(async () => root.unmount());
     host.remove();
@@ -184,6 +191,7 @@ function baseBackup(overrides: Partial<BackupDto> = {}): BackupDto {
     deletionError: overrides.deletionError ?? null,
     deletionAttemptCount: overrides.deletionAttemptCount ?? 0,
     tableCount: overrides.tableCount ?? 1,
+    backupSizeBytes: overrides.backupSizeBytes ?? 0,
     tables: overrides.tables ?? []
   };
 }

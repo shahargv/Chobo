@@ -5,7 +5,7 @@ import { Ban, Play, RefreshCw, RotateCcw } from "lucide-react";
 import type { BackupDto, BackupPolicyDto, BackupRunStatus, BackupTableDto, BackupTableShardDto, BackupType } from "../api/generated";
 import { useApi } from "../api-context";
 import { ConfirmDialog, DataTable, Detail, Drawer, Empty, Page, Select, Status } from "../components/ui";
-import { formatCompletionTime, formatTime } from "../utils/format";
+import { formatBytes, formatCompletionTime, formatTime } from "../utils/format";
 import { isBackupStatusRestorable } from "./restores/restoreUtils";
 
 export function Backups() {
@@ -37,7 +37,7 @@ export function Backups() {
     <Page title="Backups" subtitle="Start manual backups, review backup history, and inspect table or shard results." action={<button className="primary" onClick={() => setShowManual(!showManual)}><Play size={16} /> Manual backup</button>}>
       {showManual && <ManualBackupPanel policies={policies.data ?? []} onQueued={() => { setShowManual(false); backups.refetch(); }} />}
       <section className="panel">
-        <DataTable headers={["Status", "Completion Time", "Type", "Initiated by", "Created", "Policy", "Tables", "Pinned", "Actions"]} isLoading={backups.isLoading}>
+        <DataTable headers={["Status", "Completion Time", "Type", "Initiated by", "Created", "Policy", "Tables", "Size", "Pinned", "Actions"]} isLoading={backups.isLoading}>
           {(backups.data ?? []).map((backup) => (
             <tr key={backup.id}>
               <td><Status value={backup.status} /></td>
@@ -47,6 +47,7 @@ export function Backups() {
               <td>{formatTime(backup.createdAt)}</td>
               <td>{backupPolicyLink(backup.policyId, policyById)}</td>
               <td>{backup.tableCount}</td>
+              <td>{formatBytes(backup.backupSizeBytes)}</td>
               <td>{backup.isPinned ? "yes" : "no"}</td>
               <td className="actions">
                 <Link className="ghost" to={`/backups/${backup.id}`}>Details</Link>
@@ -82,6 +83,7 @@ function BackupDrawer({ backupId, onClose }: { backupId: string; onClose: () => 
     enabled: !!current && current.contentMode !== "SchemaOnly"
   });
   const tableRows = tableDetail.data?.tables ?? [];
+  const detailBackupSizeBytes = calculateBackupSizeBytes(tableRows) ?? current?.backupSizeBytes ?? null;
   const isActive = isBackupInExecutionPhase(current?.status);
   const relatedLogs = useQuery({
     queryKey: ["backup-related-logs", backupId, current?.createdAt],
@@ -123,6 +125,7 @@ function BackupDrawer({ backupId, onClose }: { backupId: string; onClose: () => 
           <Detail label="Status" value={<Status value={current.status} />} />
           <Detail label="Completion Time" value={formatCompletionTime(current.endedAt ?? current.deletedAt, current.startedAt, current.createdAt)} />
           <Detail label="Initiated by" value={backupInitiator(current, scheduleById)} />
+          <Detail label="Backup size" value={formatBytes(detailBackupSizeBytes)} />
           <Detail label="Failure" value={current.failureReason ?? current.error ?? "none"} />
         </div>
         <section className="detail-section detail-section-tables">
@@ -163,7 +166,7 @@ function BackupDrawer({ backupId, onClose }: { backupId: string; onClose: () => 
 }
 
 export function BackupTablesTable({ tableRows, isLoading }: { tableRows: BackupTableDto[]; isLoading: boolean }) {
-  return <DataTable headers={["Table", "Engine", "Status", "Shard progress", "S3 path"]} isLoading={isLoading}>
+  return <DataTable headers={["Table", "Engine", "Status", "Shard progress", "Size", "S3 path"]} isLoading={isLoading}>
     {tableRows.flatMap((table) => {
       const progress = summarizeBackupShards(table.shards);
       const rows = [
@@ -172,11 +175,12 @@ export function BackupTablesTable({ tableRows, isLoading }: { tableRows: BackupT
           <td>{table.engine}</td>
           <td><Status value={table.status} /></td>
           <td>{formatShardProgress(progress)}</td>
+          <td>{formatBytes(calculateTableSizeBytes(table))}</td>
           <td className="mono wide-cell">{table.s3Path}</td>
         </tr>
       ];
 
-      if (table.shards.length > 1) {
+      if (table.shards.length > 0) {
         rows.push(...table.shards
           .slice()
           .sort((left, right) => left.sourceShardNumber - right.sourceShardNumber || left.replicaNumber - right.replicaNumber)
@@ -186,6 +190,7 @@ export function BackupTablesTable({ tableRows, isLoading }: { tableRows: BackupT
               <td>replica {shard.replicaNumber}</td>
               <td><Status value={shard.status} /></td>
               <td>{formatShardEndpoint(shard)}</td>
+              <td>{formatBytes(shard.backupSizeBytes)}</td>
               <td className="mono wide-cell">{shard.s3Path}</td>
             </tr>
           )));
@@ -194,6 +199,18 @@ export function BackupTablesTable({ tableRows, isLoading }: { tableRows: BackupT
       return rows;
     })}
   </DataTable>;
+}
+
+
+export function calculateTableSizeBytes(table: BackupTableDto) {
+  if (table.backupSizeBytes !== null && table.backupSizeBytes !== undefined) return table.backupSizeBytes;
+  const shardSizes = table.shards.map((shard) => shard.backupSizeBytes).filter((size): size is number => size !== null && size !== undefined);
+  return shardSizes.length === 0 ? null : shardSizes.reduce((total, size) => total + size, 0);
+}
+
+export function calculateBackupSizeBytes(tables: BackupTableDto[]) {
+  const tableSizes = tables.map(calculateTableSizeBytes).filter((size): size is number => size !== null && size !== undefined);
+  return tableSizes.length === 0 ? null : tableSizes.reduce((total, size) => total + size, 0);
 }
 
 export type BackupShardProgressSummary = {

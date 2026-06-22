@@ -5,7 +5,7 @@ namespace ChoboServer.Application;
 
 internal static class BackupRestoreMapping
 {
-    public static BackupDto ToDto(BackupEntity x, int? tableCount = null, bool includeTables = true) =>
+    public static BackupDto ToDto(BackupEntity x, int? tableCount = null, long? backupSizeBytes = null, bool includeTables = true) =>
         new(
             x.Id,
             x.TriggerType,
@@ -35,7 +35,14 @@ internal static class BackupRestoreMapping
             x.DeletionError,
             x.DeletionAttemptCount,
             tableCount ?? x.Tables.Count,
+            backupSizeBytes ?? CalculateBackupSizeBytes(x.Tables),
             includeTables ? x.Tables.OrderBy(t => t.Database).ThenBy(t => t.Table).Select(ToDto).ToList() : []);
+
+    private static long? CalculateBackupSizeBytes(IEnumerable<BackupTableEntity> tables)
+    {
+        var sizes = tables.Select(x => x.BackupSizeBytes).Where(x => x.HasValue).ToList();
+        return sizes.Count == 0 ? null : sizes.Sum(x => x!.Value);
+    }
 
     public static BackupTableDto ToDto(BackupTableEntity x) =>
         new(
@@ -50,6 +57,7 @@ internal static class BackupRestoreMapping
             x.DataBackedUp,
             x.SchemaDefinitionId,
             x.S3Path,
+            x.BackupSizeBytes,
             x.Status,
             x.ClickHouseOperationId,
             x.ClickHouseStatus,
@@ -72,6 +80,7 @@ internal static class BackupRestoreMapping
             x.Port,
             x.UseTls,
             x.S3Path,
+            x.BackupSizeBytes,
             x.Status,
             x.ClickHouseOperationId,
             x.ClickHouseStatus,

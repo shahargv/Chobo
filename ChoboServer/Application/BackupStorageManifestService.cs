@@ -330,6 +330,7 @@ public sealed class BackupStorageManifestService(
             table.DataBackedUp = tableManifest.DataBackedUp;
             table.SchemaDefinitionId = tableManifest.SchemaDefinitionId;
             table.S3Path = tableManifest.S3Path;
+            table.BackupSizeBytes = tableManifest.BackupSizeBytes;
             table.Status = tableManifest.Status;
             table.ClickHouseOperationId = tableManifest.ClickHouseOperationId;
             table.ClickHouseStatus = tableManifest.ClickHouseStatus;
@@ -355,6 +356,7 @@ public sealed class BackupStorageManifestService(
                 shard.Port = shardManifest.Port;
                 shard.UseTls = shardManifest.UseTls;
                 shard.S3Path = shardManifest.S3Path;
+                shard.BackupSizeBytes = shardManifest.BackupSizeBytes;
                 shard.Status = shardManifest.Status;
                 shard.ClickHouseOperationId = shardManifest.ClickHouseOperationId;
                 shard.ClickHouseStatus = shardManifest.ClickHouseStatus;
@@ -511,6 +513,7 @@ public sealed class BackupStorageManifestService(
             table.DataBackedUp,
             table.SchemaDefinitionId,
             table.S3Path,
+            table.BackupSizeBytes,
             table.Status,
             table.ClickHouseOperationId,
             table.ClickHouseStatus,
@@ -533,6 +536,7 @@ public sealed class BackupStorageManifestService(
             shard.Port,
             shard.UseTls,
             shard.S3Path,
+            shard.BackupSizeBytes,
             shard.Status,
             shard.ClickHouseOperationId,
             shard.ClickHouseStatus,

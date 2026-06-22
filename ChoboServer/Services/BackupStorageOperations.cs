@@ -13,6 +13,7 @@ public interface IBackupStorageOperations
     Task WriteObjectAsync(BackupTargetEntity target, string path, byte[] content, CancellationToken cancellationToken = default);
     Task<byte[]> ReadObjectAsync(BackupTargetEntity target, string path, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<string>> ListObjectPathsAsync(BackupTargetEntity target, string rootPath, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<BackupStorageObjectInfo>> ListObjectsAsync(BackupTargetEntity target, string rootPath, CancellationToken cancellationToken = default);
     Task DeleteObjectAsync(BackupTargetEntity target, string path, CancellationToken cancellationToken = default);
     Task<StorageConnectionTestResult> TestConnectionAsync(BackupTargetEntity target, CancellationToken cancellationToken = default);
 }
@@ -32,6 +33,9 @@ public sealed class BackupStorageOperations(
     public Task<IReadOnlyList<string>> ListObjectPathsAsync(BackupTargetEntity target, string rootPath, CancellationToken cancellationToken = default) =>
         For(target).ListObjectPathsAsync(target, rootPath, cancellationToken);
 
+    public Task<IReadOnlyList<BackupStorageObjectInfo>> ListObjectsAsync(BackupTargetEntity target, string rootPath, CancellationToken cancellationToken = default) =>
+        For(target).ListObjectsAsync(target, rootPath, cancellationToken);
+
     public Task DeleteObjectAsync(BackupTargetEntity target, string path, CancellationToken cancellationToken = default) =>
         For(target).DeleteObjectAsync(target, path, cancellationToken);
 
@@ -45,6 +49,8 @@ public sealed class BackupStorageOperations(
             _ => throw new NotSupportedException($"Backup target type '{target.Type}' is not supported.")
         };
 }
+
+public sealed record BackupStorageObjectInfo(string Path, long SizeBytes);
 
 public sealed class S3BackupStorageOperations(ICredentialProtector protector, Serilog.ILogger logger) : IBackupStorageOperations
 {
@@ -99,14 +105,19 @@ public sealed class S3BackupStorageOperations(ICredentialProtector protector, Se
         return output.ToArray();
     }
 
-    public async Task<IReadOnlyList<string>> ListObjectPathsAsync(BackupTargetEntity target, string rootPath, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<string>> ListObjectPathsAsync(BackupTargetEntity target, string rootPath, CancellationToken cancellationToken = default) =>
+        (await ListObjectsAsync(target, rootPath, cancellationToken)).Select(x => x.Path).ToList();
+
+    public async Task<IReadOnlyList<BackupStorageObjectInfo>> ListObjectsAsync(BackupTargetEntity target, string rootPath, CancellationToken cancellationToken = default)
     {
         var storagePrefix = S3TargetUrlBuilder.StoragePath(target, rootPath).TrimStart('/');
         using var client = await CreateClientAsync(target, cancellationToken);
-        var keys = await ListKeysAsync(client, target.Bucket, storagePrefix, cancellationToken);
+        var objects = await ListObjectInfoAsync(client, target.Bucket, storagePrefix, cancellationToken);
         var targetPrefix = string.IsNullOrWhiteSpace(target.PathPrefix) ? "" : target.PathPrefix.Trim('/').Trim() + "/";
-        return keys
-            .Select(key => key.StartsWith(targetPrefix, StringComparison.Ordinal) ? key[targetPrefix.Length..] : key)
+        return objects
+            .Select(item => new BackupStorageObjectInfo(
+                item.Key.StartsWith(targetPrefix, StringComparison.Ordinal) ? item.Key[targetPrefix.Length..] : item.Key,
+                item.SizeBytes))
             .ToList();
     }
 
@@ -147,9 +158,12 @@ public sealed class S3BackupStorageOperations(ICredentialProtector protector, Se
         }
     }
 
-    private static async Task<IReadOnlyList<string>> ListKeysAsync(IAmazonS3 client, string bucket, string prefix, CancellationToken cancellationToken)
+    private static async Task<IReadOnlyList<string>> ListKeysAsync(IAmazonS3 client, string bucket, string prefix, CancellationToken cancellationToken) =>
+        (await ListObjectInfoAsync(client, bucket, prefix, cancellationToken)).Select(x => x.Key).ToList();
+
+    private static async Task<IReadOnlyList<(string Key, long SizeBytes)>> ListObjectInfoAsync(IAmazonS3 client, string bucket, string prefix, CancellationToken cancellationToken)
     {
-        var keys = new List<string>();
+        var objects = new List<(string Key, long SizeBytes)>();
         string? continuationToken = null;
         do
         {
@@ -159,14 +173,13 @@ public sealed class S3BackupStorageOperations(ICredentialProtector protector, Se
                 Prefix = prefix,
                 ContinuationToken = continuationToken
             }, cancellationToken);
-            keys.AddRange((response.S3Objects ?? Enumerable.Empty<S3Object>())
-                .Select(x => x.Key)
-                .Where(x => !string.IsNullOrEmpty(x) && x.StartsWith(prefix, StringComparison.Ordinal))
-                .Select(x => x!));
+            objects.AddRange((response.S3Objects ?? Enumerable.Empty<S3Object>())
+                .Where(x => !string.IsNullOrEmpty(x.Key) && x.Key.StartsWith(prefix, StringComparison.Ordinal))
+                .Select(x => (x.Key!, x.Size ?? 0)));
             continuationToken = response.IsTruncated == true ? response.NextContinuationToken : null;
         } while (!string.IsNullOrEmpty(continuationToken));
 
-        return keys;
+        return objects;
     }
 
     private static async Task DeleteStoredObjectAsync(IAmazonS3 client, string bucket, string storagePath, CancellationToken cancellationToken)
