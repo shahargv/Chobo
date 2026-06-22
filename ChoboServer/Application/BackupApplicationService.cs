@@ -129,10 +129,10 @@ public sealed class BackupApplicationService(
         var summaries = await query
             .OrderByDescending(x => x.CreatedAt)
             .Take(200)
-            .Select(x => new { Backup = x, TableCount = x.Tables.Count })
+            .Select(x => new { Backup = x, TableCount = x.Tables.Count, BackupSizeBytes = x.Tables.Where(t => t.BackupSizeBytes != null).Sum(t => t.BackupSizeBytes) })
             .ToListAsync(cancellationToken);
         return summaries
-            .Select(x => BackupRestoreMapping.ToDto(x.Backup, x.TableCount, includeTables: false))
+            .Select(x => BackupRestoreMapping.ToDto(x.Backup, x.TableCount, x.BackupSizeBytes, includeTables: false))
             .ToList();
     }
 
@@ -145,9 +145,9 @@ public sealed class BackupApplicationService(
 
         var summary = await db.Backups
             .Where(x => x.Id == id)
-            .Select(x => new { Backup = x, TableCount = x.Tables.Count })
+            .Select(x => new { Backup = x, TableCount = x.Tables.Count, BackupSizeBytes = x.Tables.Where(t => t.BackupSizeBytes != null).Sum(t => t.BackupSizeBytes) })
             .FirstOrDefaultAsync(cancellationToken);
-        return summary is null ? null : BackupRestoreMapping.ToDto(summary.Backup, summary.TableCount, includeTables: false);
+        return summary is null ? null : BackupRestoreMapping.ToDto(summary.Backup, summary.TableCount, summary.BackupSizeBytes, includeTables: false);
     }
 
     public async Task<BackupDto?> PinAsync(Guid id, CancellationToken cancellationToken = default)

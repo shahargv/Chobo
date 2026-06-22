@@ -141,7 +141,7 @@ public sealed class BackupsCommands : CliSubject
     private static string FormatProgress(BackupDto backup)
     {
         var builder = new StringBuilder();
-        builder.AppendLine($"Backup {backup.Id} {backup.Status} tables={backup.TableCount}");
+        builder.AppendLine($"Backup {backup.Id} {backup.Status} tables={backup.TableCount} size={FormatBytes(backup.BackupSizeBytes ?? CalculateBackupSizeBytes(backup.Tables))}");
         if (backup.ContentMode == BackupContentMode.SchemaOnly)
         {
             builder.AppendLine($"  schema-only backup captured {backup.TableCount} table schema{(backup.TableCount == 1 ? "" : "s")}; shard data backup was skipped.");
@@ -156,10 +156,42 @@ public sealed class BackupsCommands : CliSubject
 
         foreach (var table in backup.Tables.OrderBy(x => x.Database).ThenBy(x => x.Table))
         {
-            builder.AppendLine($"  {table.Database}.{table.Table}  {table.Status}  {FormatShardProgress(table.Shards)}");
+            builder.AppendLine($"  {table.Database}.{table.Table}  {table.Status}  size={FormatBytes(table.BackupSizeBytes ?? CalculateTableSizeBytes(table))}  {FormatShardProgress(table.Shards)}");
+            foreach (var shard in table.Shards.OrderBy(x => x.SourceShardNumber).ThenBy(x => x.ReplicaNumber))
+            {
+                builder.AppendLine($"    shard {shard.SourceShardNumber}{(string.IsNullOrWhiteSpace(shard.SourceShardName) ? "" : $" ({shard.SourceShardName})")} replica={shard.ReplicaNumber} node={shard.Host}:{shard.Port} status={shard.Status} size={FormatBytes(shard.BackupSizeBytes)}");
+            }
         }
 
         return builder.ToString().TrimEnd();
+    }
+
+    private static long? CalculateBackupSizeBytes(IReadOnlyList<BackupTableDto> tables)
+    {
+        var sizes = tables.Select(x => x.BackupSizeBytes ?? CalculateTableSizeBytes(x)).Where(x => x.HasValue).ToList();
+        return sizes.Count == 0 ? null : sizes.Sum(x => x!.Value);
+    }
+
+    private static long? CalculateTableSizeBytes(BackupTableDto table)
+    {
+        var sizes = table.Shards.Select(x => x.BackupSizeBytes).Where(x => x.HasValue).ToList();
+        return sizes.Count == 0 ? null : sizes.Sum(x => x!.Value);
+    }
+
+    private static string FormatBytes(long? value)
+    {
+        if (value is null) return "unknown";
+        if (value == 0) return "0 B";
+        string[] units = ["B", "KB", "MB", "GB", "TB", "PB"];
+        var amount = (double)value.Value;
+        var unit = 0;
+        while (amount >= 1024 && unit < units.Length - 1)
+        {
+            amount /= 1024;
+            unit++;
+        }
+
+        return unit == 0 || amount >= 10 ? $"{amount:0} {units[unit]}" : $"{amount:0.0} {units[unit]}";
     }
 
     private static string FormatShardProgress(IReadOnlyList<BackupTableShardDto> shards)

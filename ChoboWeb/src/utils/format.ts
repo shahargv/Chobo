@@ -31,3 +31,13 @@ function formatDuration(start?: string | null, end?: string | null) {
   return parts.join(" and ");
 }
 
+
+export function formatBytes(value?: number | null) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "unknown";
+  if (value === 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB", "PB"];
+  const exponent = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1);
+  const amount = value / Math.pow(1024, exponent);
+  const digits = amount >= 10 || exponent === 0 ? 0 : 1;
+  return `${amount.toFixed(digits)} ${units[exponent]}`;
+}

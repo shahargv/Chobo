@@ -18,6 +18,7 @@ public sealed class BackupTableShardEntity
     public int Port { get; set; }
     public bool UseTls { get; set; }
     public string S3Path { get; set; } = "";
+    public long? BackupSizeBytes { get; set; }
     public BackupTableStatus Status { get; set; } = BackupTableStatus.Queued;
     public string? ClickHouseOperationId { get; set; }
     public string? ClickHouseStatus { get; set; }

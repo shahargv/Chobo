@@ -3040,6 +3040,11 @@
             "type": "integer",
             "format": "int32"
           },
+          "backupSizeBytes": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
           "tables": {
             "type": "array",
             "items": {
@@ -3605,6 +3610,11 @@
             "type": "string",
             "nullable": true
           },
+          "backupSizeBytes": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
           "status": {
             "$ref": "#/components/schemas/BackupTableStatus"
           },
@@ -3688,6 +3698,11 @@
             "type": "string",
             "nullable": true
           },
+          "backupSizeBytes": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
           "status": {
             "$ref": "#/components/schemas/BackupTableStatus"
           },
@@ -3767,6 +3782,11 @@
             "type": "string",
             "nullable": true
           },
+          "backupSizeBytes": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
           "status": {
             "$ref": "#/components/schemas/BackupTableStatus"
           },
@@ -3844,6 +3864,11 @@
           },
           "s3Path": {
             "type": "string",
+            "nullable": true
+          },
+          "backupSizeBytes": {
+            "type": "integer",
+            "format": "int64",
             "nullable": true
           },
           "status": {

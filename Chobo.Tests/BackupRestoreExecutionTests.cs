@@ -2245,6 +2245,12 @@ public sealed class BackupRestoreExecutionTests
         public Task<IReadOnlyList<string>> ListObjectPathsAsync(BackupTargetEntity target, string rootPath, CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<string>>(Objects.Keys.Where(x => x.StartsWith(rootPath, StringComparison.Ordinal)).ToList());
 
+        public Task<IReadOnlyList<BackupStorageObjectInfo>> ListObjectsAsync(BackupTargetEntity target, string rootPath, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<BackupStorageObjectInfo>>(Objects
+                .Where(x => x.Key.StartsWith(rootPath, StringComparison.Ordinal))
+                .Select(x => new BackupStorageObjectInfo(x.Key, x.Value.LongLength))
+                .ToList());
+
         public Task DeleteObjectAsync(BackupTargetEntity target, string path, CancellationToken cancellationToken = default) =>
             Task.CompletedTask;
 
@@ -2640,6 +2646,7 @@ public sealed class BackupRestoreExecutionTests
                 backup.DeletionError,
                 backup.DeletionAttemptCount,
                 backup.Tables.Count,
+                backup.Tables.Any(table => table.BackupSizeBytes.HasValue) ? backup.Tables.Sum(table => table.BackupSizeBytes ?? 0) : null,
                 backup.Tables.Select(table => new BackupTableDto(
                     table.Id,
                     table.BackupId,
@@ -2652,6 +2659,7 @@ public sealed class BackupRestoreExecutionTests
                     table.DataBackedUp,
                     table.SchemaDefinitionId,
                     table.S3Path,
+                    table.BackupSizeBytes,
                     table.Status,
                     table.ClickHouseOperationId,
                     table.ClickHouseStatus,
@@ -2671,6 +2679,7 @@ public sealed class BackupRestoreExecutionTests
                         shard.Port,
                         shard.UseTls,
                         shard.S3Path,
+                        shard.BackupSizeBytes,
                         shard.Status,
                         shard.ClickHouseOperationId,
                         shard.ClickHouseStatus,
