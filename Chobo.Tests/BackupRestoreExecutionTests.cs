@@ -83,6 +83,23 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Backup_runner_keeps_success_when_storage_manifest_write_fails()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+        fixture.StorageDeletion.FailWriteCount = 10;
+
+        var backupId = await fixture.CreateManualBackupAsync();
+        await fixture.RunBackupAsync(backupId);
+
+        fixture.Db.ChangeTracker.Clear();
+        var backup = await fixture.Db.Backups.SingleAsync(x => x.Id == backupId);
+        Assert.Equal(BackupRunStatus.Succeeded, backup.Status);
+        Assert.Null(backup.FailureReason);
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "metadata-manifest-write-failed" && x.EntityId == backupId.ToString()));
+    }
+
+    [Fact]
     public async Task Backup_metadata_recovery_recreates_failed_backup_metadata_from_storage_manifest()
     {
         await using var fixture = await TestFixture.CreateAsync();
@@ -579,6 +596,66 @@ public sealed class BackupRestoreExecutionTests
 
         Assert.Equal(1, await fixture.Db.Backups.CountAsync(x => x.ScheduleId == schedule.Id));
         Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "schedule-skip-active" && x.EntityId == schedule.Id.ToString()));
+    }
+
+    [Fact]
+    public async Task Scheduled_backup_runner_skips_duplicate_active_policy_backup_but_allows_manual()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+        var schedule = await fixture.SeedPolicyAndScheduleAsync();
+        var active = new BackupEntity
+        {
+            TriggerType = BackupTriggerType.Scheduled,
+            Status = BackupRunStatus.Running,
+            SourceClusterId = fixture.SourceClusterId,
+            TargetId = fixture.TargetId,
+            PolicyId = schedule.PolicyId,
+            ScheduleId = schedule.Id,
+            CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-2),
+            StartedAt = DateTimeOffset.UtcNow.AddMinutes(-2)
+        };
+        var duplicate = new BackupEntity
+        {
+            TriggerType = BackupTriggerType.Scheduled,
+            Status = BackupRunStatus.Queued,
+            SourceClusterId = fixture.SourceClusterId,
+            TargetId = fixture.TargetId,
+            PolicyId = schedule.PolicyId,
+            ScheduleId = schedule.Id,
+            CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-1)
+        };
+        fixture.Db.Backups.AddRange(active, duplicate);
+        await fixture.Db.SaveChangesAsync();
+
+        await fixture.RunBackupAsync(duplicate.Id);
+
+        fixture.Db.ChangeTracker.Clear();
+        var skipped = await fixture.Db.Backups.SingleAsync(x => x.Id == duplicate.Id);
+        Assert.Equal(BackupRunStatus.Canceled, skipped.Status);
+        Assert.Contains("same policy", skipped.FailureReason);
+        Assert.False(await fixture.Db.BackupTables.AnyAsync(x => x.BackupId == duplicate.Id));
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "scheduled-duplicate-skipped" && x.EntityId == duplicate.Id.ToString()));
+
+        var manual = new BackupEntity
+        {
+            TriggerType = BackupTriggerType.Manual,
+            Status = BackupRunStatus.Queued,
+            BackupType = BackupType.Full,
+            SourceClusterId = fixture.SourceClusterId,
+            TargetId = fixture.TargetId,
+            PolicyId = schedule.PolicyId,
+            RequestedByName = "operator"
+        };
+        fixture.Db.Backups.Add(manual);
+        await fixture.Db.SaveChangesAsync();
+
+        await fixture.RunBackupAsync(manual.Id);
+
+        fixture.Db.ChangeTracker.Clear();
+        var manualAfterRun = await fixture.Db.Backups.SingleAsync(x => x.Id == manual.Id);
+        Assert.Equal(BackupRunStatus.Succeeded, manualAfterRun.Status);
+        Assert.True(await fixture.Db.BackupTables.AnyAsync(x => x.BackupId == manual.Id));
     }
 
     [Fact]
@@ -2136,6 +2213,7 @@ public sealed class BackupRestoreExecutionTests
         public List<string> DeletedDirectories { get; } = [];
         public Dictionary<string, byte[]> Objects { get; } = new(StringComparer.Ordinal);
         public bool FailNextDelete { get; set; }
+        public int FailWriteCount { get; set; }
 
         public Task DeleteDirectoryAsync(BackupTargetEntity target, string directoryPath, CancellationToken cancellationToken = default)
         {
@@ -2151,6 +2229,12 @@ public sealed class BackupRestoreExecutionTests
 
         public Task WriteObjectAsync(BackupTargetEntity target, string path, byte[] content, CancellationToken cancellationToken = default)
         {
+            if (FailWriteCount > 0)
+            {
+                FailWriteCount--;
+                throw new InvalidOperationException("simulated manifest write crash");
+            }
+
             Objects[path] = content;
             return Task.CompletedTask;
         }

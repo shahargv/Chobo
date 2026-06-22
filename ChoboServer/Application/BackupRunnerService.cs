@@ -55,9 +55,11 @@ public sealed class BackupRunnerService(
         try
         {
             _logger.Information("Starting backup run {BackupId}. Current status: {Status}.", backup.Id, backup.Status);
-            backup.Status = BackupRunStatus.Running;
-            backup.StartedAt ??= DateTimeOffset.UtcNow;
-            await db.SaveChangesAsync(cancellationToken);
+            if (!await TryClaimBackupAsync(backup, cancellationToken))
+            {
+                return;
+            }
+
             await audit.RecordAsync("started", AuditEntityType.Backup, backup.Id.ToString(), new { backup.SourceClusterId, backup.TargetId });
 
             ValidateBackup(backup);
@@ -102,7 +104,7 @@ public sealed class BackupRunnerService(
             {
                 if (backup.Status == BackupRunStatus.Succeeded)
                 {
-                    await WriteFinalManifestOrFailAsync(backup, tableCount, cancellationToken);
+                    await TryWriteFinalManifestAsync(backup, tableCount, cancellationToken);
                 }
                 else
                 {
@@ -129,7 +131,61 @@ public sealed class BackupRunnerService(
         }
     }
 
-    private async Task WriteFinalManifestOrFailAsync(BackupEntity backup, int tableCount, CancellationToken cancellationToken)
+    private async Task<bool> TryClaimBackupAsync(BackupEntity backup, CancellationToken cancellationToken)
+    {
+        if (backup.Status == BackupRunStatus.Running)
+        {
+            return true;
+        }
+
+        if (backup.TriggerType == BackupTriggerType.Scheduled && backup.PolicyId is { } policyId)
+        {
+            var now = DateTimeOffset.UtcNow;
+            var claimed = await db.Backups
+                .Where(x => x.Id == backup.Id &&
+                            x.Status == BackupRunStatus.Queued &&
+                            !db.Backups.Any(other =>
+                                other.Id != backup.Id &&
+                                other.PolicyId == policyId &&
+                                (other.Status == BackupRunStatus.Running ||
+                                 (other.Status == BackupRunStatus.Queued && other.CreatedAt < backup.CreatedAt))))
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(x => x.Status, BackupRunStatus.Running)
+                    .SetProperty(x => x.StartedAt, now), cancellationToken);
+
+            if (claimed == 1)
+            {
+                backup.Status = BackupRunStatus.Running;
+                backup.StartedAt ??= now;
+                return true;
+            }
+
+            var currentStatus = await db.Backups
+                .Where(x => x.Id == backup.Id)
+                .Select(x => x.Status)
+                .FirstOrDefaultAsync(cancellationToken);
+            if (currentStatus != BackupRunStatus.Queued)
+            {
+                return false;
+            }
+
+            backup.Status = BackupRunStatus.Canceled;
+            backup.CompletedAt = now;
+            backup.FailureReason = "Scheduled backup skipped because another backup for the same policy is already queued or running.";
+            backup.Error = backup.FailureReason;
+            await db.SaveChangesAsync(cancellationToken);
+            _logger.Information("Skipped scheduled backup {BackupId} because policy {PolicyId} already has an active backup.", backup.Id, policyId);
+            await audit.RecordAsync("scheduled-duplicate-skipped", AuditEntityType.Backup, backup.Id.ToString(), new { operationId = backup.Id, policyId, reason = "active-policy-backup-exists" });
+            return false;
+        }
+
+        backup.Status = BackupRunStatus.Running;
+        backup.StartedAt ??= DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync(cancellationToken);
+        return true;
+    }
+
+    private async Task TryWriteFinalManifestAsync(BackupEntity backup, int tableCount, CancellationToken cancellationToken)
     {
         try
         {
@@ -138,14 +194,8 @@ public sealed class BackupRunnerService(
         }
         catch (Exception ex)
         {
-            _logger.Error(ex, "Final backup storage manifest write failed for backup {BackupId}.", backup.Id);
-            backup.Status = BackupRunStatus.Failed;
-            backup.Error = ex.Message;
-            backup.FailureReason = $"Backup metadata manifest write failed: {ex.Message}";
-            backup.CompletedAt = DateTimeOffset.UtcNow;
-            await db.SaveChangesAsync(CancellationToken.None);
+            _logger.Warning(ex, "Final backup storage manifest write failed for backup {BackupId}; backup result remains {Status}.", backup.Id, backup.Status);
             await audit.RecordAsync("metadata-manifest-write-failed", AuditEntityType.Backup, backup.Id.ToString(), new { error = ex.Message });
-            throw;
         }
     }
 
