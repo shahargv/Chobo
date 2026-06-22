@@ -80,9 +80,11 @@ function BackupDrawer({ backupId, onClose }: { backupId: string; onClose: () => 
   const tableDetail = useQuery({
     queryKey: ["backup", backupId, "tables"],
     queryFn: () => api.backup(backupId, { includeTables: true }),
-    enabled: !!current && current.contentMode !== "SchemaOnly"
+    enabled: !!current && current.contentMode !== "SchemaOnly",
+    refetchInterval: isBackupInExecutionPhase(current?.status) ? 3000 : false
   });
   const tableRows = tableDetail.data?.tables ?? [];
+  const shardCompletion = current?.contentMode === "SchemaOnly" ? null : calculateBackupShardCompletion(tableRows);
   const detailBackupSizeBytes = calculateBackupSizeBytes(tableRows) ?? current?.backupSizeBytes ?? null;
   const isActive = isBackupInExecutionPhase(current?.status);
   const relatedLogs = useQuery({
@@ -115,7 +117,7 @@ function BackupDrawer({ backupId, onClose }: { backupId: string; onClose: () => 
           <h3>Run status</h3>
           {isActive && <span className="hint">Auto-refreshing while this backup is active.</span>}
         </div>
-        <button className="secondary" disabled={backup.isFetching || relatedLogs.isFetching || relatedAudits.isFetching} onClick={() => { backup.refetch(); relatedLogs.refetch(); relatedAudits.refetch(); }}><RefreshCw size={16} /> Refresh</button>
+        <button className="secondary" disabled={backup.isFetching || tableDetail.isFetching || relatedLogs.isFetching || relatedAudits.isFetching} onClick={() => { backup.refetch(); tableDetail.refetch(); relatedLogs.refetch(); relatedAudits.refetch(); }}><RefreshCw size={16} /> Refresh</button>
       </div>
       {!current && backup.isLoading && <Empty text="Loading backup details." />}
       {!current && backup.error && <Empty text={String(backup.error)} />}
@@ -126,6 +128,7 @@ function BackupDrawer({ backupId, onClose }: { backupId: string; onClose: () => 
           <Detail label="Completion Time" value={formatCompletionTime(current.endedAt ?? current.deletedAt, current.startedAt, current.createdAt)} />
           <Detail label="Initiated by" value={backupInitiator(current, scheduleById)} />
           <Detail label="Backup size" value={formatBytes(detailBackupSizeBytes)} />
+          <Detail label="Shard completion" value={shardCompletion ? <ShardCompletionBadge completion={shardCompletion} /> : "Schema-only"} />
           <Detail label="Failure" value={current.failureReason ?? current.error ?? "none"} />
         </div>
         <section className="detail-section detail-section-tables">
@@ -166,41 +169,39 @@ function BackupDrawer({ backupId, onClose }: { backupId: string; onClose: () => 
 }
 
 export function BackupTablesTable({ tableRows, isLoading }: { tableRows: BackupTableDto[]; isLoading: boolean }) {
-  return <DataTable headers={["Table", "Engine", "Status", "Shard progress", "Size", "S3 path"]} isLoading={isLoading}>
+  return <DataTable headers={["Table", "Engine", "Shard", "Status", "Source node", "Size", "S3 path"]} isLoading={isLoading}>
     {tableRows.flatMap((table) => {
-      const progress = summarizeBackupShards(table.shards);
-      const rows = [
-        <tr key={table.id}>
-          <td>{table.database}.{table.table}</td>
-          <td>{table.engine}</td>
-          <td><Status value={table.status} /></td>
-          <td>{formatShardProgress(progress)}</td>
-          <td>{formatBytes(calculateTableSizeBytes(table))}</td>
-          <td className="mono wide-cell">{table.s3Path}</td>
-        </tr>
-      ];
-
-      if (table.shards.length > 0) {
-        rows.push(...table.shards
-          .slice()
-          .sort((left, right) => left.sourceShardNumber - right.sourceShardNumber || left.replicaNumber - right.replicaNumber)
-          .map((shard) => (
-            <tr key={`${table.id}-${shard.id}`}>
-              <td className="shard-subrow">Shard {shard.sourceShardNumber}{shard.sourceShardName ? ` (${shard.sourceShardName})` : ""}</td>
-              <td>replica {shard.replicaNumber}</td>
-              <td><Status value={shard.status} /></td>
-              <td>{formatShardEndpoint(shard)}</td>
-              <td>{formatBytes(shard.backupSizeBytes)}</td>
-              <td className="mono wide-cell">{shard.s3Path}</td>
-            </tr>
-          )));
+      if (table.shards.length === 0) {
+        return [
+          <tr key={table.id}>
+            <td>{table.database}.{table.table}</td>
+            <td>{table.engine}</td>
+            <td>table</td>
+            <td><Status value={table.status} /></td>
+            <td>none</td>
+            <td>{formatBytes(calculateTableSizeBytes(table))}</td>
+            <td className="mono wide-cell">{table.s3Path}</td>
+          </tr>
+        ];
       }
 
-      return rows;
+      return table.shards
+        .slice()
+        .sort((left, right) => left.sourceShardNumber - right.sourceShardNumber || left.replicaNumber - right.replicaNumber)
+        .map((shard) => (
+          <tr key={`${table.id}-${shard.id}`}>
+            <td>{table.database}.{table.table}</td>
+            <td>{table.engine}</td>
+            <td>{formatShardLabel(shard)}</td>
+            <td><Status value={shard.status} /></td>
+            <td>{formatShardEndpoint(shard)}</td>
+            <td>{formatBytes(shard.backupSizeBytes)}</td>
+            <td className="mono wide-cell">{shard.s3Path}</td>
+          </tr>
+        ));
     })}
   </DataTable>;
 }
-
 
 export function calculateTableSizeBytes(table: BackupTableDto) {
   if (table.backupSizeBytes !== null && table.backupSizeBytes !== undefined) return table.backupSizeBytes;
@@ -223,6 +224,27 @@ export type BackupShardProgressSummary = {
   skipped: number;
 };
 
+export type BackupShardCompletion = {
+  succeeded: number;
+  failed: number;
+  total: number;
+  percent: number;
+  tone: "ok" | "warn" | "bad";
+};
+
+export function calculateBackupShardCompletion(tables: BackupTableDto[]): BackupShardCompletion {
+  const statuses = tables.flatMap((table) => table.shards.length > 0 ? table.shards.map((shard) => shard.status) : [table.status]);
+  const total = statuses.length;
+  const succeeded = statuses.filter((status) => status === "Succeeded").length;
+  const failed = statuses.filter((status) => status === "Failed").length;
+  const percent = total === 0 ? 0 : Math.round((succeeded / total) * 100);
+  return { succeeded, failed, total, percent, tone: failed > 0 ? "bad" : total > 0 && succeeded === total ? "ok" : "warn" };
+}
+
+function ShardCompletionBadge({ completion }: { completion: BackupShardCompletion }) {
+  return <span className={`backup-completion ${completion.tone}`}>{completion.percent}% ({completion.succeeded}/{completion.total} shards)</span>;
+}
+
 export function summarizeBackupShards(shards: BackupTableShardDto[]): BackupShardProgressSummary {
   const summary: BackupShardProgressSummary = { shardCount: shards.length, queued: 0, running: 0, completed: 0, succeeded: 0, failed: 0, skipped: 0 };
   for (const shard of shards) {
@@ -236,18 +258,9 @@ export function summarizeBackupShards(shards: BackupTableShardDto[]): BackupShar
   return summary;
 }
 
-function formatShardProgress(progress: BackupShardProgressSummary) {
-  if (progress.shardCount === 0) return "0 shards";
-  if (progress.shardCount === 1) {
-    if (progress.running === 1) return "1 shard running";
-    if (progress.queued === 1) return "1 shard queued";
-    if (progress.succeeded === 1) return "1 shard completed";
-    if (progress.failed === 1) return "1 shard failed";
-    if (progress.skipped === 1) return "1 shard skipped";
-    return "1 shard";
-  }
-
-  return `${progress.shardCount} shards: ${progress.queued} queued, ${progress.running} running, ${progress.completed} completed`;
+function formatShardLabel(shard: BackupTableShardDto) {
+  const shardName = shard.sourceShardName ? ` (${shard.sourceShardName})` : "";
+  return `Shard ${shard.sourceShardNumber}${shardName}, replica ${shard.replicaNumber}`;
 }
 
 function formatShardEndpoint(shard: BackupTableShardDto) {
@@ -321,7 +334,4 @@ function formatTimeSeconds(value?: string | null) {
     second: "2-digit"
   });
 }
-
-
-
 

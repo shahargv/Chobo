@@ -1,11 +1,11 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 import type { BackupDto, BackupTableDto, BackupTableShardDto } from "../api/generated";
 import { ApiContext } from "../api-context";
-import { Backups, BackupTablesTable, calculateBackupSizeBytes, calculateTableSizeBytes, summarizeBackupShards } from "./BackupsPage";
+import { Backups, BackupTablesTable, calculateBackupShardCompletion, calculateBackupSizeBytes, calculateTableSizeBytes, summarizeBackupShards } from "./BackupsPage";
 
 const baseShard = (overrides: Partial<BackupTableShardDto>): BackupTableShardDto => ({
   id: overrides.id ?? crypto.randomUUID(),
@@ -51,8 +51,28 @@ const baseTable = (overrides: Partial<BackupTableDto> & { shards: BackupTableSha
   shards: overrides.shards
 });
 
+
+describe("backup shard completion", () => {
+  it("uses green for all successful shards", () => {
+    const table = baseTable({ shards: [baseShard({ status: "Succeeded" }), baseShard({ id: "s2", sourceShardNumber: 2, status: "Succeeded" })] });
+
+    expect(calculateBackupShardCompletion([table])).toEqual({ succeeded: 2, failed: 0, total: 2, percent: 100, tone: "ok" });
+  });
+
+  it("uses yellow while shards are still in progress without failures", () => {
+    const table = baseTable({ shards: [baseShard({ status: "Succeeded" }), baseShard({ id: "s2", sourceShardNumber: 2, status: "Running" })] });
+
+    expect(calculateBackupShardCompletion([table])).toEqual({ succeeded: 1, failed: 0, total: 2, percent: 50, tone: "warn" });
+  });
+
+  it("uses red when any shard failed", () => {
+    const table = baseTable({ shards: [baseShard({ status: "Succeeded" }), baseShard({ id: "s2", sourceShardNumber: 2, status: "Failed" })] });
+
+    expect(calculateBackupShardCompletion([table])).toEqual({ succeeded: 1, failed: 1, total: 2, percent: 50, tone: "bad" });
+  });
+});
 describe("BackupTablesTable", () => {
-  it("aggregates shard status and only expands multi-shard tables", async () => {
+  it("renders each shard as a standalone row with table context", async () => {
     const single = baseTable({
       id: "single-table",
       table: "single_orders",
@@ -88,12 +108,11 @@ describe("BackupTablesTable", () => {
       skipped: 0
     });
     expect(host.textContent).toContain("sales.single_orders");
-    expect(host.textContent).toContain("1 shard completed");
     expect(host.textContent).toContain("1.5 KB");
     expect(host.textContent).toContain("sales.wide_orders");
-    expect(host.textContent).toContain("4 shards: 2 queued, 1 running, 1 completed");
-    expect(host.textContent).toContain("Shard 1 (s1)");
-    expect(host.textContent).toContain("Shard 1 (single)");
+    expect(host.textContent).toContain("Shard 1 (s1), replica 1");
+    expect(host.textContent).toContain("Shard 1 (single), replica 1");
+    expect(host.querySelectorAll("tbody tr")).toHaveLength(5);
     expect(calculateTableSizeBytes(single)).toBe(1536);
     expect(calculateBackupSizeBytes([single, sharded])).toBe(3584);
 
@@ -149,6 +168,61 @@ describe("Backups destructive delete flow", () => {
     await flushUi();
 
     expect(deleteBackup).toHaveBeenCalledWith("backup-delete-id", { force: false, confirmDestructive: true });
+
+    await act(async () => root.unmount());
+    queryClient.clear();
+    host.remove();
+  });
+
+  it("refreshes backup table details when the drawer refresh button is clicked", async () => {
+    const backup = baseBackup({ id: "backup-detail-id", status: "Running" });
+    const table = baseTable({ id: "table-detail-id", backupId: backup.id, table: "orders", shards: [baseShard({ id: "shard-detail-id", status: "Queued" })] });
+    const backupApi = vi.fn(async (_id: string, options: { includeTables?: boolean } = {}) => options.includeTables ? { ...backup, tables: [table] } : backup);
+    const api = {
+      backups: vi.fn(async () => [backup]),
+      backup: backupApi,
+      schedules: vi.fn(async () => []),
+      policies: vi.fn(async () => []),
+      logs: vi.fn(async () => ({ items: [], offset: 0, limit: 500, totalCount: 0 })),
+      audits: vi.fn(async () => ({ items: [], offset: 0, limit: 500, totalCount: 0 })),
+      deleteBackup: vi.fn(),
+      pinBackup: vi.fn(),
+      unpinBackup: vi.fn(),
+      cancelBackup: vi.fn()
+    };
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, refetchInterval: false }, mutations: { retry: false } } });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={["/backups/backup-detail-id"]}>
+            <Routes>
+              <Route path="/backups/:backupId" element={<ApiContext.Provider value={{ api: api as never, showToast: vi.fn() }}><Backups /></ApiContext.Provider>} />
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>
+      );
+    });
+    await flushUi();
+
+    const tableCallsBeforeRefresh = backupApi.mock.calls.filter(([, options]) => options?.includeTables).length;
+    expect(tableCallsBeforeRefresh).toBeGreaterThan(0);
+    const completionBadge = host.querySelector(".backup-completion");
+    expect(completionBadge?.textContent).toBe("0% (0/1 shards)");
+    expect(completionBadge?.classList.contains("warn")).toBe(true);
+    const refreshButton = Array.from(host.querySelectorAll("button")).find((button) => button.textContent?.includes("Refresh")) as HTMLButtonElement | undefined;
+    expect(refreshButton).toBeTruthy();
+
+    await act(async () => {
+      refreshButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushUi();
+
+    const tableCallsAfterRefresh = backupApi.mock.calls.filter(([, options]) => options?.includeTables).length;
+    expect(tableCallsAfterRefresh).toBeGreaterThan(tableCallsBeforeRefresh);
 
     await act(async () => root.unmount());
     queryClient.clear();

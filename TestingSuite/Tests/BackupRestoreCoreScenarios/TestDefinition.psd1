@@ -383,7 +383,7 @@
         @{
             Name = 'show-logs'
             Type = 'Cli'
-            Args = @('logs', 'show', '--last', '200')
+            Args = @('logs', 'show', '--last', '200', '--severity', 'warning,error')
             RetryTimeoutSeconds = 6
             RetryIntervalSeconds = 1
             ExpectJson = @(
@@ -594,3 +594,4 @@
 
     Cleanup = @()
 }
+

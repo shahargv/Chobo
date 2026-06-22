@@ -128,6 +128,16 @@ public sealed record BackupGarbageCollectorStatusDto(
     int LastPendingCleanupCount,
     int LastCleanedCount,
     int LastFailedCount);
+public sealed record BackupGarbageCollectorQueueItemDto(
+    Guid EntityId,
+    string EntityType,
+    BackupRunStatus Status,
+    BackupRunStatus FinalStatus,
+    string Reason,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset? DeletionRequestedAt,
+    int DeletionAttemptCount,
+    string? DeletionError);
 
 public sealed record RestoreDto(
     Guid Id,

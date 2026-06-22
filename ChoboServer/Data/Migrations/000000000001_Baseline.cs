@@ -330,9 +330,13 @@ public sealed class Baseline : Migration
             CREATE INDEX IF NOT EXISTS IX_AuditEntries_ActorUserId_Timestamp ON AuditEntries (ActorUserId, Timestamp);
             CREATE INDEX IF NOT EXISTS IX_AuditEntries_EntityType_Timestamp ON AuditEntries (EntityType, Timestamp);
             CREATE INDEX IF NOT EXISTS IX_AuditEntries_OperationId_Timestamp ON AuditEntries (OperationId, Timestamp);
+            CREATE INDEX IF NOT EXISTS IX_AuditEntries_Timestamp_Id ON AuditEntries (Timestamp, Id);
+            CREATE INDEX IF NOT EXISTS IX_AuditEntries_OperationId_Timestamp_Id ON AuditEntries (OperationId, Timestamp, Id);
             CREATE INDEX IF NOT EXISTS IX_ApplicationLogEntries_Timestamp ON ApplicationLogEntries (Timestamp);
             CREATE INDEX IF NOT EXISTS IX_ApplicationLogEntries_Level_Timestamp ON ApplicationLogEntries (Level, Timestamp);
             CREATE INDEX IF NOT EXISTS IX_ApplicationLogEntries_OperationId_Timestamp ON ApplicationLogEntries (OperationId, Timestamp);
+            CREATE INDEX IF NOT EXISTS IX_ApplicationLogEntries_Timestamp_Id ON ApplicationLogEntries (Timestamp, Id);
+            CREATE INDEX IF NOT EXISTS IX_ApplicationLogEntries_OperationId_Timestamp_Id ON ApplicationLogEntries (OperationId, Timestamp, Id);
             CREATE INDEX IF NOT EXISTS IX_ClickHouseClusters_IsDeleted_Name ON ClickHouseClusters (IsDeleted, Name);
             CREATE INDEX IF NOT EXISTS IX_ClickHouseAccessNodes_ClusterId ON ClickHouseAccessNodes (ClusterId);
             CREATE INDEX IF NOT EXISTS IX_BackupTargets_IsDeleted_Name ON BackupTargets (IsDeleted, Name);
@@ -349,19 +353,27 @@ public sealed class Baseline : Migration
             CREATE INDEX IF NOT EXISTS IX_Backups_TargetId ON Backups (TargetId);
             CREATE INDEX IF NOT EXISTS IX_Backups_CreatedAt ON Backups (CreatedAt);
             CREATE INDEX IF NOT EXISTS IX_Backups_PolicyId_BackupType_Status_CompletedAt ON Backups (PolicyId, BackupType, Status, CompletedAt);
+            CREATE INDEX IF NOT EXISTS IX_Backups_PolicyId_Status_CompletedAt ON Backups (PolicyId, Status, CompletedAt);
+            CREATE INDEX IF NOT EXISTS IX_Backups_ScheduleId_CreatedAt ON Backups (ScheduleId, CreatedAt);
+            CREATE INDEX IF NOT EXISTS IX_Backups_ScheduleId_Status_CompletedAt ON Backups (ScheduleId, Status, CompletedAt);
             CREATE INDEX IF NOT EXISTS IX_Backups_IsPinned ON Backups (IsPinned);
             CREATE INDEX IF NOT EXISTS IX_Backups_DeletionRequestedAt ON Backups (DeletionRequestedAt);
             CREATE INDEX IF NOT EXISTS IX_BackupTables_BackupId ON BackupTables (BackupId);
             CREATE INDEX IF NOT EXISTS IX_BackupTables_Database_Table ON BackupTables (Database, "Table");
+            CREATE INDEX IF NOT EXISTS IX_BackupTables_Table ON BackupTables ("Table");
+            CREATE INDEX IF NOT EXISTS IX_BackupTables_EffectiveBackupType_ParentFullBackupTableId ON BackupTables (EffectiveBackupType, ParentFullBackupTableId);
+            CREATE INDEX IF NOT EXISTS IX_BackupTables_EffectiveBackupType_Database_Table ON BackupTables (EffectiveBackupType, Database, "Table");
             CREATE INDEX IF NOT EXISTS IX_BackupTables_Status ON BackupTables (Status);
             CREATE INDEX IF NOT EXISTS IX_BackupTables_ParentFullBackupTableId ON BackupTables (ParentFullBackupTableId);
             CREATE INDEX IF NOT EXISTS IX_BackupTableShards_BackupTableId ON BackupTableShards (BackupTableId);
             CREATE INDEX IF NOT EXISTS IX_BackupTableShards_BackupTableId_SourceShardNumber ON BackupTableShards (BackupTableId, SourceShardNumber);
+            CREATE INDEX IF NOT EXISTS IX_BackupTableShards_EffectiveBackupType_ParentFullBackupTableShardId ON BackupTableShards (EffectiveBackupType, ParentFullBackupTableShardId);
             CREATE INDEX IF NOT EXISTS IX_BackupTableShards_Status ON BackupTableShards (Status);
             CREATE INDEX IF NOT EXISTS IX_BackupTableShards_ParentFullBackupTableShardId ON BackupTableShards (ParentFullBackupTableShardId);
             CREATE INDEX IF NOT EXISTS IX_Restores_Status ON Restores (Status);
             CREATE INDEX IF NOT EXISTS IX_Restores_BackupId ON Restores (BackupId);
             CREATE INDEX IF NOT EXISTS IX_Restores_TargetClusterId ON Restores (TargetClusterId);
+            CREATE INDEX IF NOT EXISTS IX_Restores_CreatedAt ON Restores (CreatedAt);
             CREATE INDEX IF NOT EXISTS IX_RestoreTables_RestoreId ON RestoreTables (RestoreId);
             CREATE INDEX IF NOT EXISTS IX_RestoreTables_BackupTableId ON RestoreTables (BackupTableId);
             CREATE INDEX IF NOT EXISTS IX_RestoreTableShards_RestoreTableId ON RestoreTableShards (RestoreTableId);
@@ -394,6 +406,7 @@ public sealed class Baseline : Migration
             """);
     }
 }
+
 
 
 

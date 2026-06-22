@@ -38,6 +38,68 @@ internal static class BackupRestoreMapping
             backupSizeBytes ?? CalculateBackupSizeBytes(x.Tables),
             includeTables ? x.Tables.OrderBy(t => t.Database).ThenBy(t => t.Table).Select(ToDto).ToList() : []);
 
+
+    public static BackupDto ToSummaryDto(
+        Guid id,
+        BackupTriggerType triggerType,
+        BackupRunStatus status,
+        BackupType backupType,
+        BackupContentMode contentMode,
+        Guid sourceClusterId,
+        Guid? targetId,
+        Guid? policyId,
+        Guid? scheduleId,
+        Guid? requestedByUserId,
+        string requestedByName,
+        string? manualRequestJson,
+        DateTimeOffset createdAt,
+        DateTimeOffset? startedAt,
+        DateTimeOffset? completedAt,
+        string? error,
+        string? failureReason,
+        bool isPinned,
+        DateTimeOffset? pinnedAt,
+        Guid? pinnedByUserId,
+        string? pinnedByName,
+        string? deletionReason,
+        DateTimeOffset? deletionRequestedAt,
+        DateTimeOffset? deletionStartedAt,
+        DateTimeOffset? deletedAt,
+        string? deletionError,
+        int deletionAttemptCount,
+        int tableCount,
+        long? backupSizeBytes) =>
+        new(
+            id,
+            triggerType,
+            status,
+            backupType,
+            contentMode,
+            sourceClusterId,
+            targetId,
+            policyId,
+            scheduleId,
+            requestedByUserId,
+            requestedByName,
+            manualRequestJson,
+            createdAt,
+            startedAt,
+            completedAt,
+            error,
+            failureReason,
+            isPinned,
+            pinnedAt,
+            pinnedByUserId,
+            pinnedByName,
+            deletionReason,
+            deletionRequestedAt,
+            deletionStartedAt,
+            deletedAt,
+            deletionError,
+            deletionAttemptCount,
+            tableCount,
+            backupSizeBytes,
+            []);
     private static long? CalculateBackupSizeBytes(IEnumerable<BackupTableEntity> tables)
     {
         var sizes = tables.Select(x => x.BackupSizeBytes).Where(x => x.HasValue).ToList();
@@ -153,5 +215,3 @@ internal static class BackupRestoreMapping
             x.CompletedAt,
             x.Error);
 }
-
-

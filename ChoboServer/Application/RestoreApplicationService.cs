@@ -199,7 +199,7 @@ public sealed class RestoreApplicationService(
     }
 
     public async Task<IReadOnlyList<RestoreDto>> ListAsync(CancellationToken cancellationToken = default) =>
-        (await db.Restores.Include(x => x.Tables).ThenInclude(x => x.Shards).OrderByDescending(x => x.CreatedAt).Take(200).ToListAsync(cancellationToken))
+        (await db.Restores.AsNoTracking().Include(x => x.Tables).ThenInclude(x => x.Shards).AsSplitQuery().OrderByDescending(x => x.CreatedAt).Take(200).ToListAsync(cancellationToken))
         .Select(BackupRestoreMapping.ToDto)
         .ToList();
 
@@ -452,3 +452,4 @@ public sealed class RestoreApplicationService(
         return options;
     }
 }
+

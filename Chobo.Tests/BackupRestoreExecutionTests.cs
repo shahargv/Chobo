@@ -100,6 +100,81 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Backup_runner_does_not_fail_shards_when_storage_manifest_write_fails()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+        fixture.StorageDeletion.FailWriteCount = 10;
+
+        var backupId = await fixture.CreateManualBackupAsync();
+        await fixture.RunBackupAsync(backupId);
+
+        fixture.Db.ChangeTracker.Clear();
+        var shards = await fixture.Db.BackupTableShards.Where(x => x.BackupTable!.BackupId == backupId).ToListAsync();
+        Assert.All(shards, shard => Assert.Equal(BackupTableStatus.Succeeded, shard.Status));
+        Assert.False(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "shard-failed" && x.EntityType == "backup-table-shard"));
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "metadata-manifest-write-failed" && x.EntityId == backupId.ToString()));
+    }
+
+    [Fact]
+    public async Task Backup_runner_writes_checkpoint_manifest_after_configured_shard_interval()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions
+        {
+            MaxDop = 1,
+            PollInterval = TimeSpan.FromMilliseconds(1),
+            ManifestCheckpointShardInterval = 20,
+            ManifestWriteTimeout = TimeSpan.FromSeconds(1)
+        });
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+        fixture.ClickHouse.Topology.Clear();
+        for (var shardNumber = 1; shardNumber <= 20; shardNumber++)
+        {
+            fixture.ClickHouse.Topology.Add(new ClickHouseShardReplicaInfo(shardNumber, $"shard-{shardNumber}", 1, $"source-s{shardNumber}", 9000, false, 0));
+        }
+
+        var cluster = await fixture.Db.ClickHouseClusters.SingleAsync(x => x.Id == fixture.SourceClusterId);
+        cluster.Mode = ClusterMode.Cluster;
+        cluster.ClickHouseClusterName = "prod";
+        await fixture.Db.SaveChangesAsync();
+
+        var backupId = await fixture.CreateManualBackupAsync();
+        await fixture.RunBackupAsync(backupId);
+
+        fixture.Db.ChangeTracker.Clear();
+        var shards = await fixture.Db.BackupTableShards.Where(x => x.BackupTable!.BackupId == backupId).ToListAsync();
+        Assert.Equal(20, shards.Count);
+        Assert.All(shards, shard => Assert.Equal(BackupTableStatus.Succeeded, shard.Status));
+        Assert.True(fixture.StorageDeletion.WriteObjectCount >= 42);
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "metadata-manifest-checkpoint-written" && x.EntityId == backupId.ToString()));
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "metadata-manifest-written" && x.EntityId == backupId.ToString()));
+    }
+
+    [Fact]
+    public async Task Backup_runner_treats_storage_manifest_timeout_as_best_effort()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions
+        {
+            MaxDop = 1,
+            PollInterval = TimeSpan.FromMilliseconds(1),
+            ManifestWriteTimeout = TimeSpan.FromMilliseconds(10)
+        });
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+        fixture.StorageDeletion.DelayWritesUntilCanceled = true;
+
+        var backupId = await fixture.CreateManualBackupAsync();
+        await fixture.RunBackupAsync(backupId);
+
+        fixture.Db.ChangeTracker.Clear();
+        var backup = await fixture.Db.Backups.SingleAsync(x => x.Id == backupId);
+        var shard = await fixture.Db.BackupTableShards.SingleAsync(x => x.BackupTable!.BackupId == backupId);
+        Assert.Equal(BackupRunStatus.Succeeded, backup.Status);
+        Assert.Equal(BackupTableStatus.Succeeded, shard.Status);
+        Assert.False(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "shard-failed" && x.EntityType == "backup-table-shard"));
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "metadata-manifest-write-failed" && x.EntityId == backupId.ToString()));
+    }
+
+    [Fact]
     public async Task Backup_metadata_recovery_recreates_failed_backup_metadata_from_storage_manifest()
     {
         await using var fixture = await TestFixture.CreateAsync();
@@ -1219,6 +1294,55 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Garbage_collector_queue_lists_pending_and_policy_eligible_items()
+    {
+        var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now));
+        var cleanupPolicy = await fixture.SeedPolicyAsync(failedMode: FailedBackupRetentionMode.DeleteByGarbageCollectorAfterFailure);
+        var keepPolicy = await fixture.SeedPolicyAsync(name: "keep-failures");
+        var manual = await fixture.SeedPolicyBackupAsync(cleanupPolicy.Id, BackupRunStatus.ManualDeleteRequested, now.AddMinutes(-30));
+        manual.DeletionReason = "manual";
+        manual.DeletionRequestedAt = now.AddMinutes(-20);
+        var failed = await fixture.SeedPolicyBackupAsync(cleanupPolicy.Id, BackupRunStatus.Failed, now.AddMinutes(-10));
+        var kept = await fixture.SeedPolicyBackupAsync(keepPolicy.Id, BackupRunStatus.Failed, now.AddMinutes(-5));
+        await fixture.Db.SaveChangesAsync();
+
+        var queue = await fixture.Services.GetRequiredService<BackupsGarbageCollectorBackgroundService>().GetQueueAsync();
+
+        Assert.Contains(queue, x => x.EntityId == manual.Id && x.Status == BackupRunStatus.ManualDeleteRequested && x.FinalStatus == BackupRunStatus.ManualDeleted && x.Reason == "manual");
+        Assert.Contains(queue, x => x.EntityId == failed.Id && x.Status == BackupRunStatus.Failed && x.FinalStatus == BackupRunStatus.FailedBackupDeletedByGarbageCollector && x.Reason == "failed-backup-garbage-collector");
+        Assert.DoesNotContain(queue, x => x.EntityId == kept.Id);
+    }
+
+    [Fact]
+    public async Task Garbage_collector_run_one_cleans_only_requested_queue_item()
+    {
+        var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now));
+        var policy = await fixture.SeedPolicyAsync();
+        var first = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.ManualDeleteRequested, now.AddMinutes(-30), tableName: "orders");
+        var second = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.ManualDeleteRequested, now.AddMinutes(-25), tableName: "invoices");
+        first.DeletionReason = "manual";
+        first.DeletionRequestedAt = now.AddMinutes(-20);
+        second.DeletionReason = "manual";
+        second.DeletionRequestedAt = now.AddMinutes(-15);
+        await fixture.Db.SaveChangesAsync();
+
+        var result = await fixture.Services.GetRequiredService<BackupsGarbageCollectorBackgroundService>().RunOneAsync(first.Id, "manual");
+
+        fixture.Db.ChangeTracker.Clear();
+        var cleaned = await fixture.Db.Backups.SingleAsync(x => x.Id == first.Id);
+        var untouched = await fixture.Db.Backups.SingleAsync(x => x.Id == second.Id);
+        Assert.Equal(BackupRunStatus.ManualDeleted, cleaned.Status);
+        Assert.NotNull(cleaned.DeletedAt);
+        Assert.Equal(BackupRunStatus.ManualDeleteRequested, untouched.Status);
+        Assert.Null(untouched.DeletedAt);
+        Assert.Equal(1, result.LastPendingCleanupCount);
+        Assert.Equal(1, result.LastCleanedCount);
+        Assert.Contains(first.Tables.Single().S3Path, fixture.StorageDeletion.DeletedDirectories);
+        Assert.DoesNotContain(second.Tables.Single().S3Path, fixture.StorageDeletion.DeletedDirectories);
+    }
+    [Fact]
     public async Task Garbage_collector_deletes_failed_incremental_without_deleting_parent_full()
     {
         var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
@@ -1294,6 +1418,65 @@ public sealed class BackupRestoreExecutionTests
         Assert.Equal(BackupRunStatus.Canceled, afterCleanup.Status);
         Assert.NotNull(afterCleanup.DeletedAt);
         Assert.Contains(backup.Tables.Single().S3Path, fixture.StorageDeletion.DeletedDirectories);
+    }
+
+    [Fact]
+    public async Task Backup_cancel_stops_inflight_worker_without_marking_later_shards_successful()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+        fixture.ClickHouse.Topology.Clear();
+        fixture.ClickHouse.Topology.AddRange([
+            new ClickHouseShardReplicaInfo(1, "shard-1", 1, "source-s1", 9000, false, 0),
+            new ClickHouseShardReplicaInfo(2, "shard-2", 1, "source-s2", 9000, false, 0)
+        ]);
+        fixture.ClickHouse.BlockOperationStatus = true;
+
+        var backupId = await fixture.CreateManualBackupAsync();
+        var runTask = fixture.RunBackupAsync(backupId);
+        await fixture.ClickHouse.WaitForBlockedStatusAsync();
+
+        fixture.Db.ChangeTracker.Clear();
+        var runningBackup = await fixture.Db.Backups.Include(x => x.Tables).ThenInclude(x => x.Shards).SingleAsync(x => x.Id == backupId);
+        var startedShard = runningBackup.Tables.SelectMany(x => x.Shards).Single(x => x.Status == BackupTableStatus.Running);
+        Assert.False(string.IsNullOrWhiteSpace(startedShard.ClickHouseOperationId));
+
+        var canceled = await fixture.Services.GetRequiredService<BackupApplicationService>().CancelAsync(backupId);
+        Assert.NotNull(canceled);
+        Assert.Equal(BackupRunStatus.Canceled, canceled.Status);
+        Assert.Contains(startedShard.ClickHouseOperationId!, fixture.ClickHouse.KilledQueries);
+
+        fixture.ClickHouse.ReleaseBlockedStatus();
+        await runTask;
+
+        fixture.Db.ChangeTracker.Clear();
+        var after = await fixture.Db.Backups.Include(x => x.Tables).ThenInclude(x => x.Shards).SingleAsync(x => x.Id == backupId);
+        Assert.Equal(BackupRunStatus.Canceled, after.Status);
+        Assert.All(after.Tables.SelectMany(x => x.Shards), shard => Assert.Equal(BackupTableStatus.Skipped, shard.Status));
+        Assert.Single(fixture.ClickHouse.BackupStartTables);
+        Assert.False(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "shard-succeeded" && x.EntityType == "backup-table-shard"));
+    }
+    [Fact]
+    public async Task Backup_cancel_kills_table_operation_when_shards_have_no_operation_ids()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Running, "backup-table-op", true)
+        ]);
+        backup.Status = BackupRunStatus.Running;
+        var table = backup.Tables.Single();
+        table.ClickHouseOperationId = "backup-table-op";
+        foreach (var shard in table.Shards)
+        {
+            shard.ClickHouseOperationId = null;
+        }
+        await fixture.Db.SaveChangesAsync();
+
+        var canceled = await fixture.Services.GetRequiredService<BackupApplicationService>().CancelAsync(backup.Id);
+
+        Assert.NotNull(canceled);
+        Assert.Equal(BackupRunStatus.Canceled, canceled.Status);
+        Assert.Contains("backup-table-op", fixture.ClickHouse.KilledQueries);
     }
 
     [Fact]
@@ -2214,6 +2397,8 @@ public sealed class BackupRestoreExecutionTests
         public Dictionary<string, byte[]> Objects { get; } = new(StringComparer.Ordinal);
         public bool FailNextDelete { get; set; }
         public int FailWriteCount { get; set; }
+        public int WriteObjectCount { get; private set; }
+        public bool DelayWritesUntilCanceled { get; set; }
 
         public Task DeleteDirectoryAsync(BackupTargetEntity target, string directoryPath, CancellationToken cancellationToken = default)
         {
@@ -2227,8 +2412,14 @@ public sealed class BackupRestoreExecutionTests
             return Task.CompletedTask;
         }
 
-        public Task WriteObjectAsync(BackupTargetEntity target, string path, byte[] content, CancellationToken cancellationToken = default)
+        public async Task WriteObjectAsync(BackupTargetEntity target, string path, byte[] content, CancellationToken cancellationToken = default)
         {
+            WriteObjectCount++;
+            if (DelayWritesUntilCanceled)
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+
             if (FailWriteCount > 0)
             {
                 FailWriteCount--;
@@ -2236,7 +2427,6 @@ public sealed class BackupRestoreExecutionTests
             }
 
             Objects[path] = content;
-            return Task.CompletedTask;
         }
 
         public Task<byte[]> ReadObjectAsync(BackupTargetEntity target, string path, CancellationToken cancellationToken = default) =>
@@ -2752,7 +2942,4 @@ public sealed class BackupRestoreExecutionTests
         public override DateTimeOffset GetUtcNow() => utcNow;
     }
 }
-
-
-
 

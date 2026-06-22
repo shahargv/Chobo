@@ -127,12 +127,83 @@ public sealed class BackupApplicationService(
         }
 
         var summaries = await query
+            .AsNoTracking()
             .OrderByDescending(x => x.CreatedAt)
             .Take(200)
-            .Select(x => new { Backup = x, TableCount = x.Tables.Count, BackupSizeBytes = x.Tables.Where(t => t.BackupSizeBytes != null).Sum(t => t.BackupSizeBytes) })
+            .Select(x => new BackupSummaryRow(
+                x.Id,
+                x.TriggerType,
+                x.Status,
+                x.BackupType,
+                x.ContentMode,
+                x.SourceClusterId,
+                x.TargetId,
+                x.PolicyId,
+                x.ScheduleId,
+                x.RequestedByUserId,
+                x.RequestedByName,
+                x.ManualRequestJson,
+                x.CreatedAt,
+                x.StartedAt,
+                x.CompletedAt,
+                x.Error,
+                x.FailureReason,
+                x.IsPinned,
+                x.PinnedAt,
+                x.PinnedByUserId,
+                x.PinnedByName,
+                x.DeletionReason,
+                x.DeletionRequestedAt,
+                x.DeletionStartedAt,
+                x.DeletedAt,
+                x.DeletionError,
+                x.DeletionAttemptCount))
             .ToListAsync(cancellationToken);
+        var summaryIds = summaries.Select(x => x.Id).ToList();
+        var tableStats = summaryIds.Count == 0
+            ? []
+            : await db.BackupTables
+                .AsNoTracking()
+                .Where(x => summaryIds.Contains(x.BackupId))
+                .GroupBy(x => x.BackupId)
+                .Select(x => new BackupTableStats(x.Key, x.Count(), x.Where(t => t.BackupSizeBytes != null).Sum(t => t.BackupSizeBytes)))
+                .ToListAsync(cancellationToken);
+        var statsByBackupId = tableStats.ToDictionary(x => x.BackupId);
         return summaries
-            .Select(x => BackupRestoreMapping.ToDto(x.Backup, x.TableCount, x.BackupSizeBytes, includeTables: false))
+            .Select(x =>
+            {
+                statsByBackupId.TryGetValue(x.Id, out var stats);
+                return BackupRestoreMapping.ToSummaryDto(
+                    x.Id,
+                    x.TriggerType,
+                    x.Status,
+                    x.BackupType,
+                    x.ContentMode,
+                    x.SourceClusterId,
+                    x.TargetId,
+                    x.PolicyId,
+                    x.ScheduleId,
+                    x.RequestedByUserId,
+                    x.RequestedByName,
+                    x.ManualRequestJson,
+                    x.CreatedAt,
+                    x.StartedAt,
+                    x.CompletedAt,
+                    x.Error,
+                    x.FailureReason,
+                    x.IsPinned,
+                    x.PinnedAt,
+                    x.PinnedByUserId,
+                    x.PinnedByName,
+                    x.DeletionReason,
+                    x.DeletionRequestedAt,
+                    x.DeletionStartedAt,
+                    x.DeletedAt,
+                    x.DeletionError,
+                    x.DeletionAttemptCount,
+                    stats?.TableCount ?? 0,
+                    stats?.BackupSizeBytes);
+            })
             .ToList();
     }
 
@@ -144,6 +215,7 @@ public sealed class BackupApplicationService(
         }
 
         var summary = await db.Backups
+            .AsNoTracking()
             .Where(x => x.Id == id)
             .Select(x => new { Backup = x, TableCount = x.Tables.Count, BackupSizeBytes = x.Tables.Where(t => t.BackupSizeBytes != null).Sum(t => t.BackupSizeBytes) })
             .FirstOrDefaultAsync(cancellationToken);
@@ -288,6 +360,58 @@ public sealed class BackupApplicationService(
         return BackupRestoreMapping.ToDto(backup);
     }
 
+
+    private static bool TryParseTableFilter(string? tableName, out string? database, out string table)
+    {
+        database = null;
+        table = "";
+        if (string.IsNullOrWhiteSpace(tableName))
+        {
+            return false;
+        }
+
+        var trimmed = tableName.Trim();
+        var separator = trimmed.IndexOf('.', StringComparison.Ordinal);
+        if (separator <= 0 || separator == trimmed.Length - 1)
+        {
+            table = trimmed;
+            return true;
+        }
+
+        database = trimmed[..separator];
+        table = trimmed[(separator + 1)..];
+        return true;
+    }
+    private sealed record BackupSummaryRow(
+        Guid Id,
+        BackupTriggerType TriggerType,
+        BackupRunStatus Status,
+        BackupType BackupType,
+        BackupContentMode ContentMode,
+        Guid SourceClusterId,
+        Guid? TargetId,
+        Guid? PolicyId,
+        Guid? ScheduleId,
+        Guid? RequestedByUserId,
+        string RequestedByName,
+        string? ManualRequestJson,
+        DateTimeOffset CreatedAt,
+        DateTimeOffset? StartedAt,
+        DateTimeOffset? CompletedAt,
+        string? Error,
+        string? FailureReason,
+        bool IsPinned,
+        DateTimeOffset? PinnedAt,
+        Guid? PinnedByUserId,
+        string? PinnedByName,
+        string? DeletionReason,
+        DateTimeOffset? DeletionRequestedAt,
+        DateTimeOffset? DeletionStartedAt,
+        DateTimeOffset? DeletedAt,
+        string? DeletionError,
+        int DeletionAttemptCount);
+
+    private sealed record BackupTableStats(Guid BackupId, int TableCount, long? BackupSizeBytes);
     private async Task<(int Killed, IReadOnlyList<string> Failures)> KillBackupOperationsAsync(BackupEntity backup, CancellationToken cancellationToken)
     {
         if (backup.SourceCluster is null)
@@ -298,11 +422,12 @@ public sealed class BackupApplicationService(
         var killed = 0;
         var failures = new List<string>();
         var operations = backup.Tables
-            .SelectMany(table => table.Shards.Count == 0
-                ? string.IsNullOrWhiteSpace(table.ClickHouseOperationId) ? [] : [new { Endpoint = (ClickHouseNodeEndpoint?)null, OperationId = table.ClickHouseOperationId! }]
-                : table.Shards
-                    .Where(shard => !string.IsNullOrWhiteSpace(shard.ClickHouseOperationId))
-                    .Select(shard => new { Endpoint = (ClickHouseNodeEndpoint?)new ClickHouseNodeEndpoint(shard.Host, shard.Port, shard.UseTls), OperationId = shard.ClickHouseOperationId! }))
+            .SelectMany(table => table.Shards
+                .Where(shard => !string.IsNullOrWhiteSpace(shard.ClickHouseOperationId))
+                .Select(shard => new { Endpoint = (ClickHouseNodeEndpoint?)new ClickHouseNodeEndpoint(shard.Host, shard.Port, shard.UseTls), OperationId = shard.ClickHouseOperationId! })
+                .Concat(string.IsNullOrWhiteSpace(table.ClickHouseOperationId)
+                    ? []
+                    : [new { Endpoint = (ClickHouseNodeEndpoint?)null, OperationId = table.ClickHouseOperationId! }]))
             .DistinctBy(x => x.OperationId)
             .ToList();
 
@@ -377,5 +502,4 @@ public sealed class BackupApplicationService(
         return options;
     }
 }
-
 

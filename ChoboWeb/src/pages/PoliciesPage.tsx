@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
-import { CalendarClock, ListFilter, Play, Save } from "lucide-react";
+import { CalendarClock, Copy, ListFilter, Play, Save, X } from "lucide-react";
 import type { BackupContentMode, BackupPolicyDto, FailedBackupRetentionMode, PolicyMatchKind, PolicySelector, PolicySelectorAction, PolicySelectorRule, UpsertPolicyRequest } from "../api/generated";
 import { useApi } from "../api-context";
 import { DataTable, Input, Page, Select } from "../components/ui";
@@ -128,6 +128,8 @@ export function Policies() {
 
 function SelectorBuilder({ selector, hasSource, inventory, selected, isLoading, error, onChange }: { selector: PolicySelector; hasSource: boolean; inventory: Array<{ database: string; table: string }>; selected: Array<{ database: string; table: string }>; isLoading: boolean; error: string | null; onChange: (selector: PolicySelector) => void }) {
   const updateRule = (index: number, rule: PolicySelectorRule) => onChange({ ...selector, rules: selector.rules.map((item, i) => i === index ? rule : item) });
+  const duplicateRule = (index: number) => onChange({ ...selector, rules: [...selector.rules.slice(0, index + 1), copyRule(selector.rules[index]), ...selector.rules.slice(index + 1)] });
+  const excludeTable = (table: { database: string; table: string }) => onChange({ ...selector, rules: [...selector.rules, excludeTableRule(table)] });
   return (
     <div className="selector-builder">
       <div className="section-head">
@@ -144,6 +146,7 @@ function SelectorBuilder({ selector, hasSource, inventory, selected, isLoading, 
           <PatternEditor label="Database" pattern={rule.database} onChange={(database) => updateRule(index, { ...rule, database })} />
           <PatternEditor label="Table" pattern={rule.table} onChange={(table) => updateRule(index, { ...rule, table })} />
           <button className="ghost" onClick={() => index > 0 && onChange({ ...selector, rules: move(selector.rules, index, index - 1) })}>Up</button>
+          <button className="ghost" onClick={() => duplicateRule(index)}><Copy size={14} /> Duplicate</button>
           <button className="ghost" onClick={() => onChange({ ...selector, rules: selector.rules.filter((_, i) => i !== index) })}>Remove</button>
         </div>
       ))}
@@ -154,7 +157,7 @@ function SelectorBuilder({ selector, hasSource, inventory, selected, isLoading, 
           {hasSource && isLoading && <span className="hint">Loading tables from ClickHouse...</span>}
           {hasSource && !isLoading && error && <span className="field-error">{error}</span>}
           {hasSource && !isLoading && !error && inventory.length === 0 && <span className="hint">No tables were returned by ClickHouse for this cluster.</span>}
-          {hasSource && !isLoading && !error && inventory.length > 0 && <SelectedTablesPreview inventoryCount={inventory.length} selected={selected} />}
+          {hasSource && !isLoading && !error && inventory.length > 0 && <SelectedTablesPreview inventoryCount={inventory.length} selected={selected} onExcludeTable={excludeTable} />}
         </div>
       </div>
     </div>
@@ -170,7 +173,7 @@ function useDebouncedValue<T>(value: T, delayMs: number) {
   }, [value, delayMs]);
   return debounced;
 }
-export function SelectedTablesPreview({ inventoryCount, selected }: { inventoryCount: number; selected: Array<{ database: string; table: string }> }) {
+export function SelectedTablesPreview({ inventoryCount, selected, onExcludeTable }: { inventoryCount: number; selected: Array<{ database: string; table: string }>; onExcludeTable?: (table: { database: string; table: string }) => void }) {
   const [showAll, setShowAll] = useState(false);
   useEffect(() => setShowAll(false), [selected]);
   const visible = showAll ? selected : selected.slice(0, 100);
@@ -178,10 +181,18 @@ export function SelectedTablesPreview({ inventoryCount, selected }: { inventoryC
   return <>
     <h4>Tables selected</h4>
     <span className="hint">{selected.length} of {inventoryCount} table(s) will be backed up.</span>
-    {visible.map((table) => <span className="chip" key={`${table.database}.${table.table}`}>{table.database}.{table.table}</span>)}
+    {visible.map((table) => <span className="chip table-chip" key={`${table.database}.${table.table}`}>{table.database}.{table.table}{onExcludeTable && <button className="chip-remove" type="button" title={`Exclude ${table.database}.${table.table}`} aria-label={`Exclude ${table.database}.${table.table}`} onClick={() => onExcludeTable(table)}><X size={12} /></button>}</span>)}
     {hiddenCount > 0 && <span className="hint">Showing first {visible.length}; {hiddenCount} more matched table(s) are included. <button className="link-button" onClick={() => setShowAll(true)}>Show all</button></span>}
   </>;
 }
+export function copyRule(rule: PolicySelectorRule): PolicySelectorRule {
+  return { action: rule.action, database: { ...rule.database }, table: { ...rule.table } };
+}
+
+export function excludeTableRule(table: { database: string; table: string }): PolicySelectorRule {
+  return { action: "Exclude", database: { kind: "Exact", value: table.database }, table: { kind: "Exact", value: table.table } };
+}
+
 function PatternEditor({ label, pattern, onChange }: { label: string; pattern: { kind: PolicyMatchKind; value: string }; onChange: (pattern: { kind: PolicyMatchKind; value: string }) => void }) {
   return (
     <div className="pattern-editor">

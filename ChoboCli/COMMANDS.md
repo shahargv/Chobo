@@ -207,6 +207,16 @@ Restore layout controls:
 
 Run and table statuses can be `PartiallySucceeded` when at least one required shard succeeds and at least one required shard fails. In that case, inspect `restores show --id <restore-id>` for shard-level status and error details, then inspect `audit show` for `shard-failed`, `table-partially-succeeded`, and restore-level `partially-succeeded` entries.
 
+## Garbage Collector
+
+```powershell
+ChoboCli gc status
+ChoboCli gc queue
+ChoboCli gc run
+ChoboCli gc run-one --id <backup-id>
+```
+
+`gc queue` lists backup entities waiting for cleanup, including failed backups eligible by policy and canceled/delete-requested backups with remaining storage metadata. `gc run-one` processes only the requested queued backup id and is safe if the scheduled garbage collector already cleaned it.
 ## Logs
 
 ```powershell

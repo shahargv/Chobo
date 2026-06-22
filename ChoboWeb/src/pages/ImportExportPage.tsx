@@ -24,7 +24,10 @@ export function ImportExport() {
       link.download = `chobo-${kind}.json`;
       link.click();
       URL.revokeObjectURL(url);
-    }
+      return kind;
+    },
+    onSuccess: (kind) => showToast({ kind: "success", text: `${kind} export downloaded.` }),
+    onError: (error) => showToast({ kind: "error", text: String(error) })
   });
 
   const upload = useMutation({
@@ -51,12 +54,15 @@ export function ImportExport() {
     }
   });
 
+  const exportingKind = download.isPending ? download.variables : null;
+
   return (
     <Page title="Import/Export" subtitle="Export restorable metadata or import a previous Chobo configuration or data snapshot.">
       <section className="panel actions-panel">
-        <button className="secondary" disabled={download.isPending} onClick={() => download.mutate("config")}><Download size={16} /> Export config</button>
-        <button className="secondary" disabled={download.isPending} onClick={() => download.mutate("data")}><Download size={16} /> Export data</button>
-        <button className="secondary" onClick={() => setRecoveryOpen(true)}><RefreshCw size={16} /> Recover backup states</button>
+        <button className="secondary" disabled={download.isPending} onClick={() => download.mutate("config")}><Download size={16} /> {exportingKind === "config" ? "Exporting config..." : "Export config"}</button>
+        <button className="secondary" disabled={download.isPending} onClick={() => download.mutate("data")}><Download size={16} /> {exportingKind === "data" ? "Exporting data..." : "Export data"}</button>
+        <button className="secondary" disabled={download.isPending} onClick={() => setRecoveryOpen(true)}><RefreshCw size={16} /> Recover backup states</button>
+        {exportingKind && <span className="hint">Preparing {exportingKind} export...</span>}
       </section>
       <section className="panel">
         <h2>Import JSON</h2>
@@ -74,3 +80,4 @@ export function ImportExport() {
     </Page>
   );
 }
+

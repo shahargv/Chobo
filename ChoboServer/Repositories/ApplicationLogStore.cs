@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using Chobo.Contracts;
 using ChoboServer.Data;
@@ -9,35 +10,31 @@ namespace ChoboServer.Repositories;
 
 public interface IApplicationLogStore
 {
-    Task<PagedResultDto<ApplicationLogEntryDto>> QueryAsync(DateTimeOffset? startTime, DateTimeOffset? endTime, int? last, int? offset = null, int? limit = null, string? operationId = null);
+    Task<PagedResultDto<ApplicationLogEntryDto>> QueryAsync(DateTimeOffset? startTime, DateTimeOffset? endTime, int? last, int? offset = null, int? limit = null, string? operationId = null, string? severity = null);
     Task<int> DeleteBeforeAsync(DateTimeOffset before, CancellationToken cancellationToken = default);
 }
 
 public sealed class ApplicationLogStore(ChoboDbContext db) : IApplicationLogStore
 {
-    public async Task<PagedResultDto<ApplicationLogEntryDto>> QueryAsync(DateTimeOffset? startTime, DateTimeOffset? endTime, int? last, int? offset = null, int? limit = null, string? operationId = null)
+    public async Task<PagedResultDto<ApplicationLogEntryDto>> QueryAsync(DateTimeOffset? startTime, DateTimeOffset? endTime, int? last, int? offset = null, int? limit = null, string? operationId = null, string? severity = null)
     {
-        const string whereSql = """
-                                WHERE ($startTime IS NULL OR Timestamp >= $startTime)
-                                  AND ($endTime IS NULL OR Timestamp <= $endTime)
-                                  AND ($operationId IS NULL OR OperationId = $operationId)
-                                """;
+        var filter = BuildFilter(startTime, endTime, operationId, severity);
         var pageOffset = Math.Max(offset ?? 0, 0);
         var pageLimit = Math.Clamp(limit ?? last ?? 200, 1, 10_000);
         var results = new List<ApplicationLogEntryDto>();
         var connection = (SqliteConnection)db.Database.GetDbConnection();
         await using var _ = await OpenIfNeededAsync(connection);
-        var totalCount = await CountAsync(connection, whereSql, startTime, endTime, operationId);
+        var totalCount = await CountAsync(connection, filter);
 
         await using var command = connection.CreateCommand();
         command.CommandText = $"""
                               SELECT Id, Timestamp, Level, RenderedMessage, Exception, Properties
                               FROM ApplicationLogEntries
-                              {whereSql}
+                              {filter.WhereSql}
                               ORDER BY Timestamp DESC, Id DESC
                               LIMIT $limit OFFSET $offset;
                               """;
-        AddFilterParameters(command, startTime, endTime, operationId);
+        AddParameters(command, filter);
         command.Parameters.AddWithValue("$limit", pageLimit);
         command.Parameters.AddWithValue("$offset", pageOffset);
 
@@ -66,19 +63,82 @@ public sealed class ApplicationLogStore(ChoboDbContext db) : IApplicationLogStor
         return await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    private static async Task<int> CountAsync(SqliteConnection connection, string whereSql, DateTimeOffset? startTime, DateTimeOffset? endTime, string? operationId)
+    private static async Task<int> CountAsync(SqliteConnection connection, QueryFilter filter)
     {
         await using var command = connection.CreateCommand();
-        command.CommandText = $"SELECT COUNT(*) FROM ApplicationLogEntries {whereSql};";
-        AddFilterParameters(command, startTime, endTime, operationId);
+        command.CommandText = $"SELECT COUNT(*) FROM ApplicationLogEntries {filter.WhereSql};";
+        AddParameters(command, filter);
         return Convert.ToInt32(await command.ExecuteScalarAsync());
     }
 
-    private static void AddFilterParameters(SqliteCommand command, DateTimeOffset? startTime, DateTimeOffset? endTime, string? operationId)
+    private static QueryFilter BuildFilter(DateTimeOffset? startTime, DateTimeOffset? endTime, string? operationId, string? severity)
     {
-        command.Parameters.AddWithValue("$startTime", ToSqlValue(startTime));
-        command.Parameters.AddWithValue("$endTime", ToSqlValue(endTime));
-        command.Parameters.AddWithValue("$operationId", string.IsNullOrWhiteSpace(operationId) ? DBNull.Value : operationId);
+        var predicates = new List<string>();
+        var parameters = new List<(string Name, object Value)>();
+        if (startTime is not null)
+        {
+            predicates.Add("Timestamp >= $startTime");
+            parameters.Add(("$startTime", ToSqlValue(startTime)));
+        }
+        if (endTime is not null)
+        {
+            predicates.Add("Timestamp <= $endTime");
+            parameters.Add(("$endTime", ToSqlValue(endTime)));
+        }
+        if (!string.IsNullOrWhiteSpace(operationId))
+        {
+            predicates.Add("OperationId = $operationId");
+            parameters.Add(("$operationId", operationId));
+        }
+        var severityLevels = ParseSeverityLevels(severity);
+        if (severityLevels.Count > 0)
+        {
+            var placeholders = new List<string>();
+            for (var i = 0; i < severityLevels.Count; i++)
+            {
+                var parameterName = $"$level{i}";
+                placeholders.Add(parameterName);
+                parameters.Add((parameterName, severityLevels[i]));
+            }
+            predicates.Add("Level IN (" + string.Join(", ", placeholders) + ")");
+        }
+
+        return new QueryFilter(predicates.Count == 0 ? "" : "WHERE " + string.Join(" AND ", predicates), parameters);
+    }
+
+    private static IReadOnlyList<string> ParseSeverityLevels(string? severity)
+    {
+        if (string.IsNullOrWhiteSpace(severity))
+        {
+            return [];
+        }
+
+        return severity
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(NormalizeSeverityLevel)
+            .Where(x => x is not null)
+            .Select(x => x!)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+    }
+
+    private static string? NormalizeSeverityLevel(string value) =>
+        value.ToLowerInvariant() switch
+        {
+            "verbose" => "Verbose",
+            "debug" => "Debug",
+            "information" or "info" => "Information",
+            "warning" or "warn" => "Warning",
+            "error" => "Error",
+            "fatal" => "Fatal",
+            _ => null
+        };
+    private static void AddParameters(SqliteCommand command, QueryFilter filter)
+    {
+        foreach (var parameter in filter.Parameters)
+        {
+            command.Parameters.AddWithValue(parameter.Name, parameter.Value);
+        }
     }
 
     private static object ToSqlValue(DateTimeOffset? value) =>
@@ -120,6 +180,8 @@ public sealed class ApplicationLogStore(ChoboDbContext db) : IApplicationLogStor
         return new ConnectionCloseScope(connection);
     }
 
+    private sealed record QueryFilter(string WhereSql, IReadOnlyList<(string Name, object Value)> Parameters);
+
     private sealed class ConnectionCloseScope(SqliteConnection connection) : IAsyncDisposable
     {
         public ValueTask DisposeAsync()
@@ -134,4 +196,5 @@ public sealed class ApplicationLogStore(ChoboDbContext db) : IApplicationLogStor
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }
+
 
