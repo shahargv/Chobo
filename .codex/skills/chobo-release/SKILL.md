@@ -5,7 +5,7 @@ description: Use when preparing, validating, publishing, or troubleshooting a ne
 
 # Chobo Release
 
-Use `docs/Releasing.md` and `.github/workflows/release.yml` as the source of truth. The release version is stamped by CI from the tag or manual workflow input; do not edit product/server version code just to release.
+Use `docs/developer/Releasing.md` and `.github/workflows/release.yml` as the source of truth. The release version is stamped by CI from the tag or manual workflow input; do not edit product/server version code just to release.
 
 ## Release Safety
 
