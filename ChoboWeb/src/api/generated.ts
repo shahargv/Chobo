@@ -13,6 +13,7 @@ export interface AuditEntryDtoPagedResultDto { items: AuditEntryDto[]; offset: n
 export type BackupContentMode = "SchemaAndData" | "SchemaOnly";
 export interface BackupDto { id: string; triggerType: BackupTriggerType; status: BackupRunStatus; backupType: BackupType; contentMode: BackupContentMode; sourceClusterId: string; targetId: string; policyId?: string | null; scheduleId?: string | null; requestedByUserId?: string | null; requestedByName: string; manualRequestJson?: string | null; createdAt: string; startedAt?: string | null; endedAt?: string | null; error?: string | null; failureReason?: string | null; isPinned: boolean; pinnedAt?: string | null; pinnedByUserId?: string | null; pinnedByName?: string | null; deletionReason?: string | null; deletionRequestedAt?: string | null; deletionStartedAt?: string | null; deletedAt?: string | null; deletionError?: string | null; deletionAttemptCount: number; tableCount: number; backupSizeBytes: number; tables: BackupTableDto[]; }
 export interface BackupExport { id: string; triggerType: BackupTriggerType; status: BackupRunStatus; backupType: BackupType; contentMode: BackupContentMode; sourceClusterId: string; targetId: string; policyId?: string | null; scheduleId?: string | null; manualRequestJson?: string | null; requestedByUserId?: string | null; requestedByName: string; createdAt: string; queuedAt: string; startedAt?: string | null; completedAt: string; error?: string | null; failureReason?: string | null; isPinned: boolean; pinnedAt?: string | null; pinnedByUserId?: string | null; pinnedByName?: string | null; deletionReason?: string | null; deletionRequestedAt?: string | null; deletionStartedAt?: string | null; deletedAt?: string | null; deletionError?: string | null; deletionAttemptCount: number; }
+export interface BackupGarbageCollectorQueueItemDto { entityId: string; entityType: string; status: BackupRunStatus; finalStatus: BackupRunStatus; reason: string; createdAt: string; deletionRequestedAt?: string | null; deletionAttemptCount: number; deletionError?: string | null; }
 export interface BackupGarbageCollectorStatusDto { isRunning: boolean; currentRunReason?: string | null; lastStartedAt?: string | null; lastCompletedAt?: string | null; lastError?: string | null; lastMarkedCount: number; lastPendingCleanupCount: number; lastCleanedCount: number; lastFailedCount: number; }
 export interface BackupMetadataRecoveryItem { backupId: string; status: BackupRunStatus; source: string; imported: boolean; updated: boolean; message: string; }
 export interface BackupMetadataRecoveryResult { scannedManifestCount: number; importedBackupCount: number; updatedBackupCount: number; skippedManifestCount: number; items: BackupMetadataRecoveryItem[]; errors: string[]; }
@@ -109,6 +110,7 @@ export const openApiSchemaNames = [
   "BackupContentMode",
   "BackupDto",
   "BackupExport",
+  "BackupGarbageCollectorQueueItemDto",
   "BackupGarbageCollectorStatusDto",
   "BackupMetadataRecoveryItem",
   "BackupMetadataRecoveryResult",

@@ -75,7 +75,7 @@ public sealed class RestoreRunnerService(
                 : null;
             restore.Error = restore.FailureReason;
             await db.SaveChangesAsync(cancellationToken);
-            _logger.Information("Restore {RestoreId} finished with status {Status}. Failure reason: {FailureReason}.", restore.Id, restore.Status, restore.FailureReason);
+            LogRestoreCompletion(restore);
             var auditAction = restore.Status == RestoreRunStatus.Succeeded ? "succeeded" : restore.Status == RestoreRunStatus.PartiallySucceeded ? "partially-succeeded" : "failed";
             await audit.RecordAsync(auditAction, AuditEntityType.Restore, restore.Id.ToString(), new { tableCount, layout = restore.Layout, restore.SourceShard, restore.TargetShard, restore.FailureReason });
         }
@@ -104,6 +104,16 @@ public sealed class RestoreRunnerService(
         }
     }
 
+    private void LogRestoreCompletion(RestoreEntity restore)
+    {
+        if (restore.Status is RestoreRunStatus.Failed or RestoreRunStatus.PartiallySucceeded)
+        {
+            _logger.Warning("Restore {RestoreId} finished with status {Status}. Failure reason: {FailureReason}.", restore.Id, restore.Status, restore.FailureReason);
+            return;
+        }
+
+        _logger.Information("Restore {RestoreId} finished with status {Status}. Failure reason: {FailureReason}.", restore.Id, restore.Status, restore.FailureReason);
+    }
     private async Task RunTableAsync(Guid restoreId, Guid tableId, CancellationToken cancellationToken)
     {
         using var scope = scopeFactory.CreateScope();
@@ -490,5 +500,7 @@ public sealed class RestoreRunnerService(
         return RestoreTableStatus.Failed;
     }
 }
+
+
 
 

@@ -4,6 +4,7 @@ import type {
   PagedResultDto,
   AuditEntryDto,
   BackupDto,
+  BackupGarbageCollectorQueueItemDto,
   BackupGarbageCollectorStatusDto,
   BackupMetadataRecoveryResult,
   BackupPolicyDto,
@@ -120,7 +121,9 @@ export class ChoboApiClient {
   recoverBackupFromPath(request: RecoverBackupMetadataFromPathRequest) { return this.post<BackupMetadataRecoveryResult>("backups/recover/from-path", request); }
   recoverBackupFromScan(request: RecoverBackupMetadataScanRequest) { return this.post<BackupMetadataRecoveryResult>("backups/recover/scan", request); }
   backupGarbageCollectorStatus() { return this.get<BackupGarbageCollectorStatusDto>("backups/garbage-collector/status"); }
+  backupGarbageCollectorQueue() { return this.get<BackupGarbageCollectorQueueItemDto[]>("backups/garbage-collector/queue"); }
   runBackupGarbageCollector() { return this.post<BackupGarbageCollectorStatusDto>("backups/garbage-collector/run", {}); }
+  runBackupGarbageCollectorItem(id: string) { return this.post<BackupGarbageCollectorStatusDto>(`backups/garbage-collector/run/${id}`, {}); }
 
   schemaBackups(filters: { from?: string; to?: string } = {}) { return this.get<SchemaBackupSummaryDto[]>(`schema/backups${query(filters)}`); }
   backupSchema(id: string) { return this.get<SchemaBackupDto>(`schema/backups/${id}`); }
@@ -131,7 +134,7 @@ export class ChoboApiClient {
   initiateRestore(request: InitiateRestoreRequest) { return this.post<RestoreDto>("restores/initiate", request); }
   cancelRestore(id: string) { return this.post<RestoreDto>(`restores/${id}/cancel`, {}); }
 
-  logs(params: { startTime?: string; endTime?: string; last?: number; offset?: number; limit?: number; operationId?: string } = {}) { return this.get<PagedResultDto<ApplicationLogEntryDto>>(`logs${query(params)}`); }
+  logs(params: { startTime?: string; endTime?: string; last?: number; offset?: number; limit?: number; operationId?: string; severity?: string } = {}) { return this.get<PagedResultDto<ApplicationLogEntryDto>>(`logs${query(params)}`); }
   clearLogs(before: string) { return this.post<{ deleted: number }>("logs/clear", { before }); }
   audits(params: { startTime?: string; endTime?: string; last?: number; offset?: number; limit?: number; operationId?: string } = {}) { return this.get<PagedResultDto<AuditEntryDto>>(`audit${query(params)}`); }
   clearAudits(before: string) { return this.post<{ deleted: number }>("audit/clear", { before }); }
@@ -189,6 +192,7 @@ function query(values: Record<string, string | number | boolean | undefined | nu
   const text = params.toString();
   return text ? `?${text}` : "";
 }
+
 
 
 

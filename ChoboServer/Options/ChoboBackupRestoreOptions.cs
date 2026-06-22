@@ -7,6 +7,8 @@ public sealed class ChoboBackupRestoreOptions
     public TimeSpan SchedulerInterval { get; set; } = TimeSpan.FromMinutes(1);
     public TimeSpan SchedulerMissedRunGracePeriod { get; set; } = TimeSpan.FromMinutes(5);
     public TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(2);
+    public int ManifestCheckpointShardInterval { get; set; } = 20;
+    public TimeSpan ManifestWriteTimeout { get; set; } = TimeSpan.FromSeconds(5);
 }
 
 public sealed class RetentionManagementOptions

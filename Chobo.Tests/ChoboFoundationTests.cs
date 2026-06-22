@@ -1198,7 +1198,7 @@ public sealed class ChoboFoundationTests
         Assert.Equal("INTEGER", await GetColumnTypeAsync(db, "BackupSchedules", "CreatedAt"));
 
         var audits = await client.GetFromJsonAsync<PagedResultDto<AuditEntryDto>>("/api/v1/audit?last=5", JsonOptions);
-        var logs = await client.GetFromJsonAsync<PagedResultDto<ApplicationLogEntryDto>>("/api/v1/logs?last=5", JsonOptions);
+        var logs = await client.GetFromJsonAsync<PagedResultDto<ApplicationLogEntryDto>>("/api/v1/logs?last=20", JsonOptions);
         var rawAuditJson = await client.GetStringAsync("/api/v1/audit?last=5");
         Assert.Contains(audits!.Items, x => x.Action == "initialize" && x.Timestamp > DateTimeOffset.UnixEpoch);
         Assert.Contains(logs!.Items, x => x.Message.Contains("Timestamp storage regression log entry") && x.Timestamp > DateTimeOffset.UnixEpoch);

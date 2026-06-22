@@ -6,7 +6,7 @@ export function InstallScreen({ onInstall }: { onInstall: () => Promise<InstallR
   const [installing, setInstalling] = useState(false);
   const [installed, setInstalled] = useState<InstallResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "failed">("idle");
 
   const install = async () => {
     setInstalling(true);
@@ -22,9 +22,9 @@ export function InstallScreen({ onInstall }: { onInstall: () => Promise<InstallR
 
   const copyToken = async () => {
     if (!installed) return;
-    await navigator.clipboard.writeText(installed.accessToken);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 2500);
+    const copied = await copyText(installed.accessToken);
+    setCopyStatus(copied ? "copied" : "failed");
+    window.setTimeout(() => setCopyStatus("idle"), 2500);
   };
 
   if (installed) {
@@ -36,9 +36,10 @@ export function InstallScreen({ onInstall }: { onInstall: () => Promise<InstallR
           <p>This is the only time Chobo will show the initial access token.</p>
           <div className="token-box install-token" aria-label="Initial access token">{installed.accessToken}</div>
           <div className="install-actions">
-            <button className="secondary" type="button" onClick={copyToken}><Clipboard size={16} /> {copied ? "Copied" : "Copy token"}</button>
+            <button className="secondary" type="button" onClick={copyToken}><Clipboard size={16} /> {copyStatus === "copied" ? "Copied" : copyStatus === "failed" ? "Copy failed" : "Copy token"}</button>
             <button className="primary" type="button" onClick={() => window.location.reload()}><Check size={16} /> Ready to start</button>
           </div>
+          {copyStatus === "failed" && <p className="field-error">Clipboard access is blocked. Select the token above and copy it manually.</p>}
           <p className="install-note">Keep it in a password manager. After this screen, sign in with the token above.</p>
         </section>
       </div>
@@ -56,4 +57,32 @@ export function InstallScreen({ onInstall }: { onInstall: () => Promise<InstallR
       </section>
     </div>
   );
+}
+
+export async function copyText(text: string) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Fall through to the selection-based copy path.
+  }
+
+  const textArea = document.createElement("textarea");
+  textArea.value = text;
+  textArea.setAttribute("readonly", "");
+  textArea.style.position = "fixed";
+  textArea.style.top = "-1000px";
+  textArea.style.opacity = "0";
+  document.body.appendChild(textArea);
+  textArea.select();
+
+  try {
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    document.body.removeChild(textArea);
+  }
 }

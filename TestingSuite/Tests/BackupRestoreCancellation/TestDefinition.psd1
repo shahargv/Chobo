@@ -101,12 +101,25 @@
             ExpectJson = @( @{ Path = 'currentRunReason'; NotEmpty = $true } )
         }
         @{
-            Name = 'manual-run-backup-gc'
+            Name = 'gc-queue-shows-canceled-backup'
             Type = 'Cli'
-            Args = @('gc', 'run')
+            Args = @('gc', 'queue')
             RetryTimeoutSeconds = 20
             RetryIntervalSeconds = 1
-            ExpectJson = @( @{ Path = 'lastCompletedAt'; NotEmpty = $true } )
+            ExpectJson = @(
+                @{ Path = '$'; ContainsObject = @{ entityId = '{canceledBackup.id}'; entityType = 'backup'; status = 'Canceled'; reason = 'canceled-backup-garbage-collector' } }
+            )
+        }
+        @{
+            Name = 'manual-run-one-backup-gc'
+            Type = 'Cli'
+            Args = @('gc', 'run-one', '--id', '{canceledBackup.id}')
+            RetryTimeoutSeconds = 20
+            RetryIntervalSeconds = 1
+            ExpectJson = @(
+                @{ Path = 'lastCompletedAt'; NotEmpty = $true }
+                @{ Path = 'lastFailedCount'; Equals = 0 }
+            )
         }
         @{
             Name = 'wait-canceled-backup-cleaned'
@@ -160,7 +173,7 @@
                 @{ Path = 'items'; ContainsObject = @{ action = 'canceled'; entityType = 'backup'; entityId = '{canceledBackup.id}' } }
                 @{ Path = 'items'; ContainsObject = @{ action = 'canceled'; entityType = 'restore'; entityId = '{canceledRestore.id}' } }
                 @{ Path = 'items'; ContainsObject = @{ action = 'backup-cleanup-succeeded'; entityType = 'backup'; entityId = '{canceledBackup.id}' } }
-                @{ Path = 'items'; ContainsObject = @{ action = 'manual-run-requested'; entityType = 'backup-garbage-collector' } }
+                @{ Path = 'items'; ContainsObject = @{ action = 'manual-run-one-requested'; entityType = 'backup-garbage-collector'; entityId = '{canceledBackup.id}' } }
             )
         }
     )

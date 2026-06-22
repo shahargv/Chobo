@@ -39,6 +39,10 @@ internal static class CommandHelpers
         {
             query.Add($"operationId={Uri.EscapeDataString(operationId)}");
         }
+        if (options.Optional("--severity") is { } severity)
+        {
+            query.Add($"severity={Uri.EscapeDataString(severity)}");
+        }
 
         return query.Count == 0 ? "" : "?" + string.Join("&", query);
     }
@@ -53,3 +57,5 @@ internal static class CommandHelpers
             ? new PolicyEvaluationRequest(JsonSerializer.Deserialize<PolicyInventory>(File.ReadAllText(path), Infrastructure.JsonOutputWriter.JsonOptions) ?? new PolicyInventory([]))
             : new PolicyEvaluationRequest(new PolicyInventory([]));
 }
+
+

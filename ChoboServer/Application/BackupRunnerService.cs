@@ -67,10 +67,6 @@ public sealed class BackupRunnerService(
             {
                 _logger.Information("Preparing backup tables for backup {BackupId}.", backup.Id);
                 await PrepareTablesAsync(backup, cancellationToken);
-                if (backup.ContentMode == BackupContentMode.SchemaAndData)
-                {
-                    await TryWriteIntermediateManifestAsync(backup.Id, cancellationToken);
-                }
             }
 
             if (backup.ContentMode == BackupContentMode.SchemaOnly)
@@ -111,7 +107,7 @@ public sealed class BackupRunnerService(
                     await TryWriteFailedManifestAsync(backup.Id);
                 }
             }
-            _logger.Information("Backup {BackupId} finished with status {Status}. Failure reason: {FailureReason}.", backup.Id, backup.Status, backup.FailureReason);
+            LogBackupCompletion(backup);
             var auditAction = backup.Status == BackupRunStatus.Succeeded ? "succeeded" : backup.Status == BackupRunStatus.PartiallySucceeded ? "partially-succeeded" : "failed";
             await audit.RecordAsync(auditAction, AuditEntityType.Backup, backup.Id.ToString(), new { tableCount, backup.FailureReason });
         }
@@ -185,41 +181,69 @@ public sealed class BackupRunnerService(
         return true;
     }
 
-    private async Task TryWriteFinalManifestAsync(BackupEntity backup, int tableCount, CancellationToken cancellationToken)
+    private void LogBackupCompletion(BackupEntity backup)
     {
-        try
+        if (backup.Status is BackupRunStatus.Failed or BackupRunStatus.PartiallySucceeded)
         {
-            await manifests.WriteManifestAsync(backup.Id, cancellationToken);
-            await audit.RecordAsync("metadata-manifest-written", AuditEntityType.Backup, backup.Id.ToString(), new { tableCount });
+            _logger.Warning("Backup {BackupId} finished with status {Status}. Failure reason: {FailureReason}.", backup.Id, backup.Status, backup.FailureReason);
+            return;
         }
-        catch (Exception ex)
-        {
-            _logger.Warning(ex, "Final backup storage manifest write failed for backup {BackupId}; backup result remains {Status}.", backup.Id, backup.Status);
-            await audit.RecordAsync("metadata-manifest-write-failed", AuditEntityType.Backup, backup.Id.ToString(), new { error = ex.Message });
-        }
-    }
 
-    private async Task TryWriteIntermediateManifestAsync(Guid backupId, CancellationToken cancellationToken)
-    {
-        try
-        {
-            await manifests.WriteManifestAsync(backupId, cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            _logger.Warning(ex, "Intermediate backup storage manifest write failed for backup {BackupId}.", backupId);
-        }
+        _logger.Information("Backup {BackupId} finished with status {Status}. Failure reason: {FailureReason}.", backup.Id, backup.Status, backup.FailureReason);
     }
+    private Task TryWriteFinalManifestAsync(BackupEntity backup, int tableCount, CancellationToken cancellationToken) =>
+        TryWriteManifestAsync(
+            backup.Id,
+            "final",
+            "metadata-manifest-written",
+            "metadata-manifest-write-failed",
+            "Final backup storage manifest write failed for backup {BackupId}; backup result remains {Status}.",
+            new { tableCount },
+            new object?[] { backup.Status },
+            cancellationToken);
 
-    private async Task TryWriteFailedManifestAsync(Guid backupId)
+    private Task TryWriteFailedManifestAsync(Guid backupId) =>
+        TryWriteManifestAsync(
+            backupId,
+            "failed-backup",
+            null,
+            "metadata-manifest-write-failed",
+            "Failed-backup storage manifest write failed for backup {BackupId}.",
+            null,
+            [],
+            CancellationToken.None);
+
+    private Task TryWriteCheckpointManifestAsync(Guid backupId, int completedShardAttempts, int totalShardAttempts, CancellationToken cancellationToken) =>
+        TryWriteManifestAsync(
+            backupId,
+            "checkpoint",
+            "metadata-manifest-checkpoint-written",
+            "metadata-manifest-checkpoint-write-failed",
+            "Checkpoint backup storage manifest write failed for backup {BackupId} after {CompletedShardAttempts}/{TotalShardAttempts} shard attempt(s).",
+            new { completedShardAttempts, totalShardAttempts },
+            new object?[] { completedShardAttempts, totalShardAttempts },
+            cancellationToken);
+
+    private async Task TryWriteManifestAsync(Guid backupId, string purpose, string? successAction, string failureAction, string failureMessageTemplate, object? successDetails, object?[] failureMessageArgs, CancellationToken cancellationToken)
     {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        if (options.Value.ManifestWriteTimeout > TimeSpan.Zero)
+        {
+            timeout.CancelAfter(options.Value.ManifestWriteTimeout);
+        }
+
         try
         {
-            await manifests.WriteManifestAsync(backupId, CancellationToken.None);
+            await manifests.WriteManifestAsync(backupId, timeout.Token);
+            if (successAction is not null)
+            {
+                await audit.RecordAsync(successAction, AuditEntityType.Backup, backupId.ToString(), successDetails ?? new { purpose });
+            }
         }
-        catch (Exception manifestException)
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested || timeout.IsCancellationRequested)
         {
-            _logger.Warning(manifestException, "Failed-backup storage manifest write failed for backup {BackupId}.", backupId);
+            _logger.Warning(ex, failureMessageTemplate, new object?[] { backupId }.Concat(failureMessageArgs).ToArray());
+            await audit.RecordAsync(failureAction, AuditEntityType.Backup, backupId.ToString(), new { purpose, error = ex.Message });
         }
     }
 
@@ -332,6 +356,9 @@ public sealed class BackupRunnerService(
         var schemasByHash = await db.SchemaDefinitions
             .Where(x => selectedSchemaHashes.Contains(x.SchemaHash))
             .ToDictionaryAsync(x => x.SchemaHash, StringComparer.Ordinal, cancellationToken);
+        var parentTablesByIdentity = backup.BackupType == BackupType.Incremental && backup.PolicyId is not null
+            ? await FindParentFullTablesAsync(backup.PolicyId.Value, selectedTables, cancellationToken)
+            : [];
 
         foreach (var table in selectedTables)
         {
@@ -352,8 +379,8 @@ public sealed class BackupRunnerService(
             }
 
             var dataBackedUp = !schemaOnly && IsMergeTreeDataEngine(table.Engine);
-            var parentTable = backup.BackupType == BackupType.Incremental && backup.PolicyId is not null && dataBackedUp
-                ? await FindParentFullTableAsync(backup.PolicyId.Value, table.Database, table.Table, cancellationToken)
+            var parentTable = backup.BackupType == BackupType.Incremental && dataBackedUp
+                ? parentTablesByIdentity.GetValueOrDefault(ClickHouseBackupIdentity.Table(table.Database, table.Table))
                 : null;
             var effectiveTableType = parentTable is null ? BackupType.Full : BackupType.Incremental;
             var backupTable = new BackupTableEntity
@@ -423,18 +450,51 @@ public sealed class BackupRunnerService(
 
     private sealed record BackupShardWorkItem(Guid TableId, Guid ShardId);
 
+    private static bool IsCancellationTerminalStatus(BackupRunStatus status) =>
+        status is BackupRunStatus.Canceled or
+            BackupRunStatus.ManualDeleteRequested or
+            BackupRunStatus.ManualDeleted or
+            BackupRunStatus.FailedBackupDeleteRequested or
+            BackupRunStatus.FailedBackupDeletedByGarbageCollector or
+            BackupRunStatus.BackupExpiredDeleteStarted or
+            BackupRunStatus.BackupExpiredDeleted;
+
+    private static bool IsShardTerminalStatus(BackupTableStatus status) =>
+        status is BackupTableStatus.Succeeded or BackupTableStatus.Failed or BackupTableStatus.Skipped;
+
+    private async Task<bool> IsBackupCancellationTerminalAsync(ChoboDbContext context, Guid backupId, CancellationToken cancellationToken)
+    {
+        var status = await context.Backups
+            .Where(x => x.Id == backupId)
+            .Select(x => x.Status)
+            .FirstAsync(cancellationToken);
+        return IsCancellationTerminalStatus(status);
+    }
+
     private async Task RunBackupShardWorkAsync(Guid backupId, int maxDop, CancellationToken cancellationToken)
     {
         var workItems = await PrepareBackupTablesForShardWorkAsync(backupId, cancellationToken);
         if (workItems.Count > 0)
         {
             var nextIndex = -1;
+            var completedShardAttempts = 0;
+            var checkpointInterval = options.Value.ManifestCheckpointShardInterval;
             var workerCount = Math.Min(maxDop, workItems.Count);
             var workers = Enumerable.Range(0, workerCount)
                 .Select(async _ =>
                 {
                     while (true)
                     {
+                        using (var statusScope = scopeFactory.CreateScope())
+                        {
+                            var statusDb = statusScope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+                            if (await IsBackupCancellationTerminalAsync(statusDb, backupId, cancellationToken))
+                            {
+                                _logger.Information("Backup {BackupId} shard worker observed cancellation/delete-pending status and stopped taking new shard work.", backupId);
+                                return;
+                            }
+                        }
+
                         var itemIndex = Interlocked.Increment(ref nextIndex);
                         if (itemIndex >= workItems.Count)
                         {
@@ -443,6 +503,20 @@ public sealed class BackupRunnerService(
 
                         var item = workItems[itemIndex];
                         await RunShardAsync(backupId, item.TableId, item.ShardId, cancellationToken);
+                        var completed = Interlocked.Increment(ref completedShardAttempts);
+                        using (var statusScope = scopeFactory.CreateScope())
+                        {
+                            var statusDb = statusScope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+                            if (await IsBackupCancellationTerminalAsync(statusDb, backupId, cancellationToken))
+                            {
+                                _logger.Information("Backup {BackupId} shard worker observed cancellation/delete-pending status after shard attempt and skipped checkpoint manifest.", backupId);
+                                return;
+                            }
+                        }
+                        if (checkpointInterval > 0 && completed % checkpointInterval == 0)
+                        {
+                            await TryWriteCheckpointManifestAsync(backupId, completed, workItems.Count, cancellationToken);
+                        }
                     }
                 })
                 .ToList();
@@ -452,9 +526,9 @@ public sealed class BackupRunnerService(
 
         using var statusScope = scopeFactory.CreateScope();
         var statusDb = statusScope.ServiceProvider.GetRequiredService<ChoboDbContext>();
-        if (await statusDb.Backups.Where(x => x.Id == backupId).Select(x => x.Status).FirstAsync(cancellationToken) == BackupRunStatus.Canceled)
+        if (await IsBackupCancellationTerminalAsync(statusDb, backupId, cancellationToken))
         {
-            _logger.Information("Backup {BackupId} observed cancellation before table finalization.", backupId);
+            _logger.Information("Backup {BackupId} observed cancellation/delete-pending status before table finalization.", backupId);
             return;
         }
 
@@ -467,6 +541,12 @@ public sealed class BackupRunnerService(
             .Include(x => x.SourceCluster).ThenInclude(x => x!.AccessNodes)
             .Include(x => x.Tables).ThenInclude(x => x.Shards)
             .FirstAsync(x => x.Id == backupId, cancellationToken);
+
+        if (IsCancellationTerminalStatus(backup.Status))
+        {
+            _logger.Information("Backup {BackupId} is {Status}; skipping shard work preparation.", backup.Id, backup.Status);
+            return [];
+        }
 
         var now = DateTimeOffset.UtcNow;
         foreach (var table in backup.Tables.Where(x => x.Status is BackupTableStatus.Queued or BackupTableStatus.Running).OrderBy(x => x.Database).ThenBy(x => x.Table).ToList())
@@ -503,7 +583,6 @@ public sealed class BackupRunnerService(
         }
 
         await db.SaveChangesAsync(cancellationToken);
-        await TryWriteIntermediateManifestAsync(backup.Id, cancellationToken);
 
         return backup.Tables
             .Where(x => x.DataBackedUp && (x.Status == BackupTableStatus.Queued || x.Status == BackupTableStatus.Running))
@@ -516,6 +595,20 @@ public sealed class BackupRunnerService(
             .ToList();
     }
 
+    private async Task<bool> ReloadShardAndStopIfCanceledAsync(ChoboDbContext context, BackupEntity backup, BackupTableEntity table, BackupTableShardEntity shard, CancellationToken cancellationToken)
+    {
+        await context.Entry(backup).ReloadAsync(cancellationToken);
+        await context.Entry(table).ReloadAsync(cancellationToken);
+        await context.Entry(shard).ReloadAsync(cancellationToken);
+        if (IsCancellationTerminalStatus(backup.Status) || shard.Status is BackupTableStatus.Skipped or BackupTableStatus.Failed)
+        {
+            _logger.Information("Backup shard {BackupShardId} stopped before status write because backup {BackupId} is {BackupStatus} and shard status is {ShardStatus}.", shard.Id, backup.Id, backup.Status, shard.Status);
+            return true;
+        }
+
+        return false;
+    }
+
     private async Task RunShardAsync(Guid backupId, Guid tableId, Guid shardId, CancellationToken cancellationToken)
     {
         using var scope = scopeFactory.CreateScope();
@@ -524,7 +617,6 @@ public sealed class BackupRunnerService(
         var scopedAudit = scope.ServiceProvider.GetRequiredService<IAuditService>();
         var scopedOptions = scope.ServiceProvider.GetRequiredService<IOptions<ChoboBackupRestoreOptions>>();
         var scopedTestHooks = scope.ServiceProvider.GetRequiredService<ITestHookCoordinator>();
-        var scopedManifests = scope.ServiceProvider.GetRequiredService<IBackupStorageManifestService>();
         var scopedStorage = scope.ServiceProvider.GetRequiredService<IBackupStorageOperations>();
 
         var backup = await scopedDb.Backups
@@ -535,9 +627,9 @@ public sealed class BackupRunnerService(
         var table = backup.Tables.Single();
         var shard = table.Shards.Single();
 
-        if (backup.Status == BackupRunStatus.Canceled)
+        if (IsCancellationTerminalStatus(backup.Status) || IsShardTerminalStatus(shard.Status))
         {
-            _logger.Information("Backup shard {BackupShardId} skipped because backup {BackupId} was canceled.", shard.Id, backup.Id);
+            _logger.Information("Backup shard {BackupShardId} skipped because backup {BackupId} is {BackupStatus} and shard status is {ShardStatus}.", shard.Id, backup.Id, backup.Status, shard.Status);
             return;
         }
 
@@ -554,11 +646,22 @@ public sealed class BackupRunnerService(
                 var status = await scopedClickHouse.GetOperationStatusAsync(endpoint, backup.SourceCluster!, shard.ClickHouseOperationId, cancellationToken);
                 if (status.Exists)
                 {
-                    await PollBackupShardAsync(scopedClickHouse, endpoint, backup.SourceCluster!, shard, status, scopedOptions.Value.PollInterval, cancellationToken);
-                    shard.BackupSizeBytes = await MeasureBackupPathAsync(scopedStorage, backup.Target!, shard.S3Path, cancellationToken);
+                    var resumedFinalClickHouseStatus = await PollBackupShardAsync(scopedDb, scopedClickHouse, endpoint, backup.SourceCluster!, backup.Id, shard, status, scopedOptions.Value.PollInterval, cancellationToken);
+                    if (resumedFinalClickHouseStatus is null || await ReloadShardAndStopIfCanceledAsync(scopedDb, backup, table, shard, cancellationToken))
+                    {
+                        return;
+                    }
+                    var resumedBackupSizeBytes = await MeasureBackupPathAsync(scopedStorage, backup.Target!, shard.S3Path, cancellationToken);
+                    if (await ReloadShardAndStopIfCanceledAsync(scopedDb, backup, table, shard, cancellationToken))
+                    {
+                        return;
+                    }
+                    shard.Status = BackupTableStatus.Succeeded;
+                    shard.ClickHouseStatus = resumedFinalClickHouseStatus;
+                    shard.CompletedAt = DateTimeOffset.UtcNow;
+                    shard.BackupSizeBytes = resumedBackupSizeBytes;
                     await scopedDb.SaveChangesAsync(cancellationToken);
                     await scopedAudit.RecordAsync("shard-succeeded", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { table.Database, table.Table, sourceShard = shard.SourceShardNumber, clickHouseOperationId = shard.ClickHouseOperationId, shard.ClickHouseStatus, shard.BackupSizeBytes });
-                    await TryWriteIntermediateManifestAsync(scopedManifests, backup.Id, cancellationToken);
                     return;
                 }
 
@@ -574,21 +677,36 @@ public sealed class BackupRunnerService(
             await scopedDb.SaveChangesAsync(cancellationToken);
             await scopedAudit.RecordAsync("clickhouse-operation-submitted", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { clickHouseOperationId = operation.OperationId, operation.Status, sourceShard = shard.SourceShardNumber });
             await scopedTestHooks.MaybeDelayBackupBeforePollAsync(cancellationToken);
-            await PollBackupShardAsync(scopedClickHouse, endpoint, backup.SourceCluster!, shard, new ClickHouseOperationStatus(true, operation.Status, null), scopedOptions.Value.PollInterval, cancellationToken);
-            shard.BackupSizeBytes = await MeasureBackupPathAsync(scopedStorage, backup.Target!, shard.S3Path, cancellationToken);
+            var finalClickHouseStatus = await PollBackupShardAsync(scopedDb, scopedClickHouse, endpoint, backup.SourceCluster!, backup.Id, shard, new ClickHouseOperationStatus(true, operation.Status, null), scopedOptions.Value.PollInterval, cancellationToken);
+            if (finalClickHouseStatus is null || await ReloadShardAndStopIfCanceledAsync(scopedDb, backup, table, shard, cancellationToken))
+            {
+                return;
+            }
+            var backupSizeBytes = await MeasureBackupPathAsync(scopedStorage, backup.Target!, shard.S3Path, cancellationToken);
+            if (await ReloadShardAndStopIfCanceledAsync(scopedDb, backup, table, shard, cancellationToken))
+            {
+                return;
+            }
+            shard.Status = BackupTableStatus.Succeeded;
+            shard.ClickHouseStatus = finalClickHouseStatus;
+            shard.CompletedAt = DateTimeOffset.UtcNow;
+            shard.BackupSizeBytes = backupSizeBytes;
             await scopedDb.SaveChangesAsync(cancellationToken);
             await scopedAudit.RecordAsync("shard-succeeded", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { table.Database, table.Table, sourceShard = shard.SourceShardNumber, clickHouseOperationId = shard.ClickHouseOperationId, shard.ClickHouseStatus, shard.BackupSizeBytes });
-            await TryWriteIntermediateManifestAsync(scopedManifests, backup.Id, cancellationToken);
         }
         catch (Exception ex)
         {
+            if (await ReloadShardAndStopIfCanceledAsync(scopedDb, backup, table, shard, CancellationToken.None))
+            {
+                return;
+            }
+
             _logger.Error(ex, "Backup table {BackupTableId} {Database}.{Table} shard {ShardNumber} failed.", table.Id, table.Database, table.Table, shard.SourceShardNumber);
             shard.Status = BackupTableStatus.Failed;
             shard.Error = ex.Message;
             shard.CompletedAt = DateTimeOffset.UtcNow;
             await scopedDb.SaveChangesAsync(CancellationToken.None);
             await scopedAudit.RecordAsync("shard-failed", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { error = ex.Message, sourceShard = shard.SourceShardNumber, clickHouseOperationId = shard.ClickHouseOperationId });
-            await TryWriteIntermediateManifestAsync(scopedManifests, backup.Id, CancellationToken.None);
         }
     }
 
@@ -597,7 +715,6 @@ public sealed class BackupRunnerService(
         using var scope = scopeFactory.CreateScope();
         var scopedDb = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
         var scopedAudit = scope.ServiceProvider.GetRequiredService<IAuditService>();
-        var scopedManifests = scope.ServiceProvider.GetRequiredService<IBackupStorageManifestService>();
         var tables = await scopedDb.BackupTables
             .Include(x => x.Shards)
             .Where(x => x.BackupId == backupId && x.DataBackedUp && (x.Status == BackupTableStatus.Queued || x.Status == BackupTableStatus.Running))
@@ -619,7 +736,6 @@ public sealed class BackupRunnerService(
         }
 
         await scopedDb.SaveChangesAsync(cancellationToken);
-        await TryWriteIntermediateManifestAsync(scopedManifests, backupId, cancellationToken);
     }
 
 
@@ -629,18 +745,6 @@ public sealed class BackupRunnerService(
         return objects
             .Where(x => !x.Path.EndsWith(BackupStorageManifestService.ManifestRelativePath, StringComparison.Ordinal))
             .Sum(x => x.SizeBytes);
-    }
-
-    private async Task TryWriteIntermediateManifestAsync(IBackupStorageManifestService scopedManifests, Guid backupId, CancellationToken cancellationToken)
-    {
-        try
-        {
-            await scopedManifests.WriteManifestAsync(backupId, cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            _logger.Warning(ex, "Intermediate backup storage manifest write failed for backup {BackupId}.", backupId);
-        }
     }
 
     private async Task<IReadOnlyList<ClickHouseTableInfo>> ReadClusterSchemaInventoryAsync(BackupEntity backup, IReadOnlyList<ClickHouseShardReplicaInfo> topology, CancellationToken cancellationToken)
@@ -713,10 +817,15 @@ public sealed class BackupRunnerService(
         return "One or more backup tables or shards failed.";
     }
 
-    private static async Task PollBackupShardAsync(IClickHouseAdapter adapter, ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, BackupTableShardEntity shard, ClickHouseOperationStatus current, TimeSpan interval, CancellationToken cancellationToken)
+    private async Task<string?> PollBackupShardAsync(ChoboDbContext context, IClickHouseAdapter adapter, ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, Guid backupId, BackupTableShardEntity shard, ClickHouseOperationStatus current, TimeSpan interval, CancellationToken cancellationToken)
     {
         while (true)
         {
+            if (await IsBackupCancellationTerminalAsync(context, backupId, cancellationToken))
+            {
+                _logger.Information("Backup shard {BackupShardId} stopped polling because backup {BackupId} is canceled/delete-pending.", shard.Id, backupId);
+                return null;
+            }
             if (!current.Exists)
             {
                 throw MissingOperationException(shard.ClickHouseOperationId);
@@ -725,9 +834,7 @@ public sealed class BackupRunnerService(
             shard.ClickHouseStatus = current.Status;
             if (IsSuccessStatus(current.Status))
             {
-                shard.Status = BackupTableStatus.Succeeded;
-                shard.CompletedAt = DateTimeOffset.UtcNow;
-                return;
+                return current.Status;
             }
             if (IsFailedStatus(current.Status))
             {
@@ -735,6 +842,11 @@ public sealed class BackupRunnerService(
             }
 
             await Task.Delay(interval <= TimeSpan.Zero ? TimeSpan.FromSeconds(2) : interval, cancellationToken);
+            if (await IsBackupCancellationTerminalAsync(context, backupId, cancellationToken))
+            {
+                _logger.Information("Backup shard {BackupShardId} stopped polling after delay because backup {BackupId} is canceled/delete-pending.", shard.Id, backupId);
+                return null;
+            }
             current = await adapter.GetOperationStatusAsync(endpoint, cluster, shard.ClickHouseOperationId!, cancellationToken);
         }
     }
@@ -795,18 +907,37 @@ public sealed class BackupRunnerService(
         string.Equals(database, "information_schema", StringComparison.Ordinal) ||
         string.Equals(database, "INFORMATION_SCHEMA", StringComparison.Ordinal);
 
-    private async Task<BackupTableEntity?> FindParentFullTableAsync(Guid policyId, string database, string table, CancellationToken cancellationToken) =>
-        await db.BackupTables
+    private async Task<Dictionary<string, BackupTableEntity>> FindParentFullTablesAsync(Guid policyId, IReadOnlyList<ClickHouseTableInfo> selectedTables, CancellationToken cancellationToken)
+    {
+        var selectedIdentities = selectedTables
+            .Select(x => ClickHouseBackupIdentity.Table(x.Database, x.Table))
+            .ToHashSet(StringComparer.Ordinal);
+        if (selectedIdentities.Count == 0)
+        {
+            return [];
+        }
+
+        var databases = selectedTables.Select(x => x.Database).Distinct(StringComparer.Ordinal).ToList();
+        var tables = selectedTables.Select(x => x.Table).Distinct(StringComparer.Ordinal).ToList();
+        var candidates = await db.BackupTables
+            .AsNoTracking()
             .Include(x => x.Backup)
             .Include(x => x.Shards)
+            .AsSplitQuery()
             .Where(x => x.Backup != null &&
                         x.Backup.PolicyId == policyId &&
                         x.Backup.Status == BackupRunStatus.Succeeded &&
                         x.EffectiveBackupType == BackupType.Full &&
-                        x.Database == database &&
-                        x.Table == table)
+                        databases.Contains(x.Database) &&
+                        tables.Contains(x.Table))
             .OrderByDescending(x => x.Backup!.CompletedAt ?? x.Backup.CreatedAt)
-            .FirstOrDefaultAsync(cancellationToken);
+            .ToListAsync(cancellationToken);
+
+        return candidates
+            .Where(x => selectedIdentities.Contains(ClickHouseBackupIdentity.Table(x.Database, x.Table)))
+            .GroupBy(x => ClickHouseBackupIdentity.Table(x.Database, x.Table), StringComparer.Ordinal)
+            .ToDictionary(x => x.Key, x => x.First(), StringComparer.Ordinal);
+    }
 
     private async Task<string?> GetParentTablePathAsync(Guid? parentFullBackupTableId, CancellationToken cancellationToken) =>
         parentFullBackupTableId is null
@@ -915,4 +1046,7 @@ public sealed class BackupRunnerService(
         return options;
     }
 }
+
+
+
 

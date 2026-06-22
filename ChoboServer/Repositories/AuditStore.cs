@@ -16,27 +16,23 @@ public sealed class AuditStore(ChoboDbContext db) : IAuditStore
 {
     public async Task<PagedResultDto<AuditEntryDto>> QueryAsync(DateTimeOffset? startTime, DateTimeOffset? endTime, int? last, int? offset = null, int? limit = null, string? operationId = null)
     {
-        const string whereSql = """
-                                WHERE ($startTime IS NULL OR Timestamp >= $startTime)
-                                  AND ($endTime IS NULL OR Timestamp <= $endTime)
-                                  AND ($operationId IS NULL OR OperationId = $operationId)
-                                """;
+        var filter = BuildFilter(startTime, endTime, operationId);
         var pageOffset = Math.Max(offset ?? 0, 0);
         var pageLimit = Math.Clamp(limit ?? last ?? 200, 1, 10_000);
         var results = new List<AuditEntryDto>();
         var connection = (SqliteConnection)db.Database.GetDbConnection();
         await using var _ = await OpenIfNeededAsync(connection);
-        var totalCount = await CountAsync(connection, whereSql, startTime, endTime, operationId);
+        var totalCount = await CountAsync(connection, filter);
 
         await using var command = connection.CreateCommand();
         command.CommandText = $"""
                               SELECT Id, Timestamp, ActorUserId, ActorName, Action, EntityType, EntityId, Details
                               FROM AuditEntries
-                              {whereSql}
+                              {filter.WhereSql}
                               ORDER BY Timestamp DESC, Id DESC
                               LIMIT $limit OFFSET $offset;
                               """;
-        AddFilterParameters(command, startTime, endTime, operationId);
+        AddParameters(command, filter);
         command.Parameters.AddWithValue("$limit", pageLimit);
         command.Parameters.AddWithValue("$offset", pageOffset);
 
@@ -67,19 +63,43 @@ public sealed class AuditStore(ChoboDbContext db) : IAuditStore
         return await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    private static async Task<int> CountAsync(SqliteConnection connection, string whereSql, DateTimeOffset? startTime, DateTimeOffset? endTime, string? operationId)
+    private static async Task<int> CountAsync(SqliteConnection connection, QueryFilter filter)
     {
         await using var command = connection.CreateCommand();
-        command.CommandText = $"SELECT COUNT(*) FROM AuditEntries {whereSql};";
-        AddFilterParameters(command, startTime, endTime, operationId);
+        command.CommandText = $"SELECT COUNT(*) FROM AuditEntries {filter.WhereSql};";
+        AddParameters(command, filter);
         return Convert.ToInt32(await command.ExecuteScalarAsync());
     }
 
-    private static void AddFilterParameters(SqliteCommand command, DateTimeOffset? startTime, DateTimeOffset? endTime, string? operationId)
+    private static QueryFilter BuildFilter(DateTimeOffset? startTime, DateTimeOffset? endTime, string? operationId)
     {
-        command.Parameters.AddWithValue("$startTime", ToSqlValue(startTime));
-        command.Parameters.AddWithValue("$endTime", ToSqlValue(endTime));
-        command.Parameters.AddWithValue("$operationId", string.IsNullOrWhiteSpace(operationId) ? DBNull.Value : operationId);
+        var predicates = new List<string>();
+        var parameters = new List<(string Name, object Value)>();
+        if (startTime is not null)
+        {
+            predicates.Add("Timestamp >= $startTime");
+            parameters.Add(("$startTime", ToSqlValue(startTime)));
+        }
+        if (endTime is not null)
+        {
+            predicates.Add("Timestamp <= $endTime");
+            parameters.Add(("$endTime", ToSqlValue(endTime)));
+        }
+        if (!string.IsNullOrWhiteSpace(operationId))
+        {
+            predicates.Add("OperationId = $operationId");
+            parameters.Add(("$operationId", operationId));
+        }
+
+        return new QueryFilter(predicates.Count == 0 ? "" : "WHERE " + string.Join(" AND ", predicates), parameters);
+    }
+
+    private static void AddParameters(SqliteCommand command, QueryFilter filter)
+    {
+        foreach (var parameter in filter.Parameters)
+        {
+            command.Parameters.AddWithValue(parameter.Name, parameter.Value);
+        }
     }
 
     private static object ToSqlValue(DateTimeOffset? value) =>
@@ -96,6 +116,8 @@ public sealed class AuditStore(ChoboDbContext db) : IAuditStore
         return new ConnectionCloseScope(connection);
     }
 
+    private sealed record QueryFilter(string WhereSql, IReadOnlyList<(string Name, object Value)> Parameters);
+
     private sealed class ConnectionCloseScope(SqliteConnection connection) : IAsyncDisposable
     {
         public ValueTask DisposeAsync()
@@ -110,4 +132,3 @@ public sealed class AuditStore(ChoboDbContext db) : IAuditStore
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }
-

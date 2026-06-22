@@ -483,7 +483,7 @@
         @{
             Name = 'logs-show-failures'
             Type = 'Cli'
-            Args = @('logs', 'show', '--last', '500')
+            Args = @('logs', 'show', '--last', '500', '--severity', 'warning,error')
             RetryTimeoutSeconds = 6
             RetryIntervalSeconds = 1
             ExpectTextContains = @('{sourceDownBackup.id}', '{authFailureBackup.id}', '{unavailableS3Backup.id}', '{badS3Backup.id}', '{destDownRestore.id}', '{destAuthFailureRestore.id}', '{unavailableS3Restore.id}', '{badS3Restore.id}', '{missingOperationBackup.id}', 'Failure reason')
@@ -523,3 +523,5 @@
 
     Verify = @()
 }
+
+
