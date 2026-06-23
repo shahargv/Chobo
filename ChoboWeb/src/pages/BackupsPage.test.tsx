@@ -174,6 +174,68 @@ describe("Backups destructive delete flow", () => {
     host.remove();
   });
 
+  it("deletes multiple selected backups after one confirmation", async () => {
+    const first = baseBackup({ id: "bulk-delete-one", isPinned: false });
+    const second = baseBackup({ id: "bulk-delete-two", isPinned: true });
+    const deleteBackup = vi.fn(async (id: string) => ({ ...baseBackup({ id }), status: "ManualDeleteRequested" as const }));
+    const api = {
+      backups: vi.fn(async () => [first, second]),
+      schedules: vi.fn(async () => []),
+      policies: vi.fn(async () => []),
+      deleteBackup,
+      pinBackup: vi.fn(),
+      unpinBackup: vi.fn(),
+      cancelBackup: vi.fn()
+    };
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={["/backups"]}>
+            <ApiContext.Provider value={{ api: api as never, showToast: vi.fn() }}>
+              <Backups />
+            </ApiContext.Provider>
+          </MemoryRouter>
+        </QueryClientProvider>
+      );
+    });
+    await flushUi();
+
+    const checkboxes = Array.from(host.querySelectorAll('input[type="checkbox"]')) as HTMLInputElement[];
+    expect(checkboxes).toHaveLength(2);
+    await act(async () => {
+      checkboxes.forEach((checkbox) => checkbox.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    });
+
+    const deleteSelected = Array.from(host.querySelectorAll("button")).find((button) => button.textContent?.includes("Delete selected")) as HTMLButtonElement | undefined;
+    expect(deleteSelected).toBeTruthy();
+    await act(async () => {
+      deleteSelected!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(host.textContent).toContain("Delete 2 backups");
+    expect(host.textContent).toContain("1 selected backup is pinned");
+    const confirmButton = Array.from(host.querySelectorAll("button")).find((button) => button.textContent?.includes("Force delete backups")) as HTMLButtonElement | undefined;
+    expect(confirmButton).toBeTruthy();
+
+    await act(async () => {
+      confirmButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushUi();
+
+    expect(deleteBackup).toHaveBeenCalledTimes(2);
+    expect(deleteBackup).toHaveBeenCalledWith("bulk-delete-one", { force: false, confirmDestructive: true });
+    expect(deleteBackup).toHaveBeenCalledWith("bulk-delete-two", { force: true, confirmDestructive: true });
+
+    await act(async () => root.unmount());
+    queryClient.clear();
+    host.remove();
+  });
+
   it("refreshes backup table details when the drawer refresh button is clicked", async () => {
     const backup = baseBackup({ id: "backup-detail-id", status: "Running" });
     const table = baseTable({ id: "table-detail-id", backupId: backup.id, table: "orders", shards: [baseShard({ id: "shard-detail-id", status: "Queued" })] });

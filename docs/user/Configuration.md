@@ -199,13 +199,19 @@ Default production logging writes to console and rolling files:
 {
   "Serilog": {
     "WriteTo": [
-      { "Name": "Console" },
+      {
+        "Name": "Console",
+        "Args": {
+          "outputTemplate": "{Timestamp:O} [{Level:u3}] {SourceContext} {Message:lj} {Properties}{NewLine}{Exception}"
+        }
+      },
       {
         "Name": "File",
         "Args": {
           "path": "logs/chobo-.log",
           "rollingInterval": "Day",
-          "retainedFileCountLimit": 14
+          "retainedFileCountLimit": 14,
+          "outputTemplate": "{Timestamp:O} [{Level:u3}] {SourceContext} {Message:lj} {Properties}{NewLine}{Exception}"
         }
       }
     ]
