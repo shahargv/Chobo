@@ -105,6 +105,13 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: ChoboWeb/package-lock.json
+
       - name: Build release artifacts
         shell: pwsh
         run: ./scripts/Build-Artifacts.ps1 -Configuration Release -Version '${{ needs.prepare.outputs.version }}'

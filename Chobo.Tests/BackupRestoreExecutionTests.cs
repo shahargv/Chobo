@@ -1522,6 +1522,33 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Restore_from_incremental_fails_clearly_when_parent_full_storage_is_missing()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var policy = await fixture.SeedPolicyAsync();
+        var full = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, DateTimeOffset.UtcNow.AddMinutes(-20), tableName: "orders");
+        var incremental = await fixture.SeedDependentIncrementalAsync(policy.Id, full, DateTimeOffset.UtcNow.AddMinutes(-10));
+        var parentShardId = incremental.Tables.Single().Shards.Single().ParentFullBackupTableShardId!.Value;
+        fixture.ClickHouse.MissingParentFullShardIds.Add(parentShardId);
+
+        var restore = await fixture.Services.GetRequiredService<RestoreApplicationService>().InitiateAsync(
+            new InitiateRestoreRequest(incremental.Id, fixture.TargetClusterId, null, null, null, null, false, false));
+
+        await fixture.RunRestoreAsync(restore.Id);
+
+        fixture.Db.ChangeTracker.Clear();
+        var failed = await fixture.Db.Restores.Include(x => x.Tables).ThenInclude(x => x.Shards).SingleAsync(x => x.Id == restore.Id);
+        var failedTable = Assert.Single(failed.Tables);
+        var failedShard = Assert.Single(failedTable.Shards);
+        Assert.Equal(RestoreRunStatus.Failed, failed.Status);
+        Assert.Equal(RestoreTableStatus.Failed, failedTable.Status);
+        Assert.Equal(RestoreTableStatus.Failed, failedShard.Status);
+        Assert.Contains("Parent full backup storage is missing", failed.FailureReason);
+        Assert.Contains("Parent full backup storage is missing", failedShard.Error);
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "failed" && x.EntityType == "restore" && x.EntityId == restore.Id.ToString()));
+    }
+
+    [Fact]
     public async Task Restore_with_schema_mismatch_allowed_requires_destructive_confirmation()
     {
         await using var fixture = await TestFixture.CreateAsync();
@@ -2221,6 +2248,7 @@ public sealed class BackupRestoreExecutionTests
         public string? NextRestoreError { get; set; }
         public bool DropStartedBackupOperation { get; set; }
         public bool DropStartedRestoreOperation { get; set; }
+        public HashSet<Guid> MissingParentFullShardIds { get; } = [];
         public Dictionary<string, string> OperationErrors { get; } = new(StringComparer.Ordinal);
         private TaskCompletionSource _statusBlocked = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private TaskCompletionSource _releaseStatus = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -2342,8 +2370,15 @@ public sealed class BackupRestoreExecutionTests
                 operationId = $"restore-{backupTable.Table}-s{backupShard.SourceShardNumber}-{Guid.NewGuid():N}";
                 if (!DropStartedRestoreOperation)
                 {
-                    KnownOperations[operationId] = NextRestoreStatus;
-                    if (!string.IsNullOrWhiteSpace(NextRestoreError))
+                    var missingParent = backupShard.EffectiveBackupType == BackupType.Incremental &&
+                        backupShard.ParentFullBackupTableShardId is Guid parentShardId &&
+                        MissingParentFullShardIds.Contains(parentShardId);
+                    KnownOperations[operationId] = missingParent ? "RESTORE_FAILED" : NextRestoreStatus;
+                    if (missingParent)
+                    {
+                        OperationErrors[operationId] = $"Parent full backup storage is missing for shard {backupShard.SourceShardNumber}.";
+                    }
+                    else if (!string.IsNullOrWhiteSpace(NextRestoreError))
                     {
                         OperationErrors[operationId] = NextRestoreError;
                     }

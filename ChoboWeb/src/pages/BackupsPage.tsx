@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { Ban, Play, RefreshCw, RotateCcw } from "lucide-react";
+import { Ban, Play, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import type { BackupDto, BackupPolicyDto, BackupRunStatus, BackupTableDto, BackupTableShardDto, BackupType } from "../api/generated";
 import { useApi } from "../api-context";
 import { ConfirmDialog, DataTable, Detail, Drawer, Empty, Page, Select, Status } from "../components/ui";
@@ -14,22 +14,39 @@ export function Backups() {
   const navigate = useNavigate();
   const [selectedBackupId, setSelectedBackupId] = useState<string | null>(backupId ?? null);
   const [showManual, setShowManual] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<BackupDto | null>(null);
+  const [deleteTargets, setDeleteTargets] = useState<BackupDto[] | null>(null);
+  const [selectedBackupIds, setSelectedBackupIds] = useState<string[]>([]);
   const backups = useQuery({ queryKey: ["backups", "summary"], queryFn: () => api.backups({}, { includeTables: false }) });
   const schedules = useQuery({ queryKey: ["schedules"], queryFn: () => api.schedules() });
   const policies = useQuery({ queryKey: ["policies"], queryFn: () => api.policies() });
+  const backupRows = backups.data ?? [];
+  const deletableBackups = backupRows.filter((backup) => !isBackupDeleted(backup));
+  const selectedBackups = backupRows.filter((backup) => selectedBackupIds.includes(backup.id) && !isBackupDeleted(backup));
   const scheduleById = new Map((schedules.data ?? []).map((schedule) => [schedule.id, schedule]));
   const policyById = new Map((policies.data ?? []).map((policy) => [policy.id, policy]));
   useEffect(() => {
     setSelectedBackupId(backupId ?? null);
   }, [backupId]);
+  useEffect(() => {
+    const availableIds = new Set(deletableBackups.map((backup) => backup.id));
+    setSelectedBackupIds((ids) => ids.filter((id) => availableIds.has(id)));
+  }, [backups.data]);
   const mutation = useMutation({
-    mutationFn: ({ id, action, force = false }: { id: string; action: "pin" | "unpin" | "delete" | "cancel"; force?: boolean }) =>
-      action === "pin" ? api.pinBackup(id) : action === "unpin" ? api.unpinBackup(id) : action === "cancel" ? api.cancelBackup(id) : api.deleteBackup(id, { force, confirmDestructive: true }),
-    onSuccess: (_backup, variables) => {
-      if (variables.action === "delete") setDeleteTarget(null);
+    mutationFn: ({ id, action }: { id: string; action: "pin" | "unpin" | "cancel" }) =>
+      action === "pin" ? api.pinBackup(id) : action === "unpin" ? api.unpinBackup(id) : api.cancelBackup(id),
+    onSuccess: () => {
       backups.refetch();
-      showToast({ kind: "success", text: variables.action === "delete" ? "Backup delete requested." : "Backup updated." });
+      showToast({ kind: "success", text: "Backup updated." });
+    },
+    onError: (error) => showToast({ kind: "error", text: String(error) })
+  });
+  const deleteMutation = useMutation({
+    mutationFn: (targets: BackupDto[]) => Promise.all(targets.map((backup) => api.deleteBackup(backup.id, { force: backup.isPinned, confirmDestructive: true }))),
+    onSuccess: (_result, targets) => {
+      setDeleteTargets(null);
+      setSelectedBackupIds((ids) => ids.filter((id) => !targets.some((backup) => backup.id === id)));
+      backups.refetch();
+      showToast({ kind: "success", text: targets.length === 1 ? "Backup delete requested." : `Delete requested for ${targets.length} backups.` });
     },
     onError: (error) => showToast({ kind: "error", text: String(error) })
   });
@@ -37,9 +54,16 @@ export function Backups() {
     <Page title="Backups" subtitle="Start manual backups, review backup history, and inspect table or shard results." action={<button className="primary" onClick={() => setShowManual(!showManual)}><Play size={16} /> Manual backup</button>}>
       {showManual && <ManualBackupPanel policies={policies.data ?? []} onQueued={() => { setShowManual(false); backups.refetch(); }} />}
       <section className="panel">
-        <DataTable headers={["Status", "Completion Time", "Type", "Initiated by", "Created", "Policy", "Tables", "Size", "Pinned", "Actions"]} isLoading={backups.isLoading}>
-          {(backups.data ?? []).map((backup) => (
+        <div className="bulk-actions">
+          <span>{selectedBackups.length} selected</span>
+          <button className="secondary" disabled={deletableBackups.length === 0 || selectedBackups.length === deletableBackups.length} onClick={() => setSelectedBackupIds(deletableBackups.map((backup) => backup.id))}>Select all</button>
+          <button className="ghost" disabled={selectedBackups.length === 0} onClick={() => setSelectedBackupIds([])}>Clear</button>
+          <button className="danger" disabled={selectedBackups.length === 0} onClick={() => setDeleteTargets(selectedBackups)}><Trash2 size={16} /> Delete selected</button>
+        </div>
+        <DataTable headers={["Select", "Status", "Completion Time", "Type", "Initiated by", "Created", "Policy", "Tables", "Size", "Pinned", "Actions"]} isLoading={backups.isLoading}>
+          {backupRows.map((backup) => (
             <tr key={backup.id}>
+              <td><input className="row-checkbox" aria-label={`Select backup ${backup.id}`} type="checkbox" checked={selectedBackupIds.includes(backup.id)} disabled={isBackupDeleted(backup)} onChange={(event) => setSelectedBackupIds((ids) => event.target.checked ? [...new Set([...ids, backup.id])] : ids.filter((id) => id !== backup.id))} /></td>
               <td><Status value={backup.status} /></td>
               <td>{formatCompletionTime(backup.endedAt ?? backup.deletedAt, backup.startedAt, backup.createdAt)}</td>
               <td>{backup.backupType}</td>
@@ -53,13 +77,13 @@ export function Backups() {
                 <Link className="ghost" to={`/backups/${backup.id}`}>Details</Link>
                 {!isBackupDeleted(backup) && <button className="ghost" onClick={() => mutation.mutate({ id: backup.id, action: backup.isPinned ? "unpin" : "pin" })}>{backup.isPinned ? "Unpin" : "Pin"}</button>}
                 {isBackupInExecutionPhase(backup.status) && <button className="danger" onClick={() => mutation.mutate({ id: backup.id, action: "cancel" })}><Ban size={16} /> Cancel</button>}
-                {!isBackupDeleted(backup) && <button className="danger" onClick={() => setDeleteTarget(backup)}>Delete</button>}
+                {!isBackupDeleted(backup) && <button className="danger" onClick={() => setDeleteTargets([backup])}>Delete</button>}
               </td>
             </tr>
           ))}
         </DataTable>
       </section>
-      {deleteTarget && <ConfirmDialog title="Delete backup" message={deleteBackupMessage(deleteTarget)} confirmLabel={deleteTarget.isPinned ? "Force delete backup" : "Delete backup"} busy={mutation.isPending} onCancel={() => setDeleteTarget(null)} onConfirm={() => mutation.mutate({ id: deleteTarget.id, action: "delete", force: deleteTarget.isPinned })} />}
+      {deleteTargets && <ConfirmDialog title={deleteTargets.length === 1 ? "Delete backup" : "Delete backups"} message={deleteBackupsMessage(deleteTargets)} confirmLabel={deleteTargets.some((backup) => backup.isPinned) ? (deleteTargets.length === 1 ? "Force delete backup" : "Force delete backups") : (deleteTargets.length === 1 ? "Delete backup" : "Delete backups")} busy={deleteMutation.isPending} onCancel={() => setDeleteTargets(null)} onConfirm={() => deleteMutation.mutate(deleteTargets)} />}
       {selectedBackupId && <BackupDrawer backupId={selectedBackupId} onClose={() => { setSelectedBackupId(null); navigate("/backups"); }} />}
     </Page>
   );
@@ -267,9 +291,16 @@ function formatShardEndpoint(shard: BackupTableShardDto) {
   return `${shard.host}:${shard.port}${shard.useTls ? " tls" : ""}`;
 }
 
-function deleteBackupMessage(backup: BackupDto) {
-  const pinnedText = backup.isPinned ? " This backup is pinned, so confirming will force the delete request." : "";
-  return `Delete backup ${backup.id} and its stored backup data? This is destructive and cannot be undone.${pinnedText}`;
+function deleteBackupsMessage(backups: BackupDto[]) {
+  if (backups.length === 1) {
+    const backup = backups[0];
+    const pinnedText = backup.isPinned ? " This backup is pinned, so confirming will force the delete request." : "";
+    return `Delete backup ${backup.id} and its stored backup data? This is destructive and cannot be undone.${pinnedText}`;
+  }
+
+  const pinnedCount = backups.filter((backup) => backup.isPinned).length;
+  const pinnedText = pinnedCount > 0 ? ` ${pinnedCount} selected backup${pinnedCount === 1 ? " is" : "s are"} pinned, so confirming will force those delete requests.` : "";
+  return `Delete ${backups.length} backups and their stored backup data? This is destructive and cannot be undone.${pinnedText}`;
 }
 
 function isBackupDeleted(backup: BackupDto) {
