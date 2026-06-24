@@ -91,7 +91,7 @@ public sealed class BackupApplicationService(
         await db.SaveChangesAsync(cancellationToken);
         _logger.Information("Manual backup {BackupId} created by {ActorName} for cluster {ClusterId} target {TargetId} type {BackupType} contentMode={ContentMode}.", backup.Id, actor.ActorName, clusterId, targetId, backup.BackupType, backup.ContentMode);
         await audit.RecordAsync("created", AuditEntityType.Backup, backup.Id.ToString(), new { operationId = backup.Id, backup.TriggerType, backup.BackupType, backup.ContentMode, backup.SourceClusterId, backup.TargetId, backup.PolicyId });
-        await queues.QueueBackupAsync(backup.Id, cancellationToken);
+        await queues.QueueBackupAsync(backup.Id, backup.ContentMode, cancellationToken);
         _logger.Information("Manual backup {BackupId} queued.", backup.Id);
         await audit.RecordAsync("queued", AuditEntityType.Backup, backup.Id.ToString(), new { operationId = backup.Id, reason = "manual" });
 
@@ -503,6 +503,4 @@ public sealed class BackupApplicationService(
         return options;
     }
 }
-
-
 

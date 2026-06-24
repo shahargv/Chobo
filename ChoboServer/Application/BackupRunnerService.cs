@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -23,6 +24,7 @@ public sealed class BackupRunnerService(
     Serilog.ILogger logger)
 {
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
+    private static readonly ConcurrentDictionary<Guid, byte> ActiveBackupRuns = new();
     private readonly Serilog.ILogger _logger = logger.ForContext<BackupRunnerService>();
 
     public async Task RunAsync(Guid backupId, CancellationToken cancellationToken = default)
@@ -52,6 +54,11 @@ public sealed class BackupRunnerService(
 
         using var operationCorrelationScope = OperationCorrelationContext.Push(backup.Id.ToString());
         using var operationLogScope = LogContext.PushProperty("OperationId", backup.Id.ToString());
+        if (!ActiveBackupRuns.TryAdd(backup.Id, 0))
+        {
+            _logger.Information("Backup run {BackupId} is already active in this process; duplicate execution request skipped.", backup.Id);
+            return;
+        }
 
         try
         {
@@ -128,7 +135,12 @@ public sealed class BackupRunnerService(
             }
             await audit.RecordAsync("failed", AuditEntityType.Backup, backup.Id.ToString(), new { error = ex.Message, backup.FailureReason });
         }
+        finally
+        {
+            ActiveBackupRuns.TryRemove(backup.Id, out _);
+        }
     }
+
 
     private async Task<bool> TryClaimBackupAsync(BackupEntity backup, CancellationToken cancellationToken)
     {
@@ -1116,9 +1128,3 @@ public sealed class BackupRunnerService(
         return options;
     }
 }
-
-
-
-
-
-

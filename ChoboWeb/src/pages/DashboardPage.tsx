@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Activity, CheckCircle2, Circle, ShieldCheck } from "lucide-react";
 import { useApi } from "../api-context";
 import { DataTable, Empty, Page, Stat, Status } from "../components/ui";
-import { formatCompletionTime, formatTime } from "../utils/format";
+import { formatCompletionTime, formatDurationSeconds, formatTime } from "../utils/format";
 
 export function Dashboard() {
   const { api } = useApi();
@@ -15,6 +15,7 @@ export function Dashboard() {
   const backups = useQuery({ queryKey: ["backups", "summary"], queryFn: () => api.backups({}, { includeTables: false }) });
   const restores = useQuery({ queryKey: ["restores"], queryFn: () => api.restores() });
   const running = dashboard.data?.runningBackups ?? [];
+  const queue = dashboard.data?.queue;
   const schedules = dashboard.data?.schedules ?? [];
   const failures = schedules.filter((schedule) => schedule.lastRunFailureReason);
   const latestBackups = [...(backups.data ?? [])]
@@ -197,4 +198,5 @@ function OnboardingComplete() {
     </section>
   );
 }
+
 

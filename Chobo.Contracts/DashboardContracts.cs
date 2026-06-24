@@ -3,9 +3,12 @@ namespace Chobo.Contracts;
 public sealed record DashboardDto(
     DateTimeOffset GeneratedAt,
     int FutureWindowHours,
+    QueueHealthDto Queue,
     IReadOnlyList<DashboardRunningBackupDto> RunningBackups,
     IReadOnlyList<DashboardScheduleDto> Schedules,
     IReadOnlyList<DashboardFutureScheduleDto> FutureSchedules);
+
+public sealed record QueueHealthDto(int ActiveCount, DateTimeOffset? OldestActiveQueuedAt, double? OldestActiveAgeSeconds);
 
 public sealed record DashboardRunningBackupDto(
     Guid BackupId,
@@ -52,3 +55,5 @@ public sealed record DashboardFutureScheduleDto(
     BackupType BackupType,
     DateTimeOffset PlannedRunAt,
     string TimeZoneId);
+
+

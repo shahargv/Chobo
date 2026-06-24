@@ -112,8 +112,9 @@ public sealed class DashboardApplicationService(ChoboDbContext db)
             .ToList();
 
         var futureSchedules = ProjectFutureSchedules(schedules, generatedAt, generatedAt.AddHours(boundedHours));
+        var queue = await GetQueueHealthAsync(generatedAt, cancellationToken);
 
-        return new DashboardDto(generatedAt, boundedHours, runningBackupDtos, scheduleSummaries, futureSchedules);
+        return new DashboardDto(generatedAt, boundedHours, queue, runningBackupDtos, scheduleSummaries, futureSchedules);
     }
 
     public async Task<IReadOnlyDictionary<string, double?>> GetMetricsAsync(CancellationToken cancellationToken = default)
@@ -165,6 +166,25 @@ public sealed class DashboardApplicationService(ChoboDbContext db)
         return metrics;
     }
 
+    private async Task<QueueHealthDto> GetQueueHealthAsync(DateTimeOffset generatedAt, CancellationToken cancellationToken)
+    {
+        var activeRows = await db.BackupRestoreQueueItems
+            .AsNoTracking()
+            .Where(x => x.CompletedAt == null)
+            .GroupBy(_ => 1)
+            .Select(x => new { ActiveCount = x.Count(), OldestCreatedAt = x.Min(item => item.CreatedAt) })
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (activeRows is null)
+        {
+            return new QueueHealthDto(0, null, null);
+        }
+
+        return new QueueHealthDto(
+            activeRows.ActiveCount,
+            activeRows.OldestCreatedAt,
+            Math.Max(0, (generatedAt - activeRows.OldestCreatedAt).TotalSeconds));
+    }
     private static IReadOnlyList<DashboardFutureScheduleDto> ProjectFutureSchedules(
         IReadOnlyList<ScheduleSummaryRow> schedules,
         DateTimeOffset fromUtc,
@@ -410,6 +430,8 @@ internal static class QuartzCronProjection
                 : int.Parse(value);
     }
 }
+
+
 
 
 

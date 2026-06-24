@@ -449,6 +449,82 @@
         }
       }
     },
+    "/api/v1/queue/operations/{kind}/{operationId}/move": {
+      "post": {
+        "tags": [
+          "BackupRestoreQueue"
+        ],
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/BackupRestoreQueueKind"
+            }
+          },
+          {
+            "name": "operationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MoveQueueItemRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MoveQueueItemRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/MoveQueueItemRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BackupRestoreQueueItemDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BackupRestoreQueueItemDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BackupRestoreQueueItemDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/queue/items/{id}/force": {
       "post": {
         "tags": [
@@ -4900,6 +4976,9 @@
             "type": "integer",
             "format": "int32"
           },
+          "queue": {
+            "$ref": "#/components/schemas/QueueHealthDto"
+          },
           "runningBackups": {
             "type": "array",
             "items": {
@@ -5544,6 +5623,26 @@
           },
           "selector": {
             "$ref": "#/components/schemas/PolicySelector"
+          }
+        },
+        "additionalProperties": false
+      },
+      "QueueHealthDto": {
+        "type": "object",
+        "properties": {
+          "activeCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "oldestActiveQueuedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "oldestActiveAgeSeconds": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
           }
         },
         "additionalProperties": false

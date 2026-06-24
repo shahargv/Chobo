@@ -162,7 +162,8 @@ public sealed class BackupSchedulerDispatcherBackgroundService(
             {
                 TriggerType = BackupTriggerType.Scheduled,
                 Status = BackupRunStatus.Queued,
-                BackupType = schedule.BackupType,
+                BackupType = schedule.Policy.ContentMode == BackupContentMode.SchemaOnly ? BackupType.Full : schedule.BackupType,
+                ContentMode = schedule.Policy.ContentMode,
                 SourceClusterId = schedule.Policy.SourceClusterId,
                 TargetId = schedule.Policy.TargetId,
                 PolicyId = schedule.PolicyId,
@@ -171,7 +172,7 @@ public sealed class BackupSchedulerDispatcherBackgroundService(
             };
             db.Backups.Add(backup);
             await db.SaveChangesAsync(cancellationToken);
-            await queues.QueueBackupAsync(backup.Id, cancellationToken);
+            await queues.QueueBackupAsync(backup.Id, backup.ContentMode, cancellationToken);
             await audit.RecordAsync("scheduled-backup-enqueued", AuditEntityType.BackupSchedule, schedule.Id.ToString(), new { operationId = backup.Id, backupId = backup.Id, plannedRunAt = latestOccurrence });
         }
     }

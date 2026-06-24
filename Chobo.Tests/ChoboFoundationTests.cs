@@ -669,7 +669,8 @@ public sealed class ChoboFoundationTests
         Assert.Equal(ChoboApi.ProductVersion, config!.ProductVersion);
         Assert.Empty(config.Data.Backups);
         Assert.Empty(config.Data.Restores);
-        Assert.Contains(config.Data.Users, x => x.UserName == "operator");
+        Assert.Empty(config.Data.Users);
+        Assert.Empty(config.Data.AccessTokens);
     }
 
     [Fact]
@@ -902,7 +903,7 @@ public sealed class ChoboFoundationTests
     }
 
     [Fact]
-    public async Task Data_import_rejects_malformed_operational_references_before_deleting_existing_data()
+    public async Task Data_import_skips_malformed_operational_references_and_preserves_local_users()
     {
         await using var sourceFactory = CreateFactory();
         var sourceClient = AuthenticatedClient(sourceFactory);
@@ -923,12 +924,17 @@ public sealed class ChoboFoundationTests
         await Post<CreateUserResponse>(targetClient, "/api/v1/users", new CreateUserRequest("keep-me"));
         var response = await targetClient.PostAsJsonAsync("/api/v1/data/import", malformed, JsonOptions);
         var responseText = await response.Content.ReadAsStringAsync();
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Contains("missing backup table", responseText);
+        Assert.True(response.StatusCode == HttpStatusCode.NoContent, responseText);
 
-        var users = await targetClient.GetFromJsonAsync<List<UserDto>>("/api/v1/users", JsonOptions);
-        Assert.Contains(users!, x => x.UserName == "keep-me");
+        using var scope = targetFactory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+        Assert.True(await db.Users.AnyAsync(x => x.UserName == "keep-me"));
+        Assert.True(await db.Backups.AnyAsync(x => x.Id == export.Data.Backups.Single().Id));
+        Assert.False(await db.BackupTables.AnyAsync(x => x.Id == export.Data.BackupTables.Single().Id));
+        var audit = await db.AuditEntries.SingleAsync(x => x.Action == "import" && x.EntityType == "data");
+        Assert.Contains("\"skippedRows\":", audit.Details);
     }
+
     [Fact]
     public void Backup_retention_contract_reads_legacy_retention_minutes()
     {

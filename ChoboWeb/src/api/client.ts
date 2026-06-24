@@ -141,6 +141,7 @@ export class ChoboApiClient {
   queue(filters: { kind?: BackupRestoreQueueKind; status?: BackupRestoreQueueStatus | "active" | "all"; limit?: number } = {}) { return this.get<BackupRestoreQueueItemDto[]>(`queue${query(filters)}`); }
   moveQueueItem(id: string, request: MoveQueueItemRequest) { return this.post<BackupRestoreQueueItemDto>(`queue/items/${id}/move`, request); }
   moveQueueTable(kind: BackupRestoreQueueKind, tableId: string, request: MoveQueueItemRequest) { return this.post<BackupRestoreQueueItemDto[]>(`queue/tables/${kind}/${tableId}/move`, request); }
+  moveQueueOperation(kind: BackupRestoreQueueKind, operationId: string, request: MoveQueueItemRequest) { return this.post<BackupRestoreQueueItemDto[]>(`queue/operations/${kind}/${operationId}/move`, request); }
   forceQueueItem(id: string) { return this.post<BackupRestoreQueueItemDto>(`queue/items/${id}/force`, {}); }
 
   logs(params: { startTime?: string; endTime?: string; last?: number; offset?: number; limit?: number; operationId?: string; severity?: string } = {}) { return this.get<PagedResultDto<ApplicationLogEntryDto>>(`logs${query(params)}`); }
@@ -201,6 +202,8 @@ function query(values: Record<string, string | number | boolean | undefined | nu
   const text = params.toString();
   return text ? `?${text}` : "";
 }
+
+
 
 
 

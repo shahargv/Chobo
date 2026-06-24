@@ -98,7 +98,7 @@ public sealed class TestHooksController(
         backup.Tables.Add(table);
         db.Backups.Add(backup);
         await db.SaveChangesAsync(cancellationToken);
-        await queues.QueueBackupAsync(backup.Id, cancellationToken);
+        await queues.QueueBackupAsync(backup.Id, backup.ContentMode, cancellationToken);
 
         var loaded = await db.Backups.Include(x => x.Tables).ThenInclude(x => x.Shards).FirstAsync(x => x.Id == backup.Id, cancellationToken);
         return BackupRestoreMapping.ToDto(loaded);
@@ -368,3 +368,4 @@ public sealed class TestHooksController(
     private bool TestHooksAvailable() =>
         options.Value.Enabled && environment.IsEnvironment("SystemTest");
 }
+

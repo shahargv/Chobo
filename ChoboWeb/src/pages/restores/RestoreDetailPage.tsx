@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Ban, RefreshCw } from "lucide-react";
+import { ArrowLeft, ArrowUpToLine, Ban, RefreshCw } from "lucide-react";
 import { useApi } from "../../api-context";
 import { DataTable, Detail, Empty, Page, Status } from "../../components/ui";
 import { formatCompletionTime, formatTime } from "../../utils/format";
@@ -43,9 +43,14 @@ export function RestoreDetailPage() {
     onSuccess: () => { restore.refetch(); queryClient.invalidateQueries({ queryKey: ["restores"] }); showToast({ kind: "success", text: "Restore canceled." }); },
     onError: (error) => showToast({ kind: "error", text: String(error) })
   });
+  const bumpRestore = useMutation({
+    mutationFn: () => api.moveQueueOperation("Restore", restoreId, { direction: "Top", beforeItemId: null as unknown as string }),
+    onSuccess: () => { showToast({ kind: "success", text: "Restore queue items moved to top." }); queryClient.invalidateQueries({ queryKey: ["queue"] }); },
+    onError: (error) => showToast({ kind: "error", text: String(error) })
+  });
 
   return (
-    <Page title="Restore details" subtitle="Inspect restore progress, table and shard results, and related logs or audit entries." action={<div className="actions"><Link className="secondary" to="/restores"><ArrowLeft size={16} /> History</Link>{active && <button className="danger" disabled={cancelRestore.isPending} onClick={() => cancelRestore.mutate()}><Ban size={16} /> Cancel</button>}<button className="secondary" disabled={restore.isFetching || relatedLogs.isFetching || relatedAudits.isFetching} onClick={() => { restore.refetch(); relatedLogs.refetch(); relatedAudits.refetch(); }}><RefreshCw size={16} /> Refresh</button></div>}>
+    <Page title="Restore details" subtitle="Inspect restore progress, table and shard results, and related logs or audit entries." action={<div className="actions"><Link className="secondary" to="/restores"><ArrowLeft size={16} /> History</Link>{active && <button className="secondary" disabled={bumpRestore.isPending} onClick={() => bumpRestore.mutate()}><ArrowUpToLine size={16} /> Bump queue</button>}{active && <button className="danger" disabled={cancelRestore.isPending} onClick={() => cancelRestore.mutate()}><Ban size={16} /> Cancel</button>}<button className="secondary" disabled={restore.isFetching || relatedLogs.isFetching || relatedAudits.isFetching} onClick={() => { restore.refetch(); relatedLogs.refetch(); relatedAudits.refetch(); }}><RefreshCw size={16} /> Refresh</button></div>}>
       {!current && restore.isLoading && <section className="panel"><Empty text="Loading restore details." /></section>}
       {!current && restore.error && <section className="panel"><Empty text={String(restore.error)} /></section>}
       {current && <>
@@ -145,5 +150,11 @@ function restoreCompletionType(status: string) {
     default: return status;
   }
 }
+
+
+
+
+
+
 
 
