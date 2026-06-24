@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ArrowDown, ArrowUp, ChevronsUp, Play, RefreshCw } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronsUp, ExternalLink, Play, RefreshCw, Table2 } from "lucide-react";
+import { Link } from "react-router-dom";
 import type { BackupRestoreQueueItemDto, BackupRestoreQueueKind, BackupRestoreQueueMoveDirection } from "../api/generated";
 import { useApi } from "../api-context";
 import { DataTable, Page, Select, Status } from "../components/ui";
@@ -21,40 +22,40 @@ export function QueuePage() {
         return;
       }
       if (table) {
-        await api.moveQueueTable(item.kind, item.tableId, { direction });
+        await api.moveQueueTable(item.kind, item.tableId, { direction, beforeItemId: null as unknown as string });
         return;
       }
-      await api.moveQueueItem(item.id, { direction });
+      await api.moveQueueItem(item.id, { direction, beforeItemId: null as unknown as string });
     },
     onSuccess: () => { queue.refetch(); showToast({ kind: "success", text: "Queue updated." }); },
     onError: (error) => showToast({ kind: "error", text: String(error) })
   });
   const rows = queue.data ?? [];
   return <Page title="Queue" subtitle="Inspect and prioritize active backup and restore shard work." action={<button className="secondary" disabled={queue.isFetching} onClick={() => queue.refetch()}><RefreshCw size={16} /> Refresh</button>}>
-    <section className="panel">
+    <section className="panel queue-panel">
       <div className="form-grid compact-grid">
         <Select label="Kind" value={kind} onChange={(value) => setKind(value as BackupRestoreQueueKind)} options={[["All", "All"], ["Backup", "Backups"], ["Restore", "Restores"]]} />
       </div>
-      <DataTable headers={["Pos", "Kind", "Status", "Run", "Table", "Shard", "Node", "Forced", "Created", "Started", "Error", "Actions"]} isLoading={queue.isLoading}>
+      <DataTable headers={["Pos", "Kind", "Status", "Run", "Table", "Shard", "Node", "Forced", "Created", "Started", "Actions"]} isLoading={queue.isLoading}>
         {rows.map((item) => {
           const queued = item.status === "Queued";
           return <tr key={item.id}>
             <td>{item.position}</td>
             <td>{item.kind}</td>
             <td><Status value={item.status} /></td>
-            <td className="mono wide-cell">{item.operationId}</td>
+            <td className="mono queue-run-cell"><Link to={detailsPath(item)}>{item.operationId}</Link></td>
             <td>{item.database}.{item.table}</td>
             <td>{item.logicalShardNumber}{item.logicalShardName ? ` (${item.logicalShardName})` : ""}</td>
             <td>{item.nodeHost ? `${item.nodeHost}:${item.nodePort}` : "pending"}</td>
             <td>{item.isForced ? (item.forcedByName ?? "yes") : "no"}</td>
             <td>{formatTime(item.createdAt)}</td>
             <td>{formatTime(item.startedAt)}</td>
-            <td className="wide-cell">{item.blockingReason ?? item.error ?? ""}</td>
-            <td className="actions">
+            <td className="queue-actions">
               <button className="ghost icon-button" title="Move row up" disabled={!queued || action.isPending} onClick={() => action.mutate({ item, direction: "Up" })}><ArrowUp size={16} /></button>
               <button className="ghost icon-button" title="Move row down" disabled={!queued || action.isPending} onClick={() => action.mutate({ item, direction: "Down" })}><ArrowDown size={16} /></button>
               <button className="ghost icon-button" title="Move row to top" disabled={!queued || action.isPending} onClick={() => action.mutate({ item, direction: "Top" })}><ChevronsUp size={16} /></button>
-              <button className="ghost" disabled={!queued || action.isPending} onClick={() => action.mutate({ item, direction: "Top", table: true })}>Table top</button>
+              <button className="ghost icon-button" title="Move table to top" disabled={!queued || action.isPending} onClick={() => action.mutate({ item, direction: "Top", table: true })}><Table2 size={16} /></button>
+              <Link className="secondary icon-button" title={item.kind === "Backup" ? "Open backup details" : "Open restore details"} to={detailsPath(item)}><ExternalLink size={16} /></Link>
               <button className="primary icon-button" title="Force row" disabled={!queued || action.isPending} onClick={() => action.mutate({ item })}><Play size={16} /></button>
             </td>
           </tr>;
@@ -63,3 +64,8 @@ export function QueuePage() {
     </section>
   </Page>;
 }
+
+function detailsPath(item: BackupRestoreQueueItemDto) {
+  return item.kind === "Restore" ? `/restores/${item.operationId}` : `/backups/${item.operationId}`;
+}
+

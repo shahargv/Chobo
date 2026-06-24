@@ -295,7 +295,7 @@ ChoboCli logs show --last 500
 
 ## Import And Export
 
-Data export/import is intended for Chobo metadata portability and disaster recovery. `data export` includes all restorable Chobo metadata except audit entries and application logs: users, access tokens, clusters, backup targets, policies, schedules, schema definitions, backups, backup tables and shards, restores, and restore tables and shards.
+Data export/import is intended for Chobo metadata portability and disaster recovery. `data export` includes restorable Chobo operational metadata except audit entries, application logs, users, and access tokens: clusters, backup targets, policies, schedules, schema definitions, backups, backup tables and shards, restores, and restore tables and shards. Users and access tokens are local authentication state on each server.
 
 Import does not restore audit entries or application logs. The importing server keeps its local audit/log history and writes a new import audit record.
 

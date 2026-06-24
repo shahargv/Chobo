@@ -295,6 +295,46 @@ public sealed class BackupRestoreQueueApplicationService(
         return (await ListAsync(kind, "active", 500, cancellationToken)).Where(x => x.TableId == tableId).ToList();
     }
 
+    public async Task<IReadOnlyList<BackupRestoreQueueItemDto>> MoveOperationAsync(BackupRestoreQueueKind kind, Guid operationId, MoveQueueItemRequest request, CancellationToken cancellationToken = default)
+    {
+        if (kind is not (BackupRestoreQueueKind.Backup or BackupRestoreQueueKind.Restore))
+        {
+            throw new ArgumentException("Queue operation moves require kind Backup or Restore.");
+        }
+
+        var items = await db.BackupRestoreQueueItems
+            .Where(x => x.Kind == kind && x.OperationId == operationId && x.StartedAt == null && x.CompletedAt == null)
+            .OrderBy(x => x.Position)
+            .ToListAsync(cancellationToken);
+        if (items.Count == 0)
+        {
+            return [];
+        }
+
+        var movable = new List<BackupRestoreQueueItemEntity>();
+        foreach (var item in items)
+        {
+            if (await GetStatusAsync(item, cancellationToken) == BackupRestoreQueueStatus.Queued)
+            {
+                movable.Add(item);
+            }
+        }
+        if (movable.Count == 0)
+        {
+            return [];
+        }
+
+        var oldPositions = movable.Select(x => new { x.Id, x.Position }).ToList();
+        var firstNewPosition = await CalculateGroupMovePositionAsync(movable[0].Position, movable.Count, request, cancellationToken);
+        for (var i = 0; i < movable.Count; i++)
+        {
+            movable[i].Position = firstNewPosition + (i * PositionStep);
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+        await audit.RecordAsync("queue-operation-moved", kind == BackupRestoreQueueKind.Backup ? AuditEntityType.Backup : AuditEntityType.Restore, operationId.ToString(), new { kind, operationId, oldPositions, newPositions = movable.Select(x => new { x.Id, x.Position }).ToList(), request.Direction, request.BeforeItemId });
+        return (await ListAsync(kind, "active", 10000, cancellationToken)).Where(x => x.OperationId == operationId).ToList();
+    }
     public async Task<BackupRestoreQueueItemDto?> ForceAsync(Guid id, CancellationToken cancellationToken = default)
     {
         var item = await db.BackupRestoreQueueItems.FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
@@ -443,6 +483,15 @@ public sealed class BackupRestoreQueueApplicationService(
         };
     }
 
+    private async Task<long> CalculateGroupMovePositionAsync(long currentPosition, int itemCount, MoveQueueItemRequest request, CancellationToken cancellationToken)
+    {
+        if (request.Direction == BackupRestoreQueueMoveDirection.Top && request.BeforeItemId is null)
+        {
+            return await MinPositionAsync(cancellationToken) - (Math.Max(1, itemCount) * PositionStep);
+        }
+
+        return await CalculateMovePositionAsync(currentPosition, request, cancellationToken);
+    }
     private async Task<long> CalculateMovePositionAsync(long currentPosition, MoveQueueItemRequest request, CancellationToken cancellationToken)
     {
         if (request.BeforeItemId is { } beforeItemId)
@@ -545,4 +594,7 @@ public sealed class BackupRestoreQueueApplicationService(
         return new(item.Id, item.Kind, BackupRestoreQueueStatus.Failed, item.Position, item.IsForced, item.ForcedAt, item.ForcedByUserId, item.ForcedByName, item.OperationId, item.TableId, item.ShardId, item.ClusterId, "unknown", "unknown", item.LogicalShardNumber, item.LogicalShardName, item.NodeHost, item.NodePort, item.NodeUseTls, null, null, item.CreatedAt, item.StartedAt, item.CompletedAt, null, "Queue target row is missing.");
     }
 }
+
+
+
 

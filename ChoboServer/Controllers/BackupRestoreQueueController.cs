@@ -30,6 +30,13 @@ public sealed class BackupRestoreQueueController(BackupRestoreQueueApplicationSe
         catch (ArgumentException ex) { return BadRequest(new ErrorResponse(ex.Message)); }
     }
 
+
+    [HttpPost("operations/{kind}/{operationId:guid}/move")]
+    public async Task<ActionResult<IReadOnlyList<BackupRestoreQueueItemDto>>> MoveOperation(BackupRestoreQueueKind kind, Guid operationId, MoveQueueItemRequest request, CancellationToken cancellationToken)
+    {
+        try { return Ok(await queue.MoveOperationAsync(kind, operationId, request, cancellationToken)); }
+        catch (ArgumentException ex) { return BadRequest(new ErrorResponse(ex.Message)); }
+    }
     [HttpPost("items/{id:guid}/force")]
     public async Task<ActionResult<BackupRestoreQueueItemDto>> Force(Guid id, CancellationToken cancellationToken)
     {

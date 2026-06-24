@@ -7,7 +7,7 @@ import { DataTable, Input, Page, Stat, Status } from "../components/ui";
 import { formatTime } from "../utils/format";
 
 const cleanupActions = ["garbage", "cleanup", "delete", "retention"];
-const gcLogCategories = ["BackupsGarbageCollectorBackgroundService", "BackupCleanupService", "S3BackupStorageOperations"];
+const gcLogCategories = ["BackupsGarbageCollectorBackgroundService", "BackupCleanupService"];
 
 type AuditWindow = { startTime: string; endTime: string; limit: number };
 
@@ -104,6 +104,20 @@ export function GarbageCollectorPage() {
         </DataTable>
       </section>
       <section className="panel entries-panel">
+        <div className="section-head"><h2>Cleanup audit</h2><span className="hint">{entries.length} cleanup-related audit records shown for the selected window.</span></div>
+        <DataTable headers={["Time", "Actor", "Action", "Entity", "Details"]} isLoading={audits.isLoading}>
+          {entries.map((entry) => (
+            <tr key={entry.id}>
+              <td>{formatTime(entry.timestamp)}</td>
+              <td>{entry.actorName}</td>
+              <td>{entry.action}</td>
+              <td>{formatEntity(entry.entityType, entry.entityId)}</td>
+              <td className="mono wide-cell">{JSON.stringify(entry.details)}</td>
+            </tr>
+          ))}
+        </DataTable>
+      </section>
+      <section className="panel entries-panel">
         <div className="section-head"><h2>GC logs</h2><span className="hint">{gcLogs.length} garbage-collector log records shown for the selected window.</span></div>
         <div className="entry-filter-bar gc-audit-filter-bar">
           <Input label="Start time" type="datetime-local" value={auditWindow.startTime} onChange={(value) => updateAuditWindow({ startTime: value })} />
@@ -119,20 +133,6 @@ export function GarbageCollectorPage() {
               <td>{entry.category}</td>
               <td>{entry.message}</td>
               <td className="mono wide-cell">{entry.exception ?? ""}</td>
-            </tr>
-          ))}
-        </DataTable>
-      </section>
-      <section className="panel entries-panel">
-        <div className="section-head"><h2>Cleanup audit</h2><span className="hint">{entries.length} cleanup-related audit records shown for the selected window.</span></div>
-        <DataTable headers={["Time", "Actor", "Action", "Entity", "Details"]} isLoading={audits.isLoading}>
-          {entries.map((entry) => (
-            <tr key={entry.id}>
-              <td>{formatTime(entry.timestamp)}</td>
-              <td>{entry.actorName}</td>
-              <td>{entry.action}</td>
-              <td>{formatEntity(entry.entityType, entry.entityId)}</td>
-              <td className="mono wide-cell">{JSON.stringify(entry.details)}</td>
             </tr>
           ))}
         </DataTable>

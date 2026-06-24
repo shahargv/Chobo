@@ -21,12 +21,12 @@ public sealed class BackupRestoreResumeBackgroundService(
             var audit = scope.ServiceProvider.GetRequiredService<IAuditService>();
             var backups = await db.Backups
                 .Where(x => x.Status == BackupRunStatus.Queued || x.Status == BackupRunStatus.Running)
-                .Select(x => x.Id)
+                .Select(x => new { x.Id, x.ContentMode })
                 .ToListAsync(stoppingToken);
-            foreach (var id in backups)
+            foreach (var backup in backups)
             {
-                await queues.QueueBackupAsync(id, stoppingToken);
-                await audit.RecordAsync("resumed", AuditEntityType.Backup, id.ToString(), new { reason = "server-startup" });
+                await queues.QueueBackupAsync(backup.Id, backup.ContentMode, stoppingToken);
+                await audit.RecordAsync("resumed", AuditEntityType.Backup, backup.Id.ToString(), new { reason = "server-startup" });
             }
 
             var restores = await db.Restores
@@ -45,3 +45,4 @@ public sealed class BackupRestoreResumeBackgroundService(
         }
     }
 }
+

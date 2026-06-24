@@ -52,7 +52,7 @@ export interface CreateAccessTokenRequest { name: string; }
 export interface CreateAccessTokenResponse { tokenId: string; userId: string; name: string; accessToken: string; }
 export interface CreateUserRequest { userName?: string | null; }
 export interface CreateUserResponse { userId: string; userName?: string | null; accessToken: string; }
-export interface DashboardDto { generatedAt: string; futureWindowHours: number; runningBackups: DashboardRunningBackupDto[]; schedules: DashboardScheduleDto[]; futureSchedules: DashboardFutureScheduleDto[]; }
+export interface DashboardDto { generatedAt: string; futureWindowHours: number; queue: QueueHealthDto; runningBackups: DashboardRunningBackupDto[]; schedules: DashboardScheduleDto[]; futureSchedules: DashboardFutureScheduleDto[]; }
 export interface DashboardFutureScheduleDto { scheduleId: string; scheduleName?: string | null; policyId: string; policyName?: string | null; backupType: BackupType; plannedRunAt: string; timeZoneId: string; }
 export interface DashboardRunningBackupDto { backupId: string; status: BackupRunStatus; triggerType: BackupTriggerType; policyId?: string | null; policyName?: string | null; scheduleId?: string | null; scheduleName?: string | null; createdAt: string; startedAt?: string | null; failureReason?: string | null; isPinned: boolean; deletionRequestedAt?: string | null; deletionReason?: string | null; tableCount: number; shardCount: number; succeededShardCount: number; failedShardCount: number; runningShardCount: number; }
 export interface DashboardScheduleDto { scheduleId: string; scheduleName?: string | null; policyId: string; policyName?: string | null; backupType: BackupType; cronExpression: string; timeZoneId: string; isEnabled: boolean; missedRunGracePeriod?: string | null; lastRunAt?: string | null; lastRunStatus: BackupRunStatus; lastRunFailureReason?: string | null; lastRunIsPinned: boolean; lastRunDeletionRequestedAt: string; lastSuccessfulRunCompletedAt?: string | null; }
@@ -64,7 +64,7 @@ export interface InstallRequest { adminUser: string; }
 export interface InstallResponse { userId: string; userName?: string | null; accessToken: string; }
 export interface InstallStatusDto { requiresInstallation: boolean; message: string; }
 export interface ManualBackupRequest { clusterId: string; targetId: string; selector: PolicySelector; backupType: BackupType; policyId?: string | null; schemaOnly: boolean; }
-export interface MoveQueueItemRequest { direction: BackupRestoreQueueMoveDirection; beforeItemId?: string | null; }
+export interface MoveQueueItemRequest { direction: BackupRestoreQueueMoveDirection; beforeItemId: string; }
 export interface PolicyEvaluationDto { policyId: string; policyName?: string | null; sourceClusterId: string; selectorJsonVersion: number; selector: PolicySelector; tables: PolicyInventoryTable[]; }
 export interface PolicyEvaluationRequest { inventory: PolicyInventory; }
 export interface PolicyInventory { tables: PolicyInventoryTable[]; }
@@ -75,6 +75,7 @@ export type PolicySelectorAction = "Include" | "Exclude";
 export interface PolicySelectorRule { action: PolicySelectorAction; database: SelectorPattern; table: SelectorPattern; }
 export interface PolicySimulationDto { sourceClusterId: string; selector: PolicySelector; inventory: PolicyInventoryTable[]; tables: PolicyInventoryTable[]; }
 export interface PolicySimulationRequest { sourceClusterId: string; selector: PolicySelector; }
+export interface QueueHealthDto { activeCount: number; oldestActiveQueuedAt: string; oldestActiveAgeSeconds: number; }
 export interface RecoverBackupMetadataFromPathRequest { targetId: string; backupPath?: string | null; }
 export interface RecoverBackupMetadataScanRequest { targetId: string; scanRoot?: string | null; }
 export interface RestoreDto { id: string; backupId: string; targetClusterId: string; status: RestoreRunStatus; append: boolean; allowSchemaMismatch: boolean; layout: RestoreLayout; sourceShard?: number | null; targetShard?: number | null; requestedByUserId?: string | null; requestedByName: string; requestJson: string; createdAt: string; startedAt?: string | null; endedAt?: string | null; error?: string | null; failureReason?: string | null; tables: RestoreTableDto[]; }
@@ -179,6 +180,7 @@ export const openApiSchemaNames = [
   "PolicySelectorRule",
   "PolicySimulationDto",
   "PolicySimulationRequest",
+  "QueueHealthDto",
   "RecoverBackupMetadataFromPathRequest",
   "RecoverBackupMetadataScanRequest",
   "RestoreDto",

@@ -19,8 +19,6 @@ public sealed class ExportImportService(ChoboDbContext db, IActorContext actor) 
 
     public async Task<ExportEnvelope> ExportAsync(bool configOnly)
     {
-        var users = await db.Users.ToListAsync();
-        var tokens = await db.AccessTokens.ToListAsync();
         var clusters = await db.ClickHouseClusters.Include(x => x.AccessNodes).ToListAsync();
         var targets = await db.BackupTargets.ToListAsync();
         var policies = await db.BackupPolicies.ToListAsync();
@@ -34,8 +32,8 @@ public sealed class ExportImportService(ChoboDbContext db, IActorContext actor) 
         var restoreTableShards = configOnly ? [] : await db.RestoreTableShards.ToListAsync();
 
         var payload = new ExportPayload(
-            users.Select(x => new UserExport(x.Id, x.UserName, x.IsActive, x.CreatedAt, x.DeactivatedAt)).ToList(),
-            tokens.Select(x => new AccessTokenExport(x.Id, x.UserId, x.Name, x.TokenHash, x.TokenLookupHash, x.Salt, x.IsActive, x.CreatedAt, x.DeactivatedAt)).ToList(),
+            [],
+            [],
             clusters.Select(x => new ClusterExport(x.Id, x.Name, x.Mode, x.ClickHouseClusterName, x.AccessNodes.Select(n => new AccessNodeDto(n.Id, n.Host, n.Port, n.UseTls)).ToList(), x.EncryptedUserName, x.EncryptedUserNameKeyId, x.EncryptedPassword, x.EncryptedPasswordKeyId, x.BackupRestoreMaxDop, x.NodeMaxDopDefault, DeserializeNodeOverrides(x.NodeMaxDopOverridesJson), x.ShardMaxDopDefault, DeserializeShardOverrides(x.ShardMaxDopOverridesJson), x.IsDeleted, x.CreatedAt, x.UpdatedAt, x.DeletedAt)).ToList(),
             targets.Select(x => new BackupTargetExport(x.Id, x.Name, x.Type, new S3TargetSettingsDto(x.Endpoint, x.Region, x.Bucket, x.PathPrefix, x.ForcePathStyle), x.EncryptedAccessKey, x.EncryptedAccessKeyKeyId, x.EncryptedSecretKey, x.EncryptedSecretKeyKeyId, x.IsDeleted, x.CreatedAt, x.UpdatedAt, x.DeletedAt)).ToList(),
             policies.Select(x => new BackupPolicyExport(
@@ -80,7 +78,7 @@ public sealed class ExportImportService(ChoboDbContext db, IActorContext actor) 
             throw new InvalidOperationException("Config import cannot run while backup or restore history exists. Use data import to restore operational state, or start from an empty server.");
         }
 
-        ValidateImportPayload(envelope, configOnly);
+        var import = BuildImportPlan(envelope.Data, configOnly);
 
         await using var transaction = await db.Database.BeginTransactionAsync();
         try
@@ -97,15 +95,11 @@ public sealed class ExportImportService(ChoboDbContext db, IActorContext actor) 
             await db.BackupTargets.ExecuteDeleteAsync();
             await db.ClickHouseAccessNodes.ExecuteDeleteAsync();
             await db.ClickHouseClusters.ExecuteDeleteAsync();
-            await db.AccessTokens.ExecuteDeleteAsync();
-            await db.Users.ExecuteDeleteAsync();
 
             var importedAt = DateTimeOffset.UtcNow;
-            var inFlightImportedAsFailed = CountInFlightOperationalRows(envelope.Data);
+            var inFlightImportedAsFailed = CountInFlightOperationalRows(import.Payload);
 
-            db.Users.AddRange(envelope.Data.Users.Select(x => new UserEntity { Id = x.Id, UserName = x.UserName, IsActive = x.IsActive, CreatedAt = x.CreatedAt, DeactivatedAt = x.DeactivatedAt }));
-            db.AccessTokens.AddRange(envelope.Data.AccessTokens.Select(x => new AccessTokenEntity { Id = x.Id, UserId = x.UserId, Name = x.Name, TokenHash = x.TokenHash, TokenLookupHash = x.TokenLookupHash, Salt = x.Salt, IsActive = x.IsActive, CreatedAt = x.CreatedAt, DeactivatedAt = x.DeactivatedAt }));
-            foreach (var cluster in envelope.Data.Clusters)
+            foreach (var cluster in import.Payload.Clusters)
             {
                 db.ClickHouseClusters.Add(new ClickHouseClusterEntity
                 {
@@ -129,8 +123,8 @@ public sealed class ExportImportService(ChoboDbContext db, IActorContext actor) 
                     AccessNodes = cluster.AccessNodes.Select(n => new ClickHouseAccessNodeEntity { Id = n.Id, Host = n.Host, Port = n.Port, UseTls = n.UseTls }).ToList()
                 });
             }
-            db.BackupTargets.AddRange(envelope.Data.BackupTargets.Select(x => new BackupTargetEntity { Id = x.Id, Name = x.Name, Type = x.Type, Endpoint = x.S3.Endpoint, Region = x.S3.Region, Bucket = x.S3.Bucket, PathPrefix = x.S3.PathPrefix, ForcePathStyle = x.S3.ForcePathStyle, EncryptedAccessKey = null, EncryptedAccessKeyKeyId = null, EncryptedSecretKey = null, EncryptedSecretKeyKeyId = null, IsDeleted = x.IsDeleted, CreatedAt = x.CreatedAt, UpdatedAt = x.UpdatedAt, DeletedAt = x.DeletedAt }));
-            db.BackupPolicies.AddRange(envelope.Data.BackupPolicies.Select(x => new BackupPolicyEntity
+            db.BackupTargets.AddRange(import.Payload.BackupTargets.Select(x => new BackupTargetEntity { Id = x.Id, Name = x.Name, Type = x.Type, Endpoint = x.S3.Endpoint, Region = x.S3.Region, Bucket = x.S3.Bucket, PathPrefix = x.S3.PathPrefix, ForcePathStyle = x.S3.ForcePathStyle, EncryptedAccessKey = null, EncryptedAccessKeyKeyId = null, EncryptedSecretKey = null, EncryptedSecretKeyKeyId = null, IsDeleted = x.IsDeleted, CreatedAt = x.CreatedAt, UpdatedAt = x.UpdatedAt, DeletedAt = x.DeletedAt }));
+            db.BackupPolicies.AddRange(import.Payload.BackupPolicies.Select(x => new BackupPolicyEntity
             {
                 Id = x.Id,
                 Name = x.Name,
@@ -150,17 +144,17 @@ public sealed class ExportImportService(ChoboDbContext db, IActorContext actor) 
                 UpdatedAt = x.UpdatedAt,
                 DeletedAt = x.DeletedAt
             }));
-            db.BackupSchedules.AddRange(envelope.Data.BackupSchedules.Select(x => new BackupScheduleEntity { Id = x.Id, Name = x.Name, PolicyId = x.PolicyId, BackupType = x.BackupType, CronExpression = x.CronExpression, TimeZoneId = x.TimeZoneId, IsEnabled = x.IsEnabled, MissedRunGracePeriod = x.MissedRunGracePeriod, Description = x.Description, IsSystemDefault = x.IsSystemDefault, IsDeleted = x.IsDeleted, CreatedAt = x.CreatedAt, UpdatedAt = x.UpdatedAt, DeletedAt = x.DeletedAt }));
+            db.BackupSchedules.AddRange(import.Payload.BackupSchedules.Select(x => new BackupScheduleEntity { Id = x.Id, Name = x.Name, PolicyId = x.PolicyId, BackupType = x.BackupType, CronExpression = x.CronExpression, TimeZoneId = x.TimeZoneId, IsEnabled = x.IsEnabled, MissedRunGracePeriod = x.MissedRunGracePeriod, Description = x.Description, IsSystemDefault = x.IsSystemDefault, IsDeleted = x.IsDeleted, CreatedAt = x.CreatedAt, UpdatedAt = x.UpdatedAt, DeletedAt = x.DeletedAt }));
 
             if (!configOnly)
             {
-                db.SchemaDefinitions.AddRange(envelope.Data.SchemaDefinitions.Select(x => new SchemaDefinitionEntity { Id = x.Id, SchemaHash = x.SchemaHash, Database = x.Database, Table = x.Table, Engine = x.Engine, CreateTableSql = x.CreateTableSql, ColumnsJson = x.ColumnsJson, CreatedAt = x.CreatedAt }));
-                db.Backups.AddRange(envelope.Data.Backups.Select(x => new BackupEntity { Id = x.Id, TriggerType = x.TriggerType, Status = NormalizeBackupRunStatus(x.Status), BackupType = x.BackupType, ContentMode = x.ContentMode, SourceClusterId = x.SourceClusterId, TargetId = x.TargetId, PolicyId = x.PolicyId, ScheduleId = x.ScheduleId, ManualRequestJson = x.ManualRequestJson, RequestedByUserId = x.RequestedByUserId, RequestedByName = x.RequestedByName, CreatedAt = x.CreatedAt, QueuedAt = x.QueuedAt, StartedAt = x.StartedAt, CompletedAt = NormalizeCompletedAt(x.Status is BackupRunStatus.Queued or BackupRunStatus.Running, x.CompletedAt, importedAt), Error = x.Error, FailureReason = NormalizeFailureReason(x.Status is BackupRunStatus.Queued or BackupRunStatus.Running, x.FailureReason), IsPinned = x.IsPinned, PinnedAt = x.PinnedAt, PinnedByUserId = x.PinnedByUserId, PinnedByName = x.PinnedByName, DeletionReason = x.DeletionReason, DeletionRequestedAt = x.DeletionRequestedAt, DeletionStartedAt = x.DeletionStartedAt, DeletedAt = x.DeletedAt, DeletionError = x.DeletionError, DeletionAttemptCount = x.DeletionAttemptCount }));
-                db.BackupTables.AddRange(envelope.Data.BackupTables.Select(x => new BackupTableEntity { Id = x.Id, BackupId = x.BackupId, EffectiveBackupType = x.EffectiveBackupType, ParentFullBackupId = x.ParentFullBackupId, ParentFullBackupTableId = x.ParentFullBackupTableId, Database = x.Database, Table = x.Table, Engine = x.Engine, DataBackedUp = x.DataBackedUp, SchemaDefinitionId = x.SchemaDefinitionId, S3Path = x.S3Path, BackupSizeBytes = x.BackupSizeBytes, Status = NormalizeBackupTableStatus(x.Status), ClickHouseOperationId = x.ClickHouseOperationId, ClickHouseStatus = x.ClickHouseStatus, StartedAt = x.StartedAt, CompletedAt = NormalizeCompletedAt(x.Status is BackupTableStatus.Queued or BackupTableStatus.Running, x.CompletedAt, importedAt), Error = NormalizeError(x.Status is BackupTableStatus.Queued or BackupTableStatus.Running, x.Error) }));
-                db.BackupTableShards.AddRange(envelope.Data.BackupTableShards.Select(x => new BackupTableShardEntity { Id = x.Id, BackupTableId = x.BackupTableId, EffectiveBackupType = x.EffectiveBackupType, ParentFullBackupId = x.ParentFullBackupId, ParentFullBackupTableShardId = x.ParentFullBackupTableShardId, SourceShardNumber = x.SourceShardNumber, SourceShardName = x.SourceShardName, ReplicaNumber = x.ReplicaNumber, Host = x.Host, Port = x.Port, UseTls = x.UseTls, S3Path = x.S3Path, BackupSizeBytes = x.BackupSizeBytes, Status = NormalizeBackupTableStatus(x.Status), ClickHouseOperationId = x.ClickHouseOperationId, ClickHouseStatus = x.ClickHouseStatus, StartedAt = x.StartedAt, CompletedAt = NormalizeCompletedAt(x.Status is BackupTableStatus.Queued or BackupTableStatus.Running, x.CompletedAt, importedAt), Error = NormalizeError(x.Status is BackupTableStatus.Queued or BackupTableStatus.Running, x.Error) }));
-                db.Restores.AddRange(envelope.Data.Restores.Select(x => new RestoreEntity { Id = x.Id, BackupId = x.BackupId, TargetClusterId = x.TargetClusterId, Status = NormalizeRestoreRunStatus(x.Status), Append = x.Append, AllowSchemaMismatch = x.AllowSchemaMismatch, Layout = x.Layout, SourceShard = x.SourceShard, TargetShard = x.TargetShard, RequestJson = x.RequestJson, RequestedByUserId = x.RequestedByUserId, RequestedByName = x.RequestedByName, CreatedAt = x.CreatedAt, QueuedAt = x.QueuedAt, StartedAt = x.StartedAt, CompletedAt = NormalizeCompletedAt(x.Status is RestoreRunStatus.Queued or RestoreRunStatus.Running, x.CompletedAt, importedAt), Error = x.Error, FailureReason = NormalizeFailureReason(x.Status is RestoreRunStatus.Queued or RestoreRunStatus.Running, x.FailureReason) }));
-                db.RestoreTables.AddRange(envelope.Data.RestoreTables.Select(x => new RestoreTableEntity { Id = x.Id, RestoreId = x.RestoreId, BackupTableId = x.BackupTableId, SourceDatabase = x.SourceDatabase, SourceTable = x.SourceTable, TargetDatabase = x.TargetDatabase, TargetTable = x.TargetTable, Append = x.Append, AllowSchemaMismatch = x.AllowSchemaMismatch, SchemaOnly = x.SchemaOnly, Status = NormalizeRestoreTableStatus(x.Status), ClickHouseOperationId = x.ClickHouseOperationId, ClickHouseStatus = x.ClickHouseStatus, Warning = x.Warning, StartedAt = x.StartedAt, CompletedAt = NormalizeCompletedAt(x.Status is RestoreTableStatus.Queued or RestoreTableStatus.Running, x.CompletedAt, importedAt), Error = NormalizeError(x.Status is RestoreTableStatus.Queued or RestoreTableStatus.Running, x.Error) }));
-                db.RestoreTableShards.AddRange(envelope.Data.RestoreTableShards.Select(x => new RestoreTableShardEntity { Id = x.Id, RestoreTableId = x.RestoreTableId, BackupTableShardId = x.BackupTableShardId, SourceShardNumber = x.SourceShardNumber, TargetShardNumber = x.TargetShardNumber, TargetShardName = x.TargetShardName, TargetReplicaNumber = x.TargetReplicaNumber, TargetHost = x.TargetHost, TargetPort = x.TargetPort, TargetUseTls = x.TargetUseTls, LayoutRole = x.LayoutRole, RestoreDatabase = x.RestoreDatabase, RestoreTableName = x.RestoreTableName, Status = NormalizeRestoreTableStatus(x.Status), ClickHouseOperationId = x.ClickHouseOperationId, ClickHouseStatus = x.ClickHouseStatus, Warning = x.Warning, StartedAt = x.StartedAt, CompletedAt = NormalizeCompletedAt(x.Status is RestoreTableStatus.Queued or RestoreTableStatus.Running, x.CompletedAt, importedAt), Error = NormalizeError(x.Status is RestoreTableStatus.Queued or RestoreTableStatus.Running, x.Error) }));
+                db.SchemaDefinitions.AddRange(import.Payload.SchemaDefinitions.Select(x => new SchemaDefinitionEntity { Id = x.Id, SchemaHash = x.SchemaHash, Database = x.Database, Table = x.Table, Engine = x.Engine, CreateTableSql = x.CreateTableSql, ColumnsJson = x.ColumnsJson, CreatedAt = x.CreatedAt }));
+                db.Backups.AddRange(import.Payload.Backups.Select(x => new BackupEntity { Id = x.Id, TriggerType = x.TriggerType, Status = NormalizeBackupRunStatus(x.Status), BackupType = x.BackupType, ContentMode = x.ContentMode, SourceClusterId = x.SourceClusterId, TargetId = x.TargetId, PolicyId = x.PolicyId, ScheduleId = x.ScheduleId, ManualRequestJson = x.ManualRequestJson, RequestedByUserId = null, RequestedByName = x.RequestedByName, CreatedAt = x.CreatedAt, QueuedAt = x.QueuedAt, StartedAt = x.StartedAt, CompletedAt = NormalizeCompletedAt(x.Status is BackupRunStatus.Queued or BackupRunStatus.Running, x.CompletedAt, importedAt), Error = x.Error, FailureReason = NormalizeFailureReason(x.Status is BackupRunStatus.Queued or BackupRunStatus.Running, x.FailureReason), IsPinned = x.IsPinned, PinnedAt = x.PinnedAt, PinnedByUserId = null, PinnedByName = x.PinnedByName, DeletionReason = x.DeletionReason, DeletionRequestedAt = x.DeletionRequestedAt, DeletionStartedAt = x.DeletionStartedAt, DeletedAt = x.DeletedAt, DeletionError = x.DeletionError, DeletionAttemptCount = x.DeletionAttemptCount }));
+                db.BackupTables.AddRange(import.Payload.BackupTables.Select(x => new BackupTableEntity { Id = x.Id, BackupId = x.BackupId, EffectiveBackupType = x.EffectiveBackupType, ParentFullBackupId = x.ParentFullBackupId, ParentFullBackupTableId = x.ParentFullBackupTableId, Database = x.Database, Table = x.Table, Engine = x.Engine, DataBackedUp = x.DataBackedUp, SchemaDefinitionId = x.SchemaDefinitionId, S3Path = x.S3Path, BackupSizeBytes = x.BackupSizeBytes, Status = NormalizeBackupTableStatus(x.Status), ClickHouseOperationId = x.ClickHouseOperationId, ClickHouseStatus = x.ClickHouseStatus, StartedAt = x.StartedAt, CompletedAt = NormalizeCompletedAt(x.Status is BackupTableStatus.Queued or BackupTableStatus.Running, x.CompletedAt, importedAt), Error = NormalizeError(x.Status is BackupTableStatus.Queued or BackupTableStatus.Running, x.Error) }));
+                db.BackupTableShards.AddRange(import.Payload.BackupTableShards.Select(x => new BackupTableShardEntity { Id = x.Id, BackupTableId = x.BackupTableId, EffectiveBackupType = x.EffectiveBackupType, ParentFullBackupId = x.ParentFullBackupId, ParentFullBackupTableShardId = x.ParentFullBackupTableShardId, SourceShardNumber = x.SourceShardNumber, SourceShardName = x.SourceShardName, ReplicaNumber = x.ReplicaNumber, Host = x.Host, Port = x.Port, UseTls = x.UseTls, S3Path = x.S3Path, BackupSizeBytes = x.BackupSizeBytes, Status = NormalizeBackupTableStatus(x.Status), ClickHouseOperationId = x.ClickHouseOperationId, ClickHouseStatus = x.ClickHouseStatus, StartedAt = x.StartedAt, CompletedAt = NormalizeCompletedAt(x.Status is BackupTableStatus.Queued or BackupTableStatus.Running, x.CompletedAt, importedAt), Error = NormalizeError(x.Status is BackupTableStatus.Queued or BackupTableStatus.Running, x.Error) }));
+                db.Restores.AddRange(import.Payload.Restores.Select(x => new RestoreEntity { Id = x.Id, BackupId = x.BackupId, TargetClusterId = x.TargetClusterId, Status = NormalizeRestoreRunStatus(x.Status), Append = x.Append, AllowSchemaMismatch = x.AllowSchemaMismatch, Layout = x.Layout, SourceShard = x.SourceShard, TargetShard = x.TargetShard, RequestJson = x.RequestJson, RequestedByUserId = null, RequestedByName = x.RequestedByName, CreatedAt = x.CreatedAt, QueuedAt = x.QueuedAt, StartedAt = x.StartedAt, CompletedAt = NormalizeCompletedAt(x.Status is RestoreRunStatus.Queued or RestoreRunStatus.Running, x.CompletedAt, importedAt), Error = x.Error, FailureReason = NormalizeFailureReason(x.Status is RestoreRunStatus.Queued or RestoreRunStatus.Running, x.FailureReason) }));
+                db.RestoreTables.AddRange(import.Payload.RestoreTables.Select(x => new RestoreTableEntity { Id = x.Id, RestoreId = x.RestoreId, BackupTableId = x.BackupTableId, SourceDatabase = x.SourceDatabase, SourceTable = x.SourceTable, TargetDatabase = x.TargetDatabase, TargetTable = x.TargetTable, Append = x.Append, AllowSchemaMismatch = x.AllowSchemaMismatch, SchemaOnly = x.SchemaOnly, Status = NormalizeRestoreTableStatus(x.Status), ClickHouseOperationId = x.ClickHouseOperationId, ClickHouseStatus = x.ClickHouseStatus, Warning = x.Warning, StartedAt = x.StartedAt, CompletedAt = NormalizeCompletedAt(x.Status is RestoreTableStatus.Queued or RestoreTableStatus.Running, x.CompletedAt, importedAt), Error = NormalizeError(x.Status is RestoreTableStatus.Queued or RestoreTableStatus.Running, x.Error) }));
+                db.RestoreTableShards.AddRange(import.Payload.RestoreTableShards.Select(x => new RestoreTableShardEntity { Id = x.Id, RestoreTableId = x.RestoreTableId, BackupTableShardId = x.BackupTableShardId, SourceShardNumber = x.SourceShardNumber, TargetShardNumber = x.TargetShardNumber, TargetShardName = x.TargetShardName, TargetReplicaNumber = x.TargetReplicaNumber, TargetHost = x.TargetHost, TargetPort = x.TargetPort, TargetUseTls = x.TargetUseTls, LayoutRole = x.LayoutRole, RestoreDatabase = x.RestoreDatabase, RestoreTableName = x.RestoreTableName, Status = NormalizeRestoreTableStatus(x.Status), ClickHouseOperationId = x.ClickHouseOperationId, ClickHouseStatus = x.ClickHouseStatus, Warning = x.Warning, StartedAt = x.StartedAt, CompletedAt = NormalizeCompletedAt(x.Status is RestoreTableStatus.Queued or RestoreTableStatus.Running, x.CompletedAt, importedAt), Error = NormalizeError(x.Status is RestoreTableStatus.Queued or RestoreTableStatus.Running, x.Error) }));
             }
 
             db.AuditEntries.Add(new AuditEntryEntity
@@ -175,8 +169,11 @@ public sealed class ExportImportService(ChoboDbContext db, IActorContext actor) 
                     envelope.SchemaVersion,
                     credentialsImportedAsEmpty = true,
                     inFlightImportedAsFailed,
-                    importedBackups = configOnly ? 0 : envelope.Data.Backups.Count,
-                    importedRestores = configOnly ? 0 : envelope.Data.Restores.Count
+                    skippedRows = import.SkippedRows,
+                    ignoredUsers = envelope.Data.Users.Count,
+                    ignoredAccessTokens = envelope.Data.AccessTokens.Count,
+                    importedBackups = configOnly ? 0 : import.Payload.Backups.Count,
+                    importedRestores = configOnly ? 0 : import.Payload.Restores.Count
                 })
             });
 
@@ -220,109 +217,6 @@ public sealed class ExportImportService(ChoboDbContext db, IActorContext actor) 
         data.Restores.Count(x => x.Status is RestoreRunStatus.Queued or RestoreRunStatus.Running) +
         data.RestoreTables.Count(x => x.Status is RestoreTableStatus.Queued or RestoreTableStatus.Running) +
         data.RestoreTableShards.Count(x => x.Status is RestoreTableStatus.Queued or RestoreTableStatus.Running);
-    private static void ValidateImportPayload(ExportEnvelope envelope, bool configOnly)
-    {
-        var data = envelope.Data;
-        if (configOnly && HasOperationalRows(data))
-        {
-            throw new InvalidOperationException("Config import payload must not include backup or restore operational state.");
-        }
-
-        EnsureUnique(data.Users.Select(x => x.Id), "users");
-        EnsureUnique(data.AccessTokens.Select(x => x.Id), "access tokens");
-        EnsureUnique(data.Clusters.Select(x => x.Id), "clusters");
-        EnsureUnique(data.BackupTargets.Select(x => x.Id), "backup targets");
-        EnsureUnique(data.BackupPolicies.Select(x => x.Id), "backup policies");
-        EnsureUnique(data.BackupSchedules.Select(x => x.Id), "backup schedules");
-        EnsureUnique(data.SchemaDefinitions.Select(x => x.Id), "schema definitions");
-        EnsureUnique(data.Backups.Select(x => x.Id), "backup runs");
-        EnsureUnique(data.BackupTables.Select(x => x.Id), "backup tables");
-        EnsureUnique(data.BackupTableShards.Select(x => x.Id), "backup table shards");
-        EnsureUnique(data.Restores.Select(x => x.Id), "restore runs");
-        EnsureUnique(data.RestoreTables.Select(x => x.Id), "restore tables");
-        EnsureUnique(data.RestoreTableShards.Select(x => x.Id), "restore table shards");
-
-        var userIds = data.Users.Select(x => x.Id).ToHashSet();
-        var clusterIds = data.Clusters.Select(x => x.Id).ToHashSet();
-        var targetIds = data.BackupTargets.Select(x => x.Id).ToHashSet();
-        var policyIds = data.BackupPolicies.Select(x => x.Id).ToHashSet();
-        var scheduleIds = data.BackupSchedules.Select(x => x.Id).ToHashSet();
-        var schemaDefinitionIds = data.SchemaDefinitions.Select(x => x.Id).ToHashSet();
-        var backupIds = data.Backups.Select(x => x.Id).ToHashSet();
-        var backupTableIds = data.BackupTables.Select(x => x.Id).ToHashSet();
-        var backupTableShardIds = data.BackupTableShards.Select(x => x.Id).ToHashSet();
-        var restoreIds = data.Restores.Select(x => x.Id).ToHashSet();
-        var restoreTableIds = data.RestoreTables.Select(x => x.Id).ToHashSet();
-
-        foreach (var token in data.AccessTokens)
-        {
-            EnsureReference(userIds, token.UserId, $"access token {token.Id} user");
-        }
-
-        foreach (var policy in data.BackupPolicies)
-        {
-            EnsureReference(clusterIds, policy.SourceClusterId, $"backup policy {policy.Id} source cluster");
-            EnsureOptionalReference(targetIds, policy.TargetId, $"backup policy {policy.Id} target");
-            if (policy.ContentMode == BackupContentMode.SchemaAndData && policy.TargetId is null)
-            {
-                throw new InvalidOperationException($"backup policy {policy.Id} target is required for schema+data policies.");
-            }
-        }
-
-        foreach (var schedule in data.BackupSchedules)
-        {
-            EnsureReference(policyIds, schedule.PolicyId, $"backup schedule {schedule.Id} policy");
-        }
-
-        foreach (var backup in data.Backups)
-        {
-            EnsureReference(clusterIds, backup.SourceClusterId, $"backup run {backup.Id} source cluster");
-            EnsureOptionalReference(targetIds, backup.TargetId, $"backup run {backup.Id} target");
-            if (backup.ContentMode == BackupContentMode.SchemaAndData && backup.TargetId is null)
-            {
-                throw new InvalidOperationException($"backup run {backup.Id} target is required for schema+data backups.");
-            }
-            EnsureOptionalReference(policyIds, backup.PolicyId, $"backup run {backup.Id} policy");
-            EnsureOptionalReference(scheduleIds, backup.ScheduleId, $"backup run {backup.Id} schedule");
-            EnsureOptionalReference(userIds, backup.RequestedByUserId, $"backup run {backup.Id} requested user");
-            EnsureOptionalReference(userIds, backup.PinnedByUserId, $"backup run {backup.Id} pinned user");
-        }
-
-        foreach (var table in data.BackupTables)
-        {
-            EnsureReference(backupIds, table.BackupId, $"backup table {table.Id} backup run");
-            EnsureOptionalReference(schemaDefinitionIds, table.SchemaDefinitionId, $"backup table {table.Id} schema definition");
-            EnsureOptionalReference(backupIds, table.ParentFullBackupId, $"backup table {table.Id} parent full backup");
-            EnsureOptionalReference(backupTableIds, table.ParentFullBackupTableId, $"backup table {table.Id} parent full backup table");
-        }
-
-        foreach (var shard in data.BackupTableShards)
-        {
-            EnsureReference(backupTableIds, shard.BackupTableId, $"backup table shard {shard.Id} backup table");
-            EnsureOptionalReference(backupIds, shard.ParentFullBackupId, $"backup table shard {shard.Id} parent full backup");
-            EnsureOptionalReference(backupTableShardIds, shard.ParentFullBackupTableShardId, $"backup table shard {shard.Id} parent full backup shard");
-        }
-
-        foreach (var restore in data.Restores)
-        {
-            EnsureReference(backupIds, restore.BackupId, $"restore run {restore.Id} backup");
-            EnsureReference(clusterIds, restore.TargetClusterId, $"restore run {restore.Id} target cluster");
-            EnsureOptionalReference(userIds, restore.RequestedByUserId, $"restore run {restore.Id} requested user");
-        }
-
-        foreach (var table in data.RestoreTables)
-        {
-            EnsureReference(restoreIds, table.RestoreId, $"restore table {table.Id} restore run");
-            EnsureReference(backupTableIds, table.BackupTableId, $"restore table {table.Id} backup table");
-        }
-
-        foreach (var shard in data.RestoreTableShards)
-        {
-            EnsureReference(restoreTableIds, shard.RestoreTableId, $"restore table shard {shard.Id} restore table");
-            EnsureReference(backupTableShardIds, shard.BackupTableShardId, $"restore table shard {shard.Id} backup table shard");
-        }
-    }
-
     private static bool HasOperationalRows(ExportPayload data) =>
         data.SchemaDefinitions.Count > 0 ||
         data.Backups.Count > 0 ||
@@ -331,34 +225,141 @@ public sealed class ExportImportService(ChoboDbContext db, IActorContext actor) 
         data.Restores.Count > 0 ||
         data.RestoreTables.Count > 0 ||
         data.RestoreTableShards.Count > 0;
+    private static ImportPlan BuildImportPlan(ExportPayload data, bool configOnly)
+    {
+        if (configOnly && HasOperationalRows(data))
+        {
+            data = data with
+            {
+                SchemaDefinitions = [],
+                Backups = [],
+                BackupTables = [],
+                BackupTableShards = [],
+                Restores = [],
+                RestoreTables = [],
+                RestoreTableShards = []
+            };
+        }
 
-    private static void EnsureUnique(IEnumerable<Guid> ids, string collectionName)
+        var skipped = data.Users.Count + data.AccessTokens.Count;
+        var clusters = DistinctById(data.Clusters, x => x.Id, ref skipped);
+        var targets = DistinctById(data.BackupTargets, x => x.Id, ref skipped);
+        var clusterIds = clusters.Select(x => x.Id).ToHashSet();
+        var targetIds = targets.Select(x => x.Id).ToHashSet();
+
+        var distinctPolicies = DistinctById(data.BackupPolicies, x => x.Id, ref skipped);
+        var policies = distinctPolicies
+            .Where(x => clusterIds.Contains(x.SourceClusterId))
+            .Where(x => x.TargetId is null || targetIds.Contains(x.TargetId.Value))
+            .Where(x => x.ContentMode != BackupContentMode.SchemaAndData || x.TargetId is not null)
+            .ToList();
+        skipped += distinctPolicies.Count - policies.Count;
+
+        var policyIds = policies.Select(x => x.Id).ToHashSet();
+        var distinctSchedules = DistinctById(data.BackupSchedules, x => x.Id, ref skipped);
+        var schedules = distinctSchedules.Where(x => policyIds.Contains(x.PolicyId)).ToList();
+        skipped += distinctSchedules.Count - schedules.Count;
+
+        var scheduleIds = schedules.Select(x => x.Id).ToHashSet();
+        var schemaDefinitions = DistinctById(data.SchemaDefinitions, x => x.Id, ref skipped);
+        var schemaDefinitionIds = schemaDefinitions.Select(x => x.Id).ToHashSet();
+
+        var distinctBackups = DistinctById(data.Backups, x => x.Id, ref skipped);
+        var backups = distinctBackups
+            .Where(x => clusterIds.Contains(x.SourceClusterId))
+            .Where(x => x.TargetId is null || targetIds.Contains(x.TargetId.Value))
+            .Where(x => x.ContentMode != BackupContentMode.SchemaAndData || x.TargetId is not null)
+            .Where(x => x.PolicyId is null || policyIds.Contains(x.PolicyId.Value))
+            .Where(x => x.ScheduleId is null || scheduleIds.Contains(x.ScheduleId.Value))
+            .ToList();
+        skipped += distinctBackups.Count - backups.Count;
+
+        var backupIds = backups.Select(x => x.Id).ToHashSet();
+        var distinctBackupTables = DistinctById(data.BackupTables, x => x.Id, ref skipped);
+        var backupTables = distinctBackupTables
+            .Where(x => backupIds.Contains(x.BackupId))
+            .Where(x => x.SchemaDefinitionId is null || schemaDefinitionIds.Contains(x.SchemaDefinitionId.Value))
+            .Where(x => x.ParentFullBackupId is null || backupIds.Contains(x.ParentFullBackupId.Value))
+            .ToList();
+        var backupTableIds = backupTables.Select(x => x.Id).ToHashSet();
+        backupTables = backupTables
+            .Where(x => x.ParentFullBackupTableId is null || backupTableIds.Contains(x.ParentFullBackupTableId.Value))
+            .ToList();
+        skipped += distinctBackupTables.Count - backupTables.Count;
+
+        backupTableIds = backupTables.Select(x => x.Id).ToHashSet();
+        var distinctBackupShards = DistinctById(data.BackupTableShards, x => x.Id, ref skipped);
+        var backupShards = distinctBackupShards
+            .Where(x => backupTableIds.Contains(x.BackupTableId))
+            .Where(x => x.ParentFullBackupId is null || backupIds.Contains(x.ParentFullBackupId.Value))
+            .ToList();
+        var backupShardIds = backupShards.Select(x => x.Id).ToHashSet();
+        backupShards = backupShards
+            .Where(x => x.ParentFullBackupTableShardId is null || backupShardIds.Contains(x.ParentFullBackupTableShardId.Value))
+            .ToList();
+        skipped += distinctBackupShards.Count - backupShards.Count;
+
+        backupShardIds = backupShards.Select(x => x.Id).ToHashSet();
+        var distinctRestores = DistinctById(data.Restores, x => x.Id, ref skipped);
+        var restores = distinctRestores
+            .Where(x => backupIds.Contains(x.BackupId))
+            .Where(x => clusterIds.Contains(x.TargetClusterId))
+            .ToList();
+        skipped += distinctRestores.Count - restores.Count;
+
+        var restoreIds = restores.Select(x => x.Id).ToHashSet();
+        var distinctRestoreTables = DistinctById(data.RestoreTables, x => x.Id, ref skipped);
+        var restoreTables = distinctRestoreTables
+            .Where(x => restoreIds.Contains(x.RestoreId))
+            .Where(x => backupTableIds.Contains(x.BackupTableId))
+            .ToList();
+        skipped += distinctRestoreTables.Count - restoreTables.Count;
+
+        var restoreTableIds = restoreTables.Select(x => x.Id).ToHashSet();
+        var distinctRestoreShards = DistinctById(data.RestoreTableShards, x => x.Id, ref skipped);
+        var restoreShards = distinctRestoreShards
+            .Where(x => restoreTableIds.Contains(x.RestoreTableId))
+            .Where(x => backupShardIds.Contains(x.BackupTableShardId))
+            .ToList();
+        skipped += distinctRestoreShards.Count - restoreShards.Count;
+
+        return new ImportPlan(data with
+        {
+            Users = [],
+            AccessTokens = [],
+            Clusters = clusters,
+            BackupTargets = targets,
+            BackupPolicies = policies,
+            BackupSchedules = schedules,
+            SchemaDefinitions = schemaDefinitions,
+            Backups = backups,
+            BackupTables = backupTables,
+            BackupTableShards = backupShards,
+            Restores = restores,
+            RestoreTables = restoreTables,
+            RestoreTableShards = restoreShards
+        }, Math.Max(0, skipped));
+    }
+
+    private static List<T> DistinctById<T>(IEnumerable<T> rows, Func<T, Guid> getId, ref int skipped)
     {
         var seen = new HashSet<Guid>();
-        foreach (var id in ids)
+        var result = new List<T>();
+        foreach (var row in rows)
         {
-            if (!seen.Add(id))
+            if (seen.Add(getId(row)))
             {
-                throw new InvalidOperationException($"Import payload contains duplicate {collectionName} id {id}.");
+                result.Add(row);
+            }
+            else
+            {
+                skipped++;
             }
         }
+        return result;
     }
 
-    private static void EnsureReference(HashSet<Guid> ids, Guid id, string relationship)
-    {
-        if (!ids.Contains(id))
-        {
-            throw new InvalidOperationException($"Import payload references missing {relationship} id {id}.");
-        }
-    }
-
-    private static void EnsureOptionalReference(HashSet<Guid> ids, Guid? id, string relationship)
-    {
-        if (id is { } value)
-        {
-            EnsureReference(ids, value, relationship);
-        }
-    }
+    private sealed record ImportPlan(ExportPayload Payload, int SkippedRows);
     private static IReadOnlyList<ClusterNodeMaxDopOverrideDto> DeserializeNodeOverrides(string json)
     {
         try { return JsonSerializer.Deserialize<List<ClusterNodeMaxDopOverrideDto>>(json, JsonOptions) ?? []; }

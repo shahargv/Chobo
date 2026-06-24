@@ -466,6 +466,22 @@ pre, .token-box {
   .rule-row { grid-template-columns: 1fr; align-items: stretch; }
   .page { padding: 16px; }
 }
+.queue-panel .data-grid table { min-width: 1280px; }
+.queue-run-cell {
+  min-width: 220px;
+  max-width: 260px;
+  overflow-wrap: anywhere;
+}
+.queue-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 228px;
+  white-space: nowrap;
+}
+.queue-actions .icon-button {
+  flex: 0 0 32px;
+}
 .entries-panel { display: grid; gap: 10px; }
 .entries-panel table { min-width: 1480px; }
 .entry-filter-bar {

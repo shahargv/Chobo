@@ -271,6 +271,42 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Backup_executor_prepares_second_data_backup_queue_while_first_backup_is_running()
+    {
+        await using var fixture = await TestFixture.CreateAsync(
+            clusterMaxDop: 1,
+            options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(10) });
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+        fixture.ClickHouse.BlockOperationStatus = true;
+        var service = fixture.Services.GetRequiredService<BackupApplicationService>();
+        var queues = fixture.Services.GetRequiredService<IBackupRestoreQueues>();
+        var executor = new BackupExecutorBackgroundService(
+            fixture.Services,
+            queues,
+            fixture.Services.GetRequiredService<IOptions<ChoboBackupRestoreOptions>>(),
+            Serilog.Core.Logger.None);
+
+        var first = await service.ManualAsync(new ManualBackupRequest(fixture.SourceClusterId, fixture.TargetId, PolicySelector.Empty));
+        var second = await service.ManualAsync(new ManualBackupRequest(fixture.SourceClusterId, fixture.TargetId, PolicySelector.Empty));
+
+        await executor.StartAsync(CancellationToken.None);
+        await fixture.ClickHouse.WaitForBlockedStatusAsync();
+        await WaitUntilAsync(async () =>
+        {
+            fixture.Db.ChangeTracker.Clear();
+            return await fixture.Db.BackupRestoreQueueItems.AnyAsync(x => x.Kind == BackupRestoreQueueKind.Backup && x.OperationId == second.Id);
+        });
+
+        fixture.Db.ChangeTracker.Clear();
+        Assert.True(await fixture.Db.BackupRestoreQueueItems.AnyAsync(x => x.Kind == BackupRestoreQueueKind.Backup && x.OperationId == first.Id && x.StartedAt != null));
+        var secondQueueItem = await fixture.Db.BackupRestoreQueueItems.SingleAsync(x => x.Kind == BackupRestoreQueueKind.Backup && x.OperationId == second.Id);
+        Assert.Null(secondQueueItem.StartedAt);
+
+        fixture.ClickHouse.ReleaseBlockedStatus();
+        await executor.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
     public async Task Manual_schema_only_backup_stores_schema_without_starting_data_backup()
     {
         await using var fixture = await TestFixture.CreateAsync();
@@ -295,6 +331,24 @@ public sealed class BackupRestoreExecutionTests
         Assert.NotNull(summary);
         Assert.Equal(1, summary!.TableCount);
         Assert.Empty(summary.Tables);
+    }
+
+    [Fact]
+    public async Task Manual_schema_only_backup_is_queued_independently_from_data_backups()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var service = fixture.Services.GetRequiredService<BackupApplicationService>();
+        var queues = fixture.Services.GetRequiredService<IBackupRestoreQueues>();
+
+        var dataBackup = await service.ManualAsync(new ManualBackupRequest(fixture.SourceClusterId, fixture.TargetId, PolicySelector.Empty));
+        var schemaOnlyBackup = await service.ManualAsync(new ManualBackupRequest(fixture.SourceClusterId, fixture.TargetId, PolicySelector.Empty, SchemaOnly: true));
+
+        Assert.True(queues.Backups.Reader.TryRead(out var queuedDataBackupId));
+        Assert.Equal(dataBackup.Id, queuedDataBackupId);
+        Assert.True(queues.SchemaOnlyBackups.Reader.TryRead(out var queuedSchemaOnlyBackupId));
+        Assert.Equal(schemaOnlyBackup.Id, queuedSchemaOnlyBackupId);
+        Assert.False(queues.Backups.Reader.TryRead(out _));
+        Assert.False(queues.SchemaOnlyBackups.Reader.TryRead(out _));
     }
 
     [Fact]
@@ -946,6 +1000,48 @@ public sealed class BackupRestoreExecutionTests
         Assert.Equal(1, fixture.ClickHouse.MaxConcurrentRestoreStarts);
     }
     [Fact]
+    public async Task Backup_runner_skips_duplicate_execution_for_same_backup_id()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+        fixture.ClickHouse.BlockOperationStatus = true;
+        var backupId = await fixture.CreateManualBackupAsync();
+
+        var firstRun = fixture.RunBackupAsync(backupId);
+        await fixture.ClickHouse.WaitForBlockedStatusAsync();
+        await fixture.RunBackupAsync(backupId);
+
+        fixture.ClickHouse.ReleaseBlockedStatus();
+        await firstRun;
+
+        Assert.Single(fixture.ClickHouse.BackupStartTables);
+        Assert.Equal(1, await fixture.Db.AuditEntries.CountAsync(x => x.Action == "started" && x.EntityType == "backup" && x.EntityId == backupId.ToString()));
+    }
+
+    [Fact]
+    public async Task Queue_operation_move_promotes_all_queued_items_for_backup()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var first = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "first", BackupTableStatus.Queued, null, true)
+        ], shardCount: 2);
+        var second = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "second", BackupTableStatus.Queued, null, true)
+        ], shardCount: 2);
+
+        using var scope = fixture.Services.CreateScope();
+        var queue = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
+        await queue.EnsureBackupQueueItemsAsync(first.Id);
+        await queue.EnsureBackupQueueItemsAsync(second.Id);
+        await queue.MoveOperationAsync(BackupRestoreQueueKind.Backup, second.Id, new MoveQueueItemRequest(BackupRestoreQueueMoveDirection.Top));
+
+        var firstPositions = await fixture.Db.BackupRestoreQueueItems.Where(x => x.OperationId == first.Id).Select(x => x.Position).ToListAsync();
+        var secondPositions = await fixture.Db.BackupRestoreQueueItems.Where(x => x.OperationId == second.Id).Select(x => x.Position).ToListAsync();
+        Assert.True(secondPositions.Max() < firstPositions.Min());
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "queue-operation-moved" && x.EntityId == second.Id.ToString()));
+    }
+
+    [Fact]
     public async Task Schema_only_backup_does_not_leave_active_queue_rows()
     {
         await using var fixture = await TestFixture.CreateAsync(clusterMaxDop: 1, options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
@@ -1281,7 +1377,31 @@ public sealed class BackupRestoreExecutionTests
         Assert.Equal(schedule.PolicyId, backup.PolicyId);
         Assert.Equal(BackupTriggerType.Scheduled, backup.TriggerType);
         Assert.Equal(BackupRunStatus.Queued, backup.Status);
+        Assert.Equal(BackupContentMode.SchemaAndData, backup.ContentMode);
+        var queues = fixture.Services.GetRequiredService<IBackupRestoreQueues>();
+        Assert.True(queues.Backups.Reader.TryRead(out var queuedBackupId));
+        Assert.Equal(backup.Id, queuedBackupId);
+        Assert.False(queues.SchemaOnlyBackups.Reader.TryRead(out _));
         Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "scheduled-backup-enqueued" && x.EntityId == schedule.Id.ToString()));
+    }
+
+    [Fact]
+    public async Task Scheduler_enqueues_schema_only_policy_independently_from_data_backups()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var schedule = await fixture.SeedPolicyAndScheduleAsync(BackupContentMode.SchemaOnly);
+        schedule.CronExpression = "0/1 * * * * ?";
+        await fixture.Db.SaveChangesAsync();
+
+        await fixture.Services.GetRequiredService<BackupSchedulerDispatcherBackgroundService>().DispatchOnceAsync();
+
+        var backup = await fixture.Db.Backups.SingleAsync(x => x.ScheduleId == schedule.Id);
+        Assert.Equal(BackupType.Full, backup.BackupType);
+        Assert.Equal(BackupContentMode.SchemaOnly, backup.ContentMode);
+        var queues = fixture.Services.GetRequiredService<IBackupRestoreQueues>();
+        Assert.True(queues.SchemaOnlyBackups.Reader.TryRead(out var queuedBackupId));
+        Assert.Equal(backup.Id, queuedBackupId);
+        Assert.False(queues.Backups.Reader.TryRead(out _));
     }
 
     [Fact]
@@ -2661,6 +2781,28 @@ public sealed class BackupRestoreExecutionTests
         Assert.True(dto.CreatedAt <= DateTimeOffset.UtcNow);
     }
 
+    private static async Task WaitUntilAsync(Func<Task<bool>> condition)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (!timeout.IsCancellationRequested)
+        {
+            if (await condition())
+            {
+                return;
+            }
+            try
+            {
+                await Task.Delay(25, timeout.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+        }
+
+        throw new TimeoutException("Condition was not met before timeout.");
+    }
+
     private static async Task<TimeSpan> MeasureAsync(Func<Task> action)
     {
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
@@ -3243,9 +3385,10 @@ public sealed class BackupRestoreExecutionTests
             return restore;
         }
 
-        public async Task<BackupScheduleEntity> SeedPolicyAndScheduleAsync()
+        public async Task<BackupScheduleEntity> SeedPolicyAndScheduleAsync(BackupContentMode contentMode = BackupContentMode.SchemaAndData)
         {
             var policy = NewPolicy("hourly");
+            policy.ContentMode = contentMode;
             var schedule = new BackupScheduleEntity
             {
                 Name = "hourly",
@@ -3500,12 +3643,3 @@ public sealed class BackupRestoreExecutionTests
         public override DateTimeOffset GetUtcNow() => utcNow;
     }
 }
-
-
-
-
-
-
-
-
-

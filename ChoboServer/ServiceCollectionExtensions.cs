@@ -143,6 +143,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IBackupRestoreQueues, BackupRestoreQueues>();
         services.AddHostedService<BackupRestoreResumeBackgroundService>();
         services.AddHostedService<BackupExecutorBackgroundService>();
+        services.AddHostedService<SchemaOnlyBackupExecutorBackgroundService>();
         services.AddHostedService<RestoreExecutorBackgroundService>();
         services.AddHostedService<BackupSchedulerDispatcherBackgroundService>();
         services.AddHostedService<RetentionManagementBackgroundService>();

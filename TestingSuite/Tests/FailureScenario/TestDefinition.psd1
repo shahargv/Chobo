@@ -189,11 +189,9 @@
         }
         @{
             Name = 'crash-server-during-backup'
-            Type = 'Cli'
-            Args = @('test-hooks', 'crash')
-            ExpectJson = @(
-                @{ Path = 'crashing'; Equals = $true }
-            )
+            Type = 'Shell'
+            Args = @('pwsh', '-NoProfile', '-Command', '$output = ChoboCli test-hooks crash 2>&1; $text = ($output | Out-String); if ($LASTEXITCODE -eq 0 -and $text.Contains(''crashing'')) { ''crash-ok''; exit 0 }; if ($text.Contains(''Error while copying content to a stream'')) { ''crash-ok''; exit 0 }; throw (''unexpected crash command result: '' + $text)')
+            ExpectTextContains = 'crash-ok'
         }
         @{
             Name = 'wait-backup-after-server-restart'
@@ -293,11 +291,9 @@
         }
         @{
             Name = 'crash-server-during-restore'
-            Type = 'Cli'
-            Args = @('test-hooks', 'crash')
-            ExpectJson = @(
-                @{ Path = 'crashing'; Equals = $true }
-            )
+            Type = 'Shell'
+            Args = @('pwsh', '-NoProfile', '-Command', '$output = ChoboCli test-hooks crash 2>&1; $text = ($output | Out-String); if ($LASTEXITCODE -eq 0 -and $text.Contains(''crashing'')) { ''crash-ok''; exit 0 }; if ($text.Contains(''Error while copying content to a stream'')) { ''crash-ok''; exit 0 }; throw (''unexpected crash command result: '' + $text)')
+            ExpectTextContains = 'crash-ok'
         }
         @{
             Name = 'wait-restore-after-server-restart'

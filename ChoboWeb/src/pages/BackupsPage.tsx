@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { Ban, Play, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
+import { ArrowUpToLine, Ban, Play, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import type { BackupDto, BackupPolicyDto, BackupRunStatus, BackupTableDto, BackupTableShardDto, BackupType } from "../api/generated";
 import { useApi } from "../api-context";
 import { ConfirmDialog, DataTable, Detail, Drawer, Empty, Page, Select, Status } from "../components/ui";
@@ -130,6 +130,11 @@ function BackupDrawer({ backupId, onClose }: { backupId: string; onClose: () => 
     onSuccess: () => { backup.refetch(); queryClient.invalidateQueries({ queryKey: ["backups"] }); showToast({ kind: "success", text: "Backup canceled." }); },
     onError: (error) => showToast({ kind: "error", text: String(error) })
   });
+  const bumpBackup = useMutation({
+    mutationFn: () => api.moveQueueOperation("Backup", backupId, { direction: "Top", beforeItemId: null as unknown as string }),
+    onSuccess: () => { showToast({ kind: "success", text: "Backup queue items moved to top." }); queryClient.invalidateQueries({ queryKey: ["queue"] }); },
+    onError: (error) => showToast({ kind: "error", text: String(error) })
+  });
   useEffect(() => {
     if (!current) return;
     queryClient.setQueryData<BackupDto[]>(["backups"], (items) => items?.map((item) => item.id === current.id ? current : item));
@@ -141,7 +146,7 @@ function BackupDrawer({ backupId, onClose }: { backupId: string; onClose: () => 
           <h3>Run status</h3>
           {isActive && <span className="hint">Auto-refreshing while this backup is active.</span>}
         </div>
-        <button className="secondary" disabled={backup.isFetching || tableDetail.isFetching || relatedLogs.isFetching || relatedAudits.isFetching} onClick={() => { backup.refetch(); tableDetail.refetch(); relatedLogs.refetch(); relatedAudits.refetch(); }}><RefreshCw size={16} /> Refresh</button>
+        {isActive && <button className="secondary" disabled={bumpBackup.isPending} onClick={() => bumpBackup.mutate()}><ArrowUpToLine size={16} /> Bump queue</button>}<button className="secondary" disabled={backup.isFetching || tableDetail.isFetching || relatedLogs.isFetching || relatedAudits.isFetching} onClick={() => { backup.refetch(); tableDetail.refetch(); relatedLogs.refetch(); relatedAudits.refetch(); }}><RefreshCw size={16} /> Refresh</button>
       </div>
       {!current && backup.isLoading && <Empty text="Loading backup details." />}
       {!current && backup.error && <Empty text={String(backup.error)} />}
@@ -365,4 +370,10 @@ function formatTimeSeconds(value?: string | null) {
     second: "2-digit"
   });
 }
+
+
+
+
+
+
 
