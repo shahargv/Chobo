@@ -200,7 +200,11 @@ public sealed class BackupStorageManifestService(
         }
         cluster.Name = manifest.SourceCluster.Name;
         cluster.Mode = manifest.SourceCluster.Mode;
-        cluster.BackupRestoreMaxDop = manifest.SourceCluster.BackupRestoreMaxDop;
+        cluster.BackupRestoreMaxDop = manifest.SourceCluster.BackupRestoreMaxDop ?? 3;
+        cluster.NodeMaxDopDefault = manifest.SourceCluster.NodeMaxDopDefault;
+        cluster.NodeMaxDopOverridesJson = JsonSerializer.Serialize(manifest.SourceCluster.NodeMaxDopOverrides ?? [], JsonOptions);
+        cluster.ShardMaxDopDefault = manifest.SourceCluster.ShardMaxDopDefault;
+        cluster.ShardMaxDopOverridesJson = JsonSerializer.Serialize(manifest.SourceCluster.ShardMaxDopOverrides ?? [], JsonOptions);
         cluster.ClickHouseClusterName = manifest.SourceCluster.ClickHouseClusterName;
         cluster.IsDeleted = manifest.SourceCluster.IsDeleted;
         cluster.CreatedAt = manifest.SourceCluster.CreatedAt;
@@ -477,7 +481,7 @@ public sealed class BackupStorageManifestService(
         new(target.Id, target.Name, target.Type, new S3TargetSettingsDto(target.Endpoint, target.Region, target.Bucket, target.PathPrefix, target.ForcePathStyle), target.IsDeleted, target.CreatedAt, target.UpdatedAt, target.DeletedAt);
 
     private static BackupStorageManifestClusterV1 ToManifestCluster(ClickHouseClusterEntity cluster) =>
-        new(cluster.Id, cluster.Name, cluster.Mode, cluster.AccessNodes.Select(x => new AccessNodeDto(x.Id, x.Host, x.Port, x.UseTls)).ToList(), cluster.BackupRestoreMaxDop, cluster.ClickHouseClusterName, cluster.IsDeleted, cluster.CreatedAt, cluster.UpdatedAt, cluster.DeletedAt);
+        new(cluster.Id, cluster.Name, cluster.Mode, cluster.AccessNodes.Select(x => new AccessNodeDto(x.Id, x.Host, x.Port, x.UseTls)).ToList(), cluster.BackupRestoreMaxDop, cluster.NodeMaxDopDefault, DeserializeNodeOverrides(cluster.NodeMaxDopOverridesJson), cluster.ShardMaxDopDefault, DeserializeShardOverrides(cluster.ShardMaxDopOverridesJson), cluster.ClickHouseClusterName, cluster.IsDeleted, cluster.CreatedAt, cluster.UpdatedAt, cluster.DeletedAt);
 
     private static BackupStorageManifestPolicyV1 ToManifestPolicy(BackupPolicyEntity policy) =>
         new(
@@ -544,6 +548,17 @@ public sealed class BackupStorageManifestService(
             shard.CompletedAt,
             shard.Error);
 
+    private static IReadOnlyList<ClusterNodeMaxDopOverrideDto> DeserializeNodeOverrides(string json)
+    {
+        try { return JsonSerializer.Deserialize<List<ClusterNodeMaxDopOverrideDto>>(json, JsonOptions) ?? []; }
+        catch (JsonException) { return []; }
+    }
+
+    private static IReadOnlyList<ClusterShardMaxDopOverrideDto> DeserializeShardOverrides(string json)
+    {
+        try { return JsonSerializer.Deserialize<List<ClusterShardMaxDopOverrideDto>>(json, JsonOptions) ?? []; }
+        catch (JsonException) { return []; }
+    }
     private static JsonSerializerOptions CreateJsonOptions()
     {
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)

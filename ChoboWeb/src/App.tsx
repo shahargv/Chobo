@@ -19,6 +19,7 @@ import { UsersPage } from "./pages/UsersPage";
 import { ImportExport } from "./pages/ImportExportPage";
 import { GarbageCollectorPage } from "./pages/GarbageCollectorPage";
 import { MonitoringPage } from "./pages/MonitoringPage";
+import { QueuePage } from "./pages/QueuePage";
 import { clearAuth, readStoredAuth, storeAuth } from "./auth";
 
 export function App() {
@@ -107,6 +108,7 @@ export function App() {
           <Route path="/import-export" element={<ImportExport />} />
           <Route path="/monitoring" element={<MonitoringPage />} />
           <Route path="/gc" element={<GarbageCollectorPage />} />
+          <Route path="/queue" element={<QueuePage />} />
         </Routes>
       </AppShell>
     </ApiContext.Provider>

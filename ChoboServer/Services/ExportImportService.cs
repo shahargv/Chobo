@@ -36,7 +36,7 @@ public sealed class ExportImportService(ChoboDbContext db, IActorContext actor) 
         var payload = new ExportPayload(
             users.Select(x => new UserExport(x.Id, x.UserName, x.IsActive, x.CreatedAt, x.DeactivatedAt)).ToList(),
             tokens.Select(x => new AccessTokenExport(x.Id, x.UserId, x.Name, x.TokenHash, x.TokenLookupHash, x.Salt, x.IsActive, x.CreatedAt, x.DeactivatedAt)).ToList(),
-            clusters.Select(x => new ClusterExport(x.Id, x.Name, x.Mode, x.ClickHouseClusterName, x.AccessNodes.Select(n => new AccessNodeDto(n.Id, n.Host, n.Port, n.UseTls)).ToList(), x.EncryptedUserName, x.EncryptedUserNameKeyId, x.EncryptedPassword, x.EncryptedPasswordKeyId, x.BackupRestoreMaxDop, x.IsDeleted, x.CreatedAt, x.UpdatedAt, x.DeletedAt)).ToList(),
+            clusters.Select(x => new ClusterExport(x.Id, x.Name, x.Mode, x.ClickHouseClusterName, x.AccessNodes.Select(n => new AccessNodeDto(n.Id, n.Host, n.Port, n.UseTls)).ToList(), x.EncryptedUserName, x.EncryptedUserNameKeyId, x.EncryptedPassword, x.EncryptedPasswordKeyId, x.BackupRestoreMaxDop, x.NodeMaxDopDefault, DeserializeNodeOverrides(x.NodeMaxDopOverridesJson), x.ShardMaxDopDefault, DeserializeShardOverrides(x.ShardMaxDopOverridesJson), x.IsDeleted, x.CreatedAt, x.UpdatedAt, x.DeletedAt)).ToList(),
             targets.Select(x => new BackupTargetExport(x.Id, x.Name, x.Type, new S3TargetSettingsDto(x.Endpoint, x.Region, x.Bucket, x.PathPrefix, x.ForcePathStyle), x.EncryptedAccessKey, x.EncryptedAccessKeyKeyId, x.EncryptedSecretKey, x.EncryptedSecretKeyKeyId, x.IsDeleted, x.CreatedAt, x.UpdatedAt, x.DeletedAt)).ToList(),
             policies.Select(x => new BackupPolicyExport(
                 x.Id,
@@ -116,7 +116,11 @@ public sealed class ExportImportService(ChoboDbContext db, IActorContext actor) 
                     EncryptedUserNameKeyId = null,
                     EncryptedPassword = null,
                     EncryptedPasswordKeyId = null,
-                    BackupRestoreMaxDop = cluster.BackupRestoreMaxDop,
+                    BackupRestoreMaxDop = cluster.BackupRestoreMaxDop ?? 3,
+                    NodeMaxDopDefault = cluster.NodeMaxDopDefault,
+                    NodeMaxDopOverridesJson = JsonSerializer.Serialize(cluster.NodeMaxDopOverrides ?? [], JsonOptions),
+                    ShardMaxDopDefault = cluster.ShardMaxDopDefault,
+                    ShardMaxDopOverridesJson = JsonSerializer.Serialize(cluster.ShardMaxDopOverrides ?? [], JsonOptions),
                     ClickHouseClusterName = cluster.ClickHouseClusterName,
                     IsDeleted = cluster.IsDeleted,
                     CreatedAt = cluster.CreatedAt,
@@ -354,6 +358,17 @@ public sealed class ExportImportService(ChoboDbContext db, IActorContext actor) 
         {
             EnsureReference(ids, value, relationship);
         }
+    }
+    private static IReadOnlyList<ClusterNodeMaxDopOverrideDto> DeserializeNodeOverrides(string json)
+    {
+        try { return JsonSerializer.Deserialize<List<ClusterNodeMaxDopOverrideDto>>(json, JsonOptions) ?? []; }
+        catch (JsonException) { return []; }
+    }
+
+    private static IReadOnlyList<ClusterShardMaxDopOverrideDto> DeserializeShardOverrides(string json)
+    {
+        try { return JsonSerializer.Deserialize<List<ClusterShardMaxDopOverrideDto>>(json, JsonOptions) ?? []; }
+        catch (JsonException) { return []; }
     }
     private static JsonSerializerOptions CreateJsonOptions()
     {

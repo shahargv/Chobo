@@ -7,6 +7,10 @@ import type {
   BackupGarbageCollectorQueueItemDto,
   BackupGarbageCollectorStatusDto,
   BackupMetadataRecoveryResult,
+  BackupRestoreQueueItemDto,
+  BackupRestoreQueueKind,
+  BackupRestoreQueueStatus,
+  MoveQueueItemRequest,
   BackupPolicyDto,
   BackupRunStatus,
   BackupScheduleDto,
@@ -133,6 +137,11 @@ export class ChoboApiClient {
   restore(id: string) { return this.get<RestoreDto>(`restores/${id}`); }
   initiateRestore(request: InitiateRestoreRequest) { return this.post<RestoreDto>("restores/initiate", request); }
   cancelRestore(id: string) { return this.post<RestoreDto>(`restores/${id}/cancel`, {}); }
+
+  queue(filters: { kind?: BackupRestoreQueueKind; status?: BackupRestoreQueueStatus | "active" | "all"; limit?: number } = {}) { return this.get<BackupRestoreQueueItemDto[]>(`queue${query(filters)}`); }
+  moveQueueItem(id: string, request: MoveQueueItemRequest) { return this.post<BackupRestoreQueueItemDto>(`queue/items/${id}/move`, request); }
+  moveQueueTable(kind: BackupRestoreQueueKind, tableId: string, request: MoveQueueItemRequest) { return this.post<BackupRestoreQueueItemDto[]>(`queue/tables/${kind}/${tableId}/move`, request); }
+  forceQueueItem(id: string) { return this.post<BackupRestoreQueueItemDto>(`queue/items/${id}/force`, {}); }
 
   logs(params: { startTime?: string; endTime?: string; last?: number; offset?: number; limit?: number; operationId?: string; severity?: string } = {}) { return this.get<PagedResultDto<ApplicationLogEntryDto>>(`logs${query(params)}`); }
   clearLogs(before: string) { return this.post<{ deleted: number }>("logs/clear", { before }); }

@@ -8,7 +8,7 @@ import { CrudPage, DataTable, Input, Select } from "../components/ui";
 const defaultAccessNodes: UpsertClusterRequest["accessNodes"] = [{ host: "localhost", port: 9000, useTls: false }];
 
 function defaultDraft(): UpsertClusterRequest {
-  return { name: "", mode: "SingleInstance", accessNodes: defaultAccessNodes, userName: null, password: null };
+  return { name: "", mode: "SingleInstance", accessNodes: defaultAccessNodes, userName: null, password: null, backupRestoreMaxDop: 3, nodeMaxDopDefault: 1, nodeMaxDopOverrides: [], shardMaxDopDefault: 1, shardMaxDopOverrides: [] };
 }
 
 export function Clusters() {
@@ -27,7 +27,7 @@ export function Clusters() {
     setShowForm(true);
     setModifyCredentials(false);
     setAccessNodesText(formatNodes(accessNodes));
-    setDraft({ name: cluster.name, mode: cluster.mode, accessNodes, userName: null, password: null, backupRestoreMaxDop: cluster.backupRestoreMaxDop, clickHouseClusterName: cluster.clickHouseClusterName });
+    setDraft({ name: cluster.name, mode: cluster.mode, accessNodes, userName: null, password: null, backupRestoreMaxDop: cluster.backupRestoreMaxDop, nodeMaxDopDefault: cluster.nodeMaxDopDefault, nodeMaxDopOverrides: cluster.nodeMaxDopOverrides, shardMaxDopDefault: cluster.shardMaxDopDefault, shardMaxDopOverrides: cluster.shardMaxDopOverrides, clickHouseClusterName: cluster.clickHouseClusterName });
   };
   useEffect(() => {
     if (!clusterId || !clusters.data) return;
@@ -62,7 +62,9 @@ export function Clusters() {
         setAccessNodesText(value);
         setDraft({ ...draft, accessNodes: parseNodes(value, draft.accessNodes.some((node) => node.useTls)) });
       }} />
-      <Input label="Max DOP" type="number" value={draft.backupRestoreMaxDop?.toString() ?? ""} onChange={(value) => setDraft({ ...draft, backupRestoreMaxDop: value ? Number(value) : null })} />
+      <Input label="Global Max DOP" type="number" value={draft.backupRestoreMaxDop.toString()} onChange={(value) => setDraft({ ...draft, backupRestoreMaxDop: Number(value) || 1 })} />
+      <Input label="Node Max DOP default" type="number" value={draft.nodeMaxDopDefault.toString()} onChange={(value) => setDraft({ ...draft, nodeMaxDopDefault: Number(value) || 1 })} />
+      <Input label="Shard Max DOP default" type="number" value={draft.shardMaxDopDefault.toString()} onChange={(value) => setDraft({ ...draft, shardMaxDopDefault: Number(value) || 1 })} />
       {draft.mode === "Cluster" && (editing
         ? <Select label="ClickHouse system.clusters name" value={draft.clickHouseClusterName ?? ""} onChange={(value) => setDraft({ ...draft, clickHouseClusterName: value || null })} options={clickHouseClusterNameOptions(clickHouseNames.data?.names ?? [], draft.clickHouseClusterName)} />
         : <Input label="ClickHouse system.clusters name" value={draft.clickHouseClusterName ?? ""} onChange={(value) => setDraft({ ...draft, clickHouseClusterName: value || null })} />)}
@@ -71,7 +73,7 @@ export function Clusters() {
       {editing && <label className="checkbox-row"><input type="checkbox" checked={modifyCredentials} onChange={(event) => setModifyCredentials(event.target.checked)} /> Modify credentials</label>}
       {(!editing || modifyCredentials) && <Input label="Username" value={draft.userName ?? ""} onChange={(value) => setDraft({ ...draft, userName: value || null })} />}
       {(!editing || modifyCredentials) && <Input label="Password" type="password" value={draft.password ?? ""} onChange={(value) => setDraft({ ...draft, password: value || null })} />}
-    </>} table={<DataTable headers={["Name", "Mode", "Access nodes", "Max DOP", "Actions"]} isLoading={clusters.isLoading}>{(clusters.data ?? []).map((cluster) => <tr key={cluster.id}><td>{cluster.name}</td><td>{cluster.mode}</td><td>{cluster.accessNodes.map((node) => `${node.host}:${node.port}`).join(", ")}</td><td>{cluster.backupRestoreMaxDop ?? "default"}</td><td className="actions"><button className="ghost" onClick={() => editCluster(cluster)}>Edit</button><button className="ghost" onClick={() => api.testCluster(cluster.id).then((x) => showToast({ kind: x.succeeded ? "success" : "error", text: x.message }))}>Test</button></td></tr>)}</DataTable>} />
+    </>} table={<DataTable headers={["Name", "Mode", "Access nodes", "Max DOP", "Node DOP", "Shard DOP", "Actions"]} isLoading={clusters.isLoading}>{(clusters.data ?? []).map((cluster) => <tr key={cluster.id}><td>{cluster.name}</td><td>{cluster.mode}</td><td>{cluster.accessNodes.map((node) => `${node.host}:${node.port}`).join(", ")}</td><td>{cluster.backupRestoreMaxDop}</td><td>{cluster.nodeMaxDopDefault}</td><td>{cluster.shardMaxDopDefault}</td><td className="actions"><button className="ghost" onClick={() => editCluster(cluster)}>Edit</button><button className="ghost" onClick={() => api.testCluster(cluster.id).then((x) => showToast({ kind: x.succeeded ? "success" : "error", text: x.message }))}>Test</button></td></tr>)}</DataTable>} />
   );
 }
 

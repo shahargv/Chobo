@@ -34,7 +34,7 @@
         @{
             Name = 'add-source-cluster'
             Type = 'Cli'
-            Args = @('clusters', 'add', '--name', 'source', '--mode', 'SingleInstance', '--host', '{source.Host}')
+            Args = @('clusters', 'add', '--name', 'source', '--mode', 'SingleInstance', '--host', '{source.Host}', '--backup-restore-maxdop', '1')
             SaveJsonAs = 'sourceCluster'
             ExpectJson = @(
                 @{ Path = 'name'; Equals = 'source' }
@@ -44,7 +44,7 @@
         @{
             Name = 'add-restore-cluster'
             Type = 'Cli'
-            Args = @('clusters', 'add', '--name', 'restore', '--mode', 'SingleInstance', '--host', '{restore.Host}')
+            Args = @('clusters', 'add', '--name', 'restore', '--mode', 'SingleInstance', '--host', '{restore.Host}', '--backup-restore-maxdop', '1')
             SaveJsonAs = 'restoreCluster'
             ExpectJson = @(
                 @{ Path = 'name'; Equals = 'restore' }

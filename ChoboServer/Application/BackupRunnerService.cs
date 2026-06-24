@@ -17,6 +17,7 @@ public sealed class BackupRunnerService(
     IClickHouseAdapter clickHouse,
     PolicySelectorEvaluationService selectorEvaluation,
     IOptions<ChoboBackupRestoreOptions> options,
+    BackupRestoreQueueApplicationService queue,
     IBackupStorageManifestService manifests,
     IAuditService audit,
     Serilog.ILogger logger)
@@ -68,6 +69,8 @@ public sealed class BackupRunnerService(
                 _logger.Information("Preparing backup tables for backup {BackupId}.", backup.Id);
                 await PrepareTablesAsync(backup, cancellationToken);
             }
+            await queue.EnsureBackupQueueItemsAsync(backup.Id, cancellationToken);
+            await queue.ResetIncompleteBackupClaimsAsync(backup.Id, cancellationToken);
 
             if (backup.ContentMode == BackupContentMode.SchemaOnly)
             {
@@ -476,15 +479,16 @@ public sealed class BackupRunnerService(
         var workItems = await PrepareBackupTablesForShardWorkAsync(backupId, cancellationToken);
         if (workItems.Count > 0)
         {
-            var nextIndex = -1;
             var completedShardAttempts = 0;
             var checkpointInterval = options.Value.ManifestCheckpointShardInterval;
-            var workerCount = Math.Min(maxDop, workItems.Count);
+            var forcedWorkCount = await CountForcedBackupWorkAsync(backupId, cancellationToken);
+            var workerCount = Math.Min(workItems.Count, Math.Max(1, maxDop) + forcedWorkCount);
             var workers = Enumerable.Range(0, workerCount)
                 .Select(async _ =>
                 {
                     while (true)
                     {
+                        BackupRestoreQueueApplicationService.QueueClaimResult claim;
                         using (var statusScope = scopeFactory.CreateScope())
                         {
                             var statusDb = statusScope.ServiceProvider.GetRequiredService<ChoboDbContext>();
@@ -493,17 +497,21 @@ public sealed class BackupRunnerService(
                                 _logger.Information("Backup {BackupId} shard worker observed cancellation/delete-pending status and stopped taking new shard work.", backupId);
                                 return;
                             }
+                            var queue = statusScope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
+                            claim = await queue.TryTakeNextBackupWorkAsync(backupId, cancellationToken);
                         }
-
-                        var itemIndex = Interlocked.Increment(ref nextIndex);
-                        if (itemIndex >= workItems.Count)
+                        if (claim.WorkItem is null)
                         {
-                            return;
+                            if (!claim.HasQueuedWork)
+                            {
+                                return;
+                            }
+                            await Task.Delay(options.Value.PollInterval, cancellationToken);
+                            continue;
                         }
 
-                        var item = workItems[itemIndex];
-                        await RunShardAsync(backupId, item.TableId, item.ShardId, cancellationToken);
-                        var completed = Interlocked.Increment(ref completedShardAttempts);
+                        var item = claim.WorkItem;
+                        await RunShardAsync(backupId, item.TableId, item.ShardId, item.IsForced, cancellationToken);                        var completed = Interlocked.Increment(ref completedShardAttempts);
                         using (var statusScope = scopeFactory.CreateScope())
                         {
                             var statusDb = statusScope.ServiceProvider.GetRequiredService<ChoboDbContext>();
@@ -535,6 +543,9 @@ public sealed class BackupRunnerService(
         await FinalizeBackupTablesAsync(backupId, cancellationToken);
     }
 
+    private async Task<int> CountForcedBackupWorkAsync(Guid backupId, CancellationToken cancellationToken) =>
+        await db.BackupRestoreQueueItems.AsNoTracking()
+            .CountAsync(x => x.Kind == BackupRestoreQueueKind.Backup && x.OperationId == backupId && x.IsForced && x.StartedAt == null && x.CompletedAt == null, cancellationToken);
     private async Task<IReadOnlyList<BackupShardWorkItem>> PrepareBackupTablesForShardWorkAsync(Guid backupId, CancellationToken cancellationToken)
     {
         var backup = await db.Backups
@@ -584,15 +595,30 @@ public sealed class BackupRunnerService(
 
         await db.SaveChangesAsync(cancellationToken);
 
-        return backup.Tables
+        var candidateShardIds = backup.Tables
             .Where(x => x.DataBackedUp && (x.Status == BackupTableStatus.Queued || x.Status == BackupTableStatus.Running))
-            .OrderBy(x => x.Database)
-            .ThenBy(x => x.Table)
             .SelectMany(table => table.Shards
                 .Where(shard => shard.Status is BackupTableStatus.Queued or BackupTableStatus.Running)
-                .OrderBy(shard => shard.SourceShardNumber)
-                .Select(shard => new BackupShardWorkItem(table.Id, shard.Id)))
-            .ToList();
+                .Select(shard => shard.Id))
+            .ToHashSet();
+        var queueOrder = await db.BackupRestoreQueueItems
+            .AsNoTracking()
+            .Where(x => x.Kind == BackupRestoreQueueKind.Backup && x.OperationId == backupId && candidateShardIds.Contains(x.ShardId))
+            .OrderByDescending(x => x.IsForced)
+            .ThenBy(x => x.Position)
+            .Select(x => new BackupShardWorkItem(x.TableId, x.ShardId))
+            .ToListAsync(cancellationToken);
+        return queueOrder.Count > 0
+            ? queueOrder
+            : backup.Tables
+                .Where(x => x.DataBackedUp && (x.Status == BackupTableStatus.Queued || x.Status == BackupTableStatus.Running))
+                .OrderBy(x => x.Database)
+                .ThenBy(x => x.Table)
+                .SelectMany(table => table.Shards
+                    .Where(shard => shard.Status is BackupTableStatus.Queued or BackupTableStatus.Running)
+                    .OrderBy(shard => shard.SourceShardNumber)
+                    .Select(shard => new BackupShardWorkItem(table.Id, shard.Id)))
+                .ToList();
     }
 
     private async Task<bool> ReloadShardAndStopIfCanceledAsync(ChoboDbContext context, BackupEntity backup, BackupTableEntity table, BackupTableShardEntity shard, CancellationToken cancellationToken)
@@ -609,18 +635,19 @@ public sealed class BackupRunnerService(
         return false;
     }
 
-    private async Task RunShardAsync(Guid backupId, Guid tableId, Guid shardId, CancellationToken cancellationToken)
+    private async Task RunShardAsync(Guid backupId, Guid tableId, Guid shardId, bool isForcedQueueItem, CancellationToken cancellationToken)
     {
         using var scope = scopeFactory.CreateScope();
         var scopedDb = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
         var scopedClickHouse = scope.ServiceProvider.GetRequiredService<IClickHouseAdapter>();
         var scopedAudit = scope.ServiceProvider.GetRequiredService<IAuditService>();
         var scopedOptions = scope.ServiceProvider.GetRequiredService<IOptions<ChoboBackupRestoreOptions>>();
+        var scopedQueue = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
         var scopedTestHooks = scope.ServiceProvider.GetRequiredService<ITestHookCoordinator>();
         var scopedStorage = scope.ServiceProvider.GetRequiredService<IBackupStorageOperations>();
 
         var backup = await scopedDb.Backups
-            .Include(x => x.SourceCluster)
+            .Include(x => x.SourceCluster).ThenInclude(x => x!.AccessNodes)
             .Include(x => x.Target)
             .Include(x => x.Tables.Where(table => table.Id == tableId)).ThenInclude(x => x.Shards.Where(shard => shard.Id == shardId))
             .FirstAsync(x => x.Id == backupId, cancellationToken);
@@ -641,6 +668,43 @@ public sealed class BackupRunnerService(
         try
         {
             var endpoint = new ClickHouseNodeEndpoint(shard.Host, shard.Port, shard.UseTls);
+            if (string.IsNullOrWhiteSpace(shard.ClickHouseOperationId) && IsReplicatedMergeTreeEngine(table.Engine))
+            {
+                var candidates = (await scopedClickHouse.GetTopologyAsync(backup.SourceCluster!, cancellationToken))
+                    .Where(x => x.ShardNumber == shard.SourceShardNumber)
+                    .OrderBy(_ => Random.Shared.Next())
+                    .ToList();
+                var selectedCandidateIndex = -1;
+                for (var i = 0; i < candidates.Count; i++)
+                {
+                    if (!await scopedQueue.TryReserveStartedNodeAsync(BackupRestoreQueueKind.Backup, shard.Id, backup.SourceClusterId, candidates[i].Endpoint, isForcedQueueItem, cancellationToken))
+                    {
+                        continue;
+                    }
+                    selectedCandidateIndex = i;
+                    break;
+                }
+                if (selectedCandidateIndex < 0 && candidates.Count > 0)
+                {
+                    shard.Status = BackupTableStatus.Queued;
+                    shard.StartedAt = null;
+                    await scopedDb.SaveChangesAsync(cancellationToken);
+                    await scopedQueue.ReleaseStartedAsync(BackupRestoreQueueKind.Backup, shard.Id, cancellationToken);
+                    return;
+                }
+                if (selectedCandidateIndex >= 0)
+                {
+                    var selectedCandidate = candidates[selectedCandidateIndex];
+                    endpoint = selectedCandidate.Endpoint;
+                    shard.SourceShardName = selectedCandidate.ShardName;
+                    shard.ReplicaNumber = selectedCandidate.ReplicaNumber;
+                    shard.Host = selectedCandidate.Host;
+                    shard.Port = selectedCandidate.Port;
+                    shard.UseTls = selectedCandidate.UseTls;
+                    await scopedDb.SaveChangesAsync(cancellationToken);
+                }
+            }
+            await scopedQueue.MarkStartedAsync(BackupRestoreQueueKind.Backup, shard.Id, endpoint, cancellationToken);
             if (!string.IsNullOrWhiteSpace(shard.ClickHouseOperationId))
             {
                 var status = await scopedClickHouse.GetOperationStatusAsync(endpoint, backup.SourceCluster!, shard.ClickHouseOperationId, cancellationToken);
@@ -662,6 +726,7 @@ public sealed class BackupRunnerService(
                     shard.BackupSizeBytes = resumedBackupSizeBytes;
                     await scopedDb.SaveChangesAsync(cancellationToken);
                     await scopedAudit.RecordAsync("shard-succeeded", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { table.Database, table.Table, sourceShard = shard.SourceShardNumber, clickHouseOperationId = shard.ClickHouseOperationId, shard.ClickHouseStatus, shard.BackupSizeBytes });
+                    await scopedQueue.MarkCompletedAsync(BackupRestoreQueueKind.Backup, shard.Id, cancellationToken);
                     return;
                 }
 
@@ -693,6 +758,7 @@ public sealed class BackupRunnerService(
             shard.BackupSizeBytes = backupSizeBytes;
             await scopedDb.SaveChangesAsync(cancellationToken);
             await scopedAudit.RecordAsync("shard-succeeded", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { table.Database, table.Table, sourceShard = shard.SourceShardNumber, clickHouseOperationId = shard.ClickHouseOperationId, shard.ClickHouseStatus, shard.BackupSizeBytes });
+            await scopedQueue.MarkCompletedAsync(BackupRestoreQueueKind.Backup, shard.Id, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -707,6 +773,7 @@ public sealed class BackupRunnerService(
             shard.CompletedAt = DateTimeOffset.UtcNow;
             await scopedDb.SaveChangesAsync(CancellationToken.None);
             await scopedAudit.RecordAsync("shard-failed", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { error = ex.Message, sourceShard = shard.SourceShardNumber, clickHouseOperationId = shard.ClickHouseOperationId });
+            await scopedQueue.MarkCompletedAsync(BackupRestoreQueueKind.Backup, shard.Id, CancellationToken.None);
         }
     }
 
@@ -897,8 +964,11 @@ public sealed class BackupRunnerService(
         }
     }
     private int EffectiveMaxDop(ClickHouseClusterEntity cluster) =>
-        Math.Max(1, cluster.BackupRestoreMaxDop is > 0 ? cluster.BackupRestoreMaxDop.Value : options.Value.MaxDop <= 0 ? 3 : options.Value.MaxDop);
+        Math.Max(1, cluster.BackupRestoreMaxDop > 0 ? cluster.BackupRestoreMaxDop : options.Value.MaxDop <= 0 ? 3 : options.Value.MaxDop);
 
+
+    private static bool IsReplicatedMergeTreeEngine(string engine) =>
+        engine.Contains("Replicated", StringComparison.OrdinalIgnoreCase) && engine.Contains("MergeTree", StringComparison.OrdinalIgnoreCase);
     private static bool IsMergeTreeDataEngine(string engine) =>
         engine.EndsWith("MergeTree", StringComparison.OrdinalIgnoreCase);
 
@@ -1046,6 +1116,8 @@ public sealed class BackupRunnerService(
         return options;
     }
 }
+
+
 
 
 

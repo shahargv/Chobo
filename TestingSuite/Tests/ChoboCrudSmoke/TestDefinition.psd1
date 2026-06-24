@@ -128,7 +128,7 @@
         @{
             Name = 'add-cluster'
             Type = 'Cli'
-            Args = @('clusters', 'add', '--name', 'crud-source-old', '--mode', 'Cluster', '--node', 'source-cluster:9000', '--username', 'default', '--password', 'secret')
+            Args = @('clusters', 'add', '--name', 'crud-source-old', '--mode', 'Cluster', '--node', 'source-cluster:9000', '--username', 'default', '--password', 'secret', '--backup-restore-maxdop', '2')
             SaveJsonAs = 'cluster'
             ExpectJson = @(
                 @{ Path = 'name'; Equals = 'crud-source-old' }
@@ -382,7 +382,7 @@
         @{
             Name = 'removed-cluster-cannot-be-updated'
             Type = 'Cli'
-            Args = @('clusters', 'update', '--id', '{cluster.id}', '--name', 'removed-cluster', '--mode', 'SingleInstance', '--host', '{source.Host}')
+            Args = @('clusters', 'update', '--id', '{cluster.id}', '--name', 'removed-cluster', '--mode', 'SingleInstance', '--host', '{source.Host}', '--backup-restore-maxdop', '2')
             ExpectExitCode = 1
             ExpectTextContains = 'Not Found'
         }

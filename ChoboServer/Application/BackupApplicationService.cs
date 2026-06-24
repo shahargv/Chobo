@@ -11,6 +11,7 @@ namespace ChoboServer.Application;
 public sealed class BackupApplicationService(
     ChoboDbContext db,
     IBackupRestoreQueues queues,
+    BackupRestoreQueueApplicationService queueItems,
     IClickHouseAdapter clickHouse,
     IAuditService audit,
     ActorContext actor,
@@ -353,7 +354,7 @@ public sealed class BackupApplicationService(
                 shard.CompletedAt ??= now;
             }
         }
-
+        await queueItems.CompleteOperationAsync(BackupRestoreQueueKind.Backup, backup.Id, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         var killResults = await KillBackupOperationsAsync(backup, cancellationToken);
         await audit.RecordAsync("canceled", AuditEntityType.Backup, id.ToString(), new { operationId = id, actor.UserId, actor.ActorName, killed = killResults.Killed, killFailures = killResults.Failures });
@@ -502,4 +503,6 @@ public sealed class BackupApplicationService(
         return options;
     }
 }
+
+
 

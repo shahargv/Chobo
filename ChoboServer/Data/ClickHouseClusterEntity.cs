@@ -12,7 +12,11 @@ public sealed class ClickHouseClusterEntity
     public Guid? EncryptedUserNameKeyId { get; set; }
     public string? EncryptedPassword { get; set; }
     public Guid? EncryptedPasswordKeyId { get; set; }
-    public int? BackupRestoreMaxDop { get; set; }
+    public int BackupRestoreMaxDop { get; set; } = 3;
+    public int NodeMaxDopDefault { get; set; } = 1;
+    public string NodeMaxDopOverridesJson { get; set; } = "[]";
+    public int ShardMaxDopDefault { get; set; } = 1;
+    public string ShardMaxDopOverridesJson { get; set; } = "[]";
     public string? ClickHouseClusterName { get; set; }
     public bool IsDeleted { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;

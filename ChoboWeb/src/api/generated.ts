@@ -19,6 +19,10 @@ export interface BackupMetadataRecoveryItem { backupId: string; status: BackupRu
 export interface BackupMetadataRecoveryResult { scannedManifestCount: number; importedBackupCount: number; updatedBackupCount: number; skippedManifestCount: number; items: BackupMetadataRecoveryItem[]; errors: string[]; }
 export interface BackupPolicyDto { id: string; name: string; sourceClusterId: string; targetId: string; contentMode: BackupContentMode; selectorJsonVersion: number; selector: PolicySelector; retention: BackupRetentionDto; failedBackupRetentionMode: FailedBackupRetentionMode; isSystemDefault: boolean; isDeleted: boolean; createdAt: string; updatedAt?: string | null; }
 export interface BackupPolicyExport { id: string; name: string; sourceClusterId: string; targetId: string; contentMode: BackupContentMode; selectorJsonVersion: number; selector: PolicySelector; retention: BackupRetentionDto; failedBackupRetentionMode: FailedBackupRetentionMode; isSystemDefault: boolean; isDeleted: boolean; createdAt: string; updatedAt?: string | null; deletedAt?: string | null; }
+export interface BackupRestoreQueueItemDto { id: string; kind: BackupRestoreQueueKind; status: BackupRestoreQueueStatus; position: number; isForced: boolean; forcedAt: string; forcedByUserId: string; forcedByName: string; operationId: string; tableId: string; shardId: string; clusterId: string; database: string; table: string; logicalShardNumber: number; logicalShardName: string; nodeHost: string; nodePort: number; nodeUseTls: boolean; clickHouseOperationId?: string | null; clickHouseStatus?: string | null; createdAt: string; startedAt?: string | null; completedAt: string; blockingReason: string; error?: string | null; }
+export type BackupRestoreQueueKind = "All" | "Backup" | "Restore";
+export type BackupRestoreQueueMoveDirection = "Up" | "Down" | "Top" | "Bottom";
+export type BackupRestoreQueueStatus = "Queued" | "Running" | "Succeeded" | "PartiallySucceeded" | "Failed" | "Skipped" | "Canceled";
 export interface BackupRetentionDto { fullRetentionMinutes?: number | null; incrementalRetentionMinutes?: number | null; minBackupsToKeep: number; minFullBackupsToKeep: number; retentionMinutes?: number | null; }
 export type BackupRunStatus = "Queued" | "Running" | "Succeeded" | "PartiallySucceeded" | "Failed" | "Canceled" | "ManualDeleteRequested" | "ManualDeleted" | "FailedBackupDeleteRequested" | "FailedBackupDeletedByGarbageCollector" | "BackupExpiredDeleteStarted" | "BackupExpiredDeleted";
 export interface BackupScheduleDto { id: string; name: string; policyId: string; backupType: BackupType; cronExpression: string; timeZoneId: string; isEnabled: boolean; missedRunGracePeriod?: string | null; description?: string | null; isSystemDefault: boolean; isDeleted: boolean; createdAt: string; updatedAt?: string | null; }
@@ -39,9 +43,11 @@ export interface ClickHouseClusterNamesDto { clusterId: string; names: string[];
 export interface ClickHouseClusterShardDto { shardNumber: number; shardName: string; replicaNumber: number; host: string; port: number; useTls: boolean; errorsCount: number; }
 export interface ClickHouseClusterTopologyDto { clusterId: string; shards: ClickHouseClusterShardDto[]; }
 export interface ClusterConnectionTestResult { clusterId: string; succeeded: boolean; message: string; }
-export interface ClusterDto { id: string; name: string; mode: ClusterMode; accessNodes: AccessNodeDto[]; backupRestoreMaxDop?: number | null; clickHouseClusterName?: string | null; isDeleted: boolean; createdAt: string; updatedAt?: string | null; }
-export interface ClusterExport { id: string; name: string; mode: ClusterMode; clickHouseClusterName?: string | null; accessNodes: AccessNodeDto[]; encryptedUserName?: string | null; encryptedUserNameKeyId?: string | null; encryptedPassword?: string | null; encryptedPasswordKeyId?: string | null; backupRestoreMaxDop?: number | null; isDeleted: boolean; createdAt: string; updatedAt?: string | null; deletedAt?: string | null; }
+export interface ClusterDto { id: string; name: string; mode: ClusterMode; accessNodes: AccessNodeDto[]; backupRestoreMaxDop: number; nodeMaxDopDefault: number; nodeMaxDopOverrides: ClusterNodeMaxDopOverrideDto[]; shardMaxDopDefault: number; shardMaxDopOverrides: ClusterShardMaxDopOverrideDto[]; clickHouseClusterName?: string | null; isDeleted: boolean; createdAt: string; updatedAt?: string | null; }
+export interface ClusterExport { id: string; name: string; mode: ClusterMode; clickHouseClusterName?: string | null; accessNodes: AccessNodeDto[]; encryptedUserName?: string | null; encryptedUserNameKeyId?: string | null; encryptedPassword?: string | null; encryptedPasswordKeyId?: string | null; backupRestoreMaxDop?: number | null; nodeMaxDopDefault: number; nodeMaxDopOverrides: ClusterNodeMaxDopOverrideDto[]; shardMaxDopDefault: number; shardMaxDopOverrides: ClusterShardMaxDopOverrideDto[]; isDeleted: boolean; createdAt: string; updatedAt?: string | null; deletedAt?: string | null; }
 export type ClusterMode = "SingleInstance" | "Cluster";
+export interface ClusterNodeMaxDopOverrideDto { host: string; port: number; useTls: boolean; maxDop: number; }
+export interface ClusterShardMaxDopOverrideDto { shardNumber: number; shardName: string; maxDop: number; }
 export interface CreateAccessTokenRequest { name: string; }
 export interface CreateAccessTokenResponse { tokenId: string; userId: string; name: string; accessToken: string; }
 export interface CreateUserRequest { userName?: string | null; }
@@ -58,6 +64,7 @@ export interface InstallRequest { adminUser: string; }
 export interface InstallResponse { userId: string; userName?: string | null; accessToken: string; }
 export interface InstallStatusDto { requiresInstallation: boolean; message: string; }
 export interface ManualBackupRequest { clusterId: string; targetId: string; selector: PolicySelector; backupType: BackupType; policyId?: string | null; schemaOnly: boolean; }
+export interface MoveQueueItemRequest { direction: BackupRestoreQueueMoveDirection; beforeItemId?: string | null; }
 export interface PolicyEvaluationDto { policyId: string; policyName?: string | null; sourceClusterId: string; selectorJsonVersion: number; selector: PolicySelector; tables: PolicyInventoryTable[]; }
 export interface PolicyEvaluationRequest { inventory: PolicyInventory; }
 export interface PolicyInventory { tables: PolicyInventoryTable[]; }
@@ -91,7 +98,7 @@ export interface ServerVersionDto { productName: string; productVersion: string;
 export interface StorageConnectionTestResult { targetId: string; targetType: BackupTargetType; succeeded: boolean; message: string; }
 export interface UpdateClusterCredentialsRequest { userName?: string | null; password?: string | null; }
 export interface UpsertAccessNodeRequest { host: string; port: number; useTls: boolean; }
-export interface UpsertClusterRequest { name: string; mode: ClusterMode; accessNodes: UpsertAccessNodeRequest[]; userName?: string | null; password?: string | null; backupRestoreMaxDop?: number | null; clickHouseClusterName?: string | null; }
+export interface UpsertClusterRequest { name: string; mode: ClusterMode; accessNodes: UpsertAccessNodeRequest[]; userName?: string | null; password?: string | null; backupRestoreMaxDop: number; clickHouseClusterName?: string | null; nodeMaxDopDefault: number; nodeMaxDopOverrides: ClusterNodeMaxDopOverrideDto[]; shardMaxDopDefault: number; shardMaxDopOverrides: ClusterShardMaxDopOverrideDto[]; }
 export interface UpsertPolicyRequest { name: string; sourceClusterId: string; targetId: string; selector: PolicySelector; contentMode: BackupContentMode; retention: BackupRetentionDto; failedBackupRetentionMode: FailedBackupRetentionMode; }
 export interface UpsertS3TargetRequest { name: string; endpoint: string; region: string; bucket: string; pathPrefix?: string | null; forcePathStyle: boolean; accessKey?: string | null; secretKey?: string | null; }
 export interface UpsertScheduleRequest { name: string; policyId: string; backupType: BackupType; cronExpression: string; timeZoneId: string; isEnabled: boolean; missedRunGracePeriod?: string | null; description?: string | null; }
@@ -116,6 +123,10 @@ export const openApiSchemaNames = [
   "BackupMetadataRecoveryResult",
   "BackupPolicyDto",
   "BackupPolicyExport",
+  "BackupRestoreQueueItemDto",
+  "BackupRestoreQueueKind",
+  "BackupRestoreQueueMoveDirection",
+  "BackupRestoreQueueStatus",
   "BackupRetentionDto",
   "BackupRunStatus",
   "BackupScheduleDto",
@@ -139,6 +150,8 @@ export const openApiSchemaNames = [
   "ClusterDto",
   "ClusterExport",
   "ClusterMode",
+  "ClusterNodeMaxDopOverrideDto",
+  "ClusterShardMaxDopOverrideDto",
   "CreateAccessTokenRequest",
   "CreateAccessTokenResponse",
   "CreateUserRequest",
@@ -155,6 +168,7 @@ export const openApiSchemaNames = [
   "InstallResponse",
   "InstallStatusDto",
   "ManualBackupRequest",
+  "MoveQueueItemRequest",
   "PolicyEvaluationDto",
   "PolicyEvaluationRequest",
   "PolicyInventory",

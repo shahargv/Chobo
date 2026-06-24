@@ -56,7 +56,7 @@ public sealed class ClusterCommands : CliSubject
 
     private static UpsertClusterRequest Request(OptionBag options)
     {
-        var required = options.Require("--name");
+        var required = options.Require("--name", "--backup-restore-maxdop");
         if (options.Optional("--node") is null && options.Optional("--host") is null)
         {
             throw new InvalidOperationException("Missing required options: --host or --node.");
@@ -80,7 +80,35 @@ public sealed class ClusterCommands : CliSubject
             nodes,
             options.Optional("--username"),
             options.Optional("--password"),
-            options.Optional("--backup-restore-maxdop") is { } maxDop ? int.Parse(maxDop) : null,
-            options.Optional("--clickhouse-cluster-name") ?? options.Optional("--cluster-name-in-clickhouse"));
+            int.Parse(required["--backup-restore-maxdop"]),
+            options.Optional("--clickhouse-cluster-name") ?? options.Optional("--cluster-name-in-clickhouse"),
+            options.Int("--node-maxdop", 1),
+            ParseNodeOverrides(options.Optional("--node-maxdop-overrides")),
+            options.Int("--shard-maxdop", 1),
+            ParseShardOverrides(options.Optional("--shard-maxdop-overrides")));
     }
+
+    private static IReadOnlyList<ClusterNodeMaxDopOverrideDto>? ParseNodeOverrides(string? value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? null
+            : value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+                .Select(item =>
+                {
+                    var parts = item.Split('=', 2, StringSplitOptions.TrimEntries);
+                    var endpoint = parts[0].Split(':', StringSplitOptions.TrimEntries);
+                    return new ClusterNodeMaxDopOverrideDto(endpoint[0], endpoint.Length > 1 ? int.Parse(endpoint[1]) : 9000, false, int.Parse(parts[1]));
+                })
+                .ToList();
+
+    private static IReadOnlyList<ClusterShardMaxDopOverrideDto>? ParseShardOverrides(string? value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? null
+            : value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+                .Select(item =>
+                {
+                    var parts = item.Split('=', 2, StringSplitOptions.TrimEntries);
+                    var shardNumber = int.Parse(parts[0]);
+                    return new ClusterShardMaxDopOverrideDto(shardNumber, null, int.Parse(parts[1]));
+                })
+                .ToList();
 }

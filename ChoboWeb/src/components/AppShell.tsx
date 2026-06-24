@@ -16,6 +16,7 @@ import {
   Server,
   Settings2,
   Trash2,
+  ListOrdered,
   Users
 } from "lucide-react";
 import { useApi, type Toast } from "../api-context";
@@ -24,6 +25,7 @@ const navItems = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
   { to: "/backups", label: "Backups", icon: Archive },
   { to: "/restores", label: "Restores", icon: RotateCcw },
+  { to: "/queue", label: "Queue", icon: ListOrdered },
   { to: "/policies", label: "Policies", icon: Settings2 },
   { to: "/schedules", label: "Schedules", icon: CalendarClock },
   { to: "/schema", label: "Schema Browser", icon: FileCode2 },

@@ -39,7 +39,7 @@
         @{
             Name = 'add-source-cluster'
             Type = 'Cli'
-            Args = @('clusters', 'add', '--name', 'source', '--mode', 'SingleInstance', '--host', '{source.Host}')
+            Args = @('clusters', 'add', '--name', 'source', '--mode', 'SingleInstance', '--host', '{source.Host}', '--backup-restore-maxdop', '1')
             SaveJsonAs = 'sourceCluster'
         }
         @{
