@@ -55,3 +55,6 @@ Start with a declarative test unless the scenario needs custom PowerShell logic.
 6. Run one final passing verification with `-CleanTestResults`.
 
 Use `TestingSuite/README.md` as the detailed reference for supported resources, tokens, declarative step fields, JSON assertions, and custom test helpers.
+
+Large debug-only scenarios should set `ExcludeFromRunAll = $true`. `LargeOnTimeBackupGc` is the reference for loading a public ClickHouse OnTime S3 dataset slice, optimizing it, validating full and no-op incremental backup behavior, and exercising explicit large S3 garbage collection; run it explicitly with long timeouts when debugging cleanup behavior.
+

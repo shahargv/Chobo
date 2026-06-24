@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "action": "Include",
+      "database": { "kind": "Exact", "value": "large_ontime_source" },
+      "table": { "kind": "Exact", "value": "ontime" }
+    }
+  ]
+}

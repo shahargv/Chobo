@@ -14,6 +14,8 @@ Every pull request runs:
 
 Pull requests do not build Docker images and never push Docker images.
 
+Before publishing a release, run the local release validation checklist in the release skill, including the explicit `LargeOnTimeBackupGc` system test and the `large-table` UI scenario. The large OnTime checks are not part of normal PR or run-all validation because they intentionally download and process several GB of data.
+
 Use labels for exceptional cases:
 
 - `skip-ci`: skips PR validation jobs for the pull request.
@@ -77,3 +79,4 @@ Release builds pass:
 ```
 
 `/api/v1/server/version`, export envelopes, and stored schema product version use the stamped assembly informational version. This keeps release version management in CI instead of requiring a source change for every release.
+

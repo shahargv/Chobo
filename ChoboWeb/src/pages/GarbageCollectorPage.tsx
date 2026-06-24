@@ -7,7 +7,7 @@ import { DataTable, Input, Page, Stat, Status } from "../components/ui";
 import { formatTime } from "../utils/format";
 
 const cleanupActions = ["garbage", "cleanup", "delete", "retention"];
-const gcLogCategories = ["BackupsGarbageCollectorBackgroundService", "BackupCleanupService"];
+const gcLogCategories = ["BackupsGarbageCollectorBackgroundService", "BackupCleanupService", "S3BackupStorageOperations"];
 
 type AuditWindow = { startTime: string; endTime: string; limit: number };
 
@@ -59,8 +59,7 @@ export function GarbageCollectorPage() {
     entry.entityType === "backup-garbage-collector" ||
     (entry.entityType === "backup" && cleanupActions.some((action) => entry.action.includes(action))));
   const gcLogs = (logs.data?.items ?? []).filter((entry) =>
-    gcLogCategories.some((category) => entry.category.includes(category)) ||
-    cleanupActions.some((action) => entry.message.toLowerCase().includes(action)));
+    gcLogCategories.some((category) => entry.category.includes(category)));
   const updateAuditWindow = (patch: Partial<AuditWindow>) => setAuditWindow((currentWindow) => ({ ...currentWindow, ...patch }));
   const resetToLastHour = () => setAuditWindow(defaultAuditWindow());
 

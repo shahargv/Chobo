@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('bootstrap','cluster','storage','policy','schedule-edit','backup','restore','details','logs-audit','failure','full')]
+    [ValidateSet('bootstrap','cluster','storage','policy','schedule-edit','backup','restore','details','logs-audit','failure','full','large-table')]
     [string]$Scenario = 'full',
     [string]$TestId,
     [int]$HostPort = 0,
@@ -27,6 +27,10 @@ function Get-FreeTcpPort {
 if ($HostPort -le 0) { $HostPort = Get-FreeTcpPort }
 $ProjectName = ('choboui' + ($TestId -replace '[^a-zA-Z0-9]', '')).ToLowerInvariant()
 if ($ProjectName.Length -gt 48) { $ProjectName = $ProjectName.Substring(0, 48) }
+$isLargeTableScenario = $Scenario -eq 'large-table'
+$retentionInterval = if ($isLargeTableScenario) { '12:00:00' } else { '00:00:01' }
+$garbageCollectorInterval = if ($isLargeTableScenario) { '12:00:00' } else { '00:00:01' }
+$sourceSetupTimeoutSeconds = if ($isLargeTableScenario) { 7200 } else { 60 }
 
 $composeFile = Join-Path $ComposeRoot 'docker-compose.ui.yml'
 $repoPath = $RepoRoot.Replace('\', '/')
@@ -101,10 +105,12 @@ services:
       Chobo__DataDirectory: /tmp/chobo-data
       Chobo__BackupRestore__SchedulerInterval: "00:00:01"
       Chobo__BackupRestore__PollInterval: "00:00:01"
-      Chobo__RetentionManagement__Interval: "00:00:01"
+      Chobo__RetentionManagement__Interval: "$retentionInterval"
       Chobo__RetentionManagement__MaxDop: "2"
-      Chobo__BackupsGarbageCollector__Interval: "00:00:01"
+      Chobo__BackupsGarbageCollector__Interval: "$garbageCollectorInterval"
       Chobo__BackupsGarbageCollector__MaxDop: "2"
+      Chobo__BackupStorageOperations__S3RequestTimeout: "00:10:00"
+      Chobo__BackupStorageOperations__S3MaxErrorRetry: "5"
     ports:
       - "127.0.0.1:$HostPort`:8080"
     depends_on:
@@ -190,7 +196,26 @@ do {
 } while (-not $clickhouseReady -and (Get-Date) -lt $deadline)
 if (-not $clickhouseReady) { throw 'clickhouse-source did not become ready.' }
 
-Invoke-Compose -Args @('exec', '-T', 'clickhouse-source', 'clickhouse-client', '--multiquery', '-q', $setupSql) -Name 'source-setup' -TimeoutSeconds 60 | Out-Null
+if ($isLargeTableScenario) {
+    $setupSql = @"
+CREATE DATABASE IF NOT EXISTS large_ontime_source ENGINE = Atomic;
+DROP TABLE IF EXISTS large_ontime_source.ontime SYNC;
+CREATE TABLE large_ontime_source.ontime
+ENGINE = MergeTree
+ORDER BY (Year, Quarter, Month, DayofMonth, FlightDate, IATA_CODE_Reporting_Airline)
+AS
+SELECT *
+FROM s3('https://clickhouse-public-datasets.s3.amazonaws.com/ontime/csv_by_year/{2000..2010}.csv.gz', 'CSVWithNames')
+SETTINGS
+    input_format_csv_empty_as_default = 1,
+    schema_inference_make_columns_nullable = 0,
+    max_insert_threads = 8;
+OPTIMIZE TABLE large_ontime_source.ontime FINAL;
+"@
+    $setupSql | Set-Content -LiteralPath $setupSqlPath -Encoding UTF8
+}
+
+Invoke-Compose -Args @('exec', '-T', 'clickhouse-source', 'clickhouse-client', '--multiquery', '-q', $setupSql) -Name 'source-setup' -TimeoutSeconds $sourceSetupTimeoutSeconds | Out-Null
 
 $envFile = Join-Path $UiRoot 'ui-env.json'
 $envInfo = [ordered]@{
@@ -218,4 +243,5 @@ $result = [pscustomobject]@{
 }
 $result | ConvertTo-Json -Depth 5 | Write-Host
 $result
+
 
