@@ -97,3 +97,14 @@ Open Logs and Audit. Test recent records, search/filter affordances, time window
 ## failure
 
 Use one intentionally bad value at a time, such as `http://backup-s3:9999` for storage or `missing-clickhouse:9000` for cluster. Verify the UI gives a clear failure message, remains recoverable, and screenshots/report capture the failure.
+## large-table
+
+Prerequisite: fresh `start-ui-env.ps1 -Scenario large-table` environment. This setup loads and optimizes the ClickHouse public OnTime dataset years 2000-2010, so it is intentionally slow and should not be part of normal UI smoke runs.
+
+1. Bootstrap, create source and restore clusters, create MinIO storage, and create a policy for `large_ontime_source.ontime`.
+2. Execute a full backup from the UI and verify the Backups list/detail experience remains usable for a multi-GB table: queued/running/succeeded states, table/shard detail, size, related logs, and audit context.
+3. Restore the large backup from the UI into `large_ontime_restore.ontime_restored`; verify the wizard mapping grid, review screen, confirmation dialog, restore history, and restore detail remain understandable.
+4. Verify restored source/restored row-count/date/checksum summary outside the browser so the UI flow is tied to real data correctness.
+5. Request backup deletion from the UI, cancel once, confirm once, then use the Garbage Collector page to run the queued item and verify the cleanup status/log/audit experience.
+6. Do not check raw S3 object deletion in this GUI scenario; `TestingSuite/Tests/LargeOnTimeBackupGc` owns direct MinIO object-list assertions.
+

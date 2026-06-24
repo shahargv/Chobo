@@ -27,6 +27,7 @@ public static class ServiceCollectionExtensions
         services.AddOptions<ChoboDataRetentionOptions>().Bind(configuration.GetSection("Chobo:DataRetention"));
         services.AddOptions<ChoboSqliteSelfBackupOptions>().Bind(configuration.GetSection("Chobo:SqliteSelfBackup"));
         services.AddOptions<ChoboBackupRestoreOptions>().Bind(configuration.GetSection("Chobo:BackupRestore"));
+        services.AddOptions<BackupStorageOperationOptions>().Bind(configuration.GetSection("Chobo:BackupStorageOperations"));
         services.AddOptions<RetentionManagementOptions>().Bind(configuration.GetSection("Chobo:RetentionManagement"));
         services.AddOptions<BackupsGarbageCollectorOptions>().Bind(configuration.GetSection("Chobo:BackupsGarbageCollector"));
         services.AddOptions<ChoboWebOptions>().Bind(configuration.GetSection("Chobo:Web"));
@@ -179,3 +180,4 @@ public static class ServiceCollectionExtensions
         }
     }
 }
+

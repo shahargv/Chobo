@@ -24,6 +24,12 @@ const data = {
   restore: { database: 'backup_single_restore', table: 'restored_orders' }
 };
 
+const largeTableData = {
+  storage: { name: 'ui-large-minio' },
+  policy: { name: 'ui-large-ontime-policy', database: 'large_ontime_source', table: 'ontime' },
+  restore: { database: 'large_ontime_restore', table: 'ontime_restored' }
+};
+
 const plans = {
   bootstrap: ['bootstrap'],
   cluster: ['bootstrap', 'cluster'],
@@ -35,6 +41,7 @@ const plans = {
   details: ['bootstrap', 'cluster', 'storage', 'policy', 'backup', 'restore', 'details'],
   'logs-audit': ['bootstrap', 'cluster', 'storage', 'policy', 'backup', 'restore', 'logs-audit'],
   failure: ['bootstrap', 'failure'],
+  'large-table': ['bootstrap', 'cluster', 'storage', 'policy', 'backup', 'restore', 'backup-delete-confirmation', 'gc-cleanup-ui', 'logs-audit'],
   full: ['bootstrap', 'cluster', 'storage', 'policy', 'schedule-edit', 'backup', 'schema-browser', 'restore', 'logs-audit', 'backup-delete-confirmation']
 };
 
@@ -98,6 +105,14 @@ async function main() {
   const env = await readEnv(args);
   const scenario = args.scenario ?? env.Scenario ?? 'full';
   if (!plans[scenario]) throw new Error(`Unsupported scenario '${scenario}'.`);
+  const isLargeTableScenario = scenario === 'large-table';
+  if (isLargeTableScenario) {
+    Object.assign(data.storage, largeTableData.storage);
+    Object.assign(data.policy, largeTableData.policy);
+    Object.assign(data.restore, largeTableData.restore);
+  }
+  const backupTimeoutMs = isLargeTableScenario ? 3 * 60 * 60 * 1000 : 120000;
+  const restoreTimeoutMs = isLargeTableScenario ? 3 * 60 * 60 * 1000 : 120000;
 
   const screenshotsDir = path.join(env.UiRoot, 'screenshots');
   await fs.rm(screenshotsDir, { recursive: true, force: true });
@@ -378,14 +393,14 @@ async function main() {
     await waitForItem('backups', () => true, 'a queued backup run', 30000);
     await go('/backups');
     await screenshot('backup-queued', 'Manual policy backup was queued from the UI and the backups screen is reachable.');
-    const backup = await waitForStatus('backups', 'Succeeded', 120000);
+    const backup = await waitForStatus('backups', 'Succeeded', backupTimeoutMs);
     state.backupId = backup.id;
     await go('/backups');
     await page.locator('tbody tr').filter({ hasText: /Succeeded/i }).first().waitFor({ timeout: 30000 });
     await screenshot('backup-succeeded-list', 'Backups list shows the run succeeded.');
     await page.getByRole('link', { name: /Details/i }).first().click();
     await expectText(/Backup detail|Tables and shards/i, 30000);
-    await screenshot('backup-details', 'Backup detail drawer exposes status, table/shard information, related logs, and audit sections.');
+    await screenshot('backup-details', isLargeTableScenario ? 'Large backup detail remains usable and exposes size, table/shard state, related logs, and audit while handling a multi-GB table.' : 'Backup detail drawer exposes status, table/shard information, related logs, and audit sections.');
   }
 
 
@@ -416,7 +431,7 @@ async function main() {
     notes.push({ status: 'pass', text: 'Schema Browser export buttons produced downloadable SQL files for all schema and the selected database.' });
   }
   async function runRestore() {
-    await createExistingRestoreTarget();
+    if (!isLargeTableScenario) await createExistingRestoreTarget();
     await go('/restores/start');
     await page.locator('input[type="radio"]').first().check();
     await screenshot('restore-source-backup', 'Restore wizard starts by choosing the successful backup recovery point.');
@@ -430,23 +445,23 @@ async function main() {
     await mappingRow.locator('input[type="checkbox"]').first().check();
     await mappingRow.locator('input').nth(1).fill(data.restore.database);
     await mappingRow.locator('input').nth(2).fill(data.restore.table);
-    await mappingRow.getByLabel(/Append to existing table/i).check();
-    await screenshot('restore-scope-mapping', 'Restore scope maps into a pre-existing target table and enables append, making this a destructive restore path.');
+    if (!isLargeTableScenario) await mappingRow.getByLabel(/Append to existing table/i).check();
+    await screenshot('restore-scope-mapping', isLargeTableScenario ? 'Large restore scope maps the multi-GB OnTime table to an isolated target table without the mapping grid becoming unreadable.' : 'Restore scope maps into a pre-existing target table and enables append, making this a destructive restore path.');
     await clickButton(/Continue/i);
     await screenshot('restore-confirmation-ready', 'Restore review is ready; clicking Queue restore must show a visible destructive-action confirmation.');
     await clickButton(/Queue restore/i);
     const dialog = page.getByRole('dialog', { name: /Confirm destructive restore/i });
     await dialog.waitFor({ timeout: 10000 });
-    await screenshot('restore-confirmation-dialog', 'Visible in-app confirmation dialog is shown before appending into an existing restore table.');
+    await screenshot('restore-confirmation-dialog', isLargeTableScenario ? 'Visible in-app confirmation dialog is shown before queueing the large restore.' : 'Visible in-app confirmation dialog is shown before appending into an existing restore table.');
     await dialog.getByRole('button', { name: /Confirm restore/i }).click();
     await expectText(/Restore detail|Restores/i, 30000);
-    const restore = await waitForStatus('restores', 'Succeeded', 120000);
+    const restore = await waitForStatus('restores', 'Succeeded', restoreTimeoutMs);
     state.restoreId = restore.id;
     await go('/restores');
     await screenshot('restore-succeeded-list', 'Restore history shows the destructive restore succeeded after confirmation.');
     await page.getByRole('link', { name: /Details/i }).first().click();
     await expectText(/Restore detail|Tables|Succeeded/i, 30000);
-    await screenshot('restore-details', 'Restore detail page exposes terminal status and affected tables.');
+    await screenshot('restore-details', isLargeTableScenario ? 'Large restore detail exposes terminal status, affected table, logs, and audit after a multi-GB restore.' : 'Restore detail page exposes terminal status and affected tables.');
     await verifyRestoredRows();
   }
 
@@ -491,9 +506,36 @@ async function main() {
     await screenshot('backup-delete-confirmed', 'Accepting the delete confirmation sends confirmDestructive and the backup enters a delete state.');
   }
 
+  async function runGcCleanupUiCheck() {
+    if (!state.backupId) throw new Error('GC cleanup UI check requires a completed backup id.');
+    await go('/gc');
+    await expectText(state.backupId, 30000);
+    await screenshot('large-gc-queue-before-run', 'Garbage Collector page shows the delete-requested large backup with a focused Run item action.');
+    await page.getByRole('button', { name: /Run item/i }).first().click();
+    const deadline = Date.now() + 10 * 60 * 1000;
+    let backup = null;
+    while (Date.now() < deadline) {
+      backup = await api('GET', `backups/${state.backupId}`);
+      if (backup.status === 'ManualDeleted') break;
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+    }
+    if (!backup || backup.status !== 'ManualDeleted') throw new Error(`Large backup did not reach ManualDeleted after GC. Last status: ${backup?.status}`);
+    await go('/gc');
+    await screenshot('large-gc-after-run', 'Garbage Collector page shows cleanup completed for the large backup and keeps GC-specific logs visible.');
+    notes.push({ status: 'pass', text: `Large backup ${state.backupId} reached ManualDeleted through the GC page flow.` });
+  }
   async function verifyRestoredRows() {
     if (!env.ComposeFile || !env.ProjectName) {
       notes.push({ status: 'warn', text: 'Skipped restored-row SQL verification because ComposeFile/ProjectName were not in env.' });
+      return;
+    }
+    if (isLargeTableScenario) {
+      const sourceQuery = `SELECT count(), min(FlightDate), max(FlightDate), sum(cityHash64(Year, Month, DayofMonth, FlightDate, Reporting_Airline, Flight_Number_Reporting_Airline, Origin, Dest)) FROM ${data.policy.database}.${data.policy.table} FORMAT TSV`;
+      const restoreQuery = `SELECT count(), min(FlightDate), max(FlightDate), sum(cityHash64(Year, Month, DayofMonth, FlightDate, Reporting_Airline, Flight_Number_Reporting_Airline, Origin, Dest)) FROM ${data.restore.database}.${data.restore.table} FORMAT TSV`;
+      const source = (await execFileAsync('docker', ['compose', '-f', env.ComposeFile, '-p', env.ProjectName, 'exec', '-T', 'clickhouse-source', 'clickhouse-client', '-q', sourceQuery], { cwd: env.RepoRoot, timeout: 300000 })).stdout.trim().replace(/\r/g, '');
+      const restored = (await execFileAsync('docker', ['compose', '-f', env.ComposeFile, '-p', env.ProjectName, 'exec', '-T', 'clickhouse-restore', 'clickhouse-client', '-q', restoreQuery], { cwd: env.RepoRoot, timeout: 300000 })).stdout.trim().replace(/\r/g, '');
+      if (source !== restored) throw new Error(`Large restored table summary mismatch. Source: ${source} Restored: ${restored}`);
+      notes.push({ status: 'pass', text: `Large restored table matched source summary: ${restored}` });
       return;
     }
     const query = `SELECT id, name FROM ${data.restore.database}.${data.restore.table} ORDER BY id FORMAT CSV`;
@@ -553,6 +595,7 @@ async function main() {
       else if (step === 'details') await runDetails();
       else if (step === 'logs-audit') await runLogsAudit();
       else if (step === 'backup-delete-confirmation') await runBackupDeleteConfirmation();
+      else if (step === 'gc-cleanup-ui') await runGcCleanupUiCheck();
       else if (step === 'failure') await runFailure();
     }
     await writeArtifacts('passed');
@@ -604,16 +647,5 @@ main().catch((error) => {
   console.error(error.stack ?? error.message);
   process.exitCode = 1;
 });
-
-
-
-
-
-
-
-
-
-
-
 
 

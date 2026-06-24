@@ -4,6 +4,8 @@ using Amazon.S3;
 using Amazon.S3.Model;
 using Chobo.Contracts;
 using ChoboServer.Data;
+using ChoboServer.Options;
+using Microsoft.Extensions.Options;
 
 namespace ChoboServer.Services;
 
@@ -52,27 +54,28 @@ public sealed class BackupStorageOperations(
 
 public sealed record BackupStorageObjectInfo(string Path, long SizeBytes);
 
-public sealed class S3BackupStorageOperations(ICredentialProtector protector, Serilog.ILogger logger) : IBackupStorageOperations
+public sealed class S3BackupStorageOperations(ICredentialProtector protector, IOptions<BackupStorageOperationOptions> options, Serilog.ILogger logger) : IBackupStorageOperations
 {
     private readonly Serilog.ILogger _logger = logger.ForContext<S3BackupStorageOperations>();
 
     public async Task DeleteDirectoryAsync(BackupTargetEntity target, string directoryPath, CancellationToken cancellationToken = default)
     {
         var prefix = S3TargetUrlBuilder.StoragePath(target, directoryPath).TrimStart('/');
+        var batchSize = Math.Clamp(options.Value.S3DeleteBatchSize, 1, 1000);
+        var deletedCount = 0;
         using var client = await CreateClientAsync(target, cancellationToken);
         while (true)
         {
-            var keys = await ListKeysAsync(client, target.Bucket, prefix, cancellationToken);
+            var keys = await ListKeyPageAsync(client, target.Bucket, prefix, batchSize, cancellationToken);
             if (keys.Count == 0)
             {
-                _logger.Information("S3 directory {DirectoryPath} has no remaining objects.", directoryPath);
+                _logger.Information("S3 directory {DirectoryPath} cleanup completed. DeletedObjectCount={DeletedObjectCount}.", directoryPath, deletedCount);
                 return;
             }
 
-            foreach (var key in keys)
-            {
-                await DeleteStoredObjectAsync(client, target.Bucket, key, cancellationToken);
-            }
+            await DeleteStoredObjectsAsync(client, target.Bucket, keys, cancellationToken);
+            deletedCount += keys.Count;
+            _logger.Information("S3 directory {DirectoryPath} cleanup deleted {DeletedBatchCount} object(s). TotalDeletedObjectCount={DeletedObjectCount}.", directoryPath, keys.Count, deletedCount);
         }
     }
 
@@ -158,8 +161,20 @@ public sealed class S3BackupStorageOperations(ICredentialProtector protector, Se
         }
     }
 
-    private static async Task<IReadOnlyList<string>> ListKeysAsync(IAmazonS3 client, string bucket, string prefix, CancellationToken cancellationToken) =>
-        (await ListObjectInfoAsync(client, bucket, prefix, cancellationToken)).Select(x => x.Key).ToList();
+    private static async Task<IReadOnlyList<string>> ListKeyPageAsync(IAmazonS3 client, string bucket, string prefix, int maxKeys, CancellationToken cancellationToken)
+    {
+        var response = await client.ListObjectsV2Async(new ListObjectsV2Request
+        {
+            BucketName = bucket,
+            Prefix = prefix,
+            MaxKeys = maxKeys
+        }, cancellationToken);
+
+        return (response.S3Objects ?? Enumerable.Empty<S3Object>())
+            .Where(x => !string.IsNullOrEmpty(x.Key) && x.Key.StartsWith(prefix, StringComparison.Ordinal))
+            .Select(x => x.Key!)
+            .ToList();
+    }
 
     private static async Task<IReadOnlyList<(string Key, long SizeBytes)>> ListObjectInfoAsync(IAmazonS3 client, string bucket, string prefix, CancellationToken cancellationToken)
     {
@@ -180,6 +195,21 @@ public sealed class S3BackupStorageOperations(ICredentialProtector protector, Se
         } while (!string.IsNullOrEmpty(continuationToken));
 
         return objects;
+    }
+
+    private static async Task DeleteStoredObjectsAsync(IAmazonS3 client, string bucket, IReadOnlyList<string> storagePaths, CancellationToken cancellationToken)
+    {
+        if (storagePaths.Count == 0)
+        {
+            return;
+        }
+
+        await client.DeleteObjectsAsync(new DeleteObjectsRequest
+        {
+            BucketName = bucket,
+            Objects = storagePaths.Select(path => new KeyVersion { Key = path }).ToList(),
+            Quiet = true
+        }, cancellationToken);
     }
 
     private static async Task DeleteStoredObjectAsync(IAmazonS3 client, string bucket, string storagePath, CancellationToken cancellationToken)
@@ -213,7 +243,8 @@ public sealed class S3BackupStorageOperations(ICredentialProtector protector, Se
             ServiceURL = endpoint.ToString(),
             AuthenticationRegion = region,
             ForcePathStyle = target.ForcePathStyle,
-            Timeout = TimeSpan.FromSeconds(30)
+            Timeout = options.Value.S3RequestTimeout <= TimeSpan.Zero ? TimeSpan.FromMinutes(10) : options.Value.S3RequestTimeout,
+            MaxErrorRetry = Math.Max(0, options.Value.S3MaxErrorRetry)
         };
 
         if (string.Equals(endpoint.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase))
@@ -224,3 +255,4 @@ public sealed class S3BackupStorageOperations(ICredentialProtector protector, Se
         return new AmazonS3Client(new BasicAWSCredentials(accessKey, secretKey), config);
     }
 }
+

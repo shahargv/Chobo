@@ -106,6 +106,11 @@ CHOBO_BACKUP_RESTORE_POLL_INTERVAL
     "BackupsGarbageCollector": {
       "Interval": "01:00:00",
       "MaxDop": 2
+    },
+    "BackupStorageOperations": {
+      "S3RequestTimeout": "00:10:00",
+      "S3MaxErrorRetry": 5,
+      "S3DeleteBatchSize": 1000
     }
   }
 }
@@ -115,6 +120,9 @@ CHOBO_BACKUP_RESTORE_POLL_INTERVAL
 - `RetentionManagement:MaxDop`: maximum parallel backup cleanup operations for retention/manual deletion.
 - `BackupsGarbageCollector:Interval`: how often failed or partially succeeded backups are checked for garbage collection.
 - `BackupsGarbageCollector:MaxDop`: maximum parallel failed-backup cleanup operations.
+- `BackupStorageOperations:S3RequestTimeout`: per-request timeout for S3 storage operations, including large cleanup batches.
+- `BackupStorageOperations:S3MaxErrorRetry`: AWS SDK retry count for S3 requests.
+- `BackupStorageOperations:S3DeleteBatchSize`: objects to delete per S3 multi-object delete request. S3 allows at most 1000.
 
 Use normal .NET environment variable binding for settings without explicit aliases:
 
@@ -123,6 +131,9 @@ Chobo__RetentionManagement__Interval=00:30:00
 Chobo__RetentionManagement__MaxDop=2
 Chobo__BackupsGarbageCollector__Interval=00:30:00
 Chobo__BackupsGarbageCollector__MaxDop=2
+Chobo__BackupStorageOperations__S3RequestTimeout=00:10:00
+Chobo__BackupStorageOperations__S3MaxErrorRetry=5
+Chobo__BackupStorageOperations__S3DeleteBatchSize=1000
 ```
 
 ## Log And Audit Retention Settings
@@ -248,6 +259,11 @@ ChoboCli logs show --last 500
     "BackupsGarbageCollector": {
       "Interval": "01:00:00",
       "MaxDop": 2
+    },
+    "BackupStorageOperations": {
+      "S3RequestTimeout": "00:10:00",
+      "S3MaxErrorRetry": 5,
+      "S3DeleteBatchSize": 1000
     },
     "DataRetention": {
       "Interval": "01:00:00",

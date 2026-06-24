@@ -52,10 +52,16 @@ dotnet restore Chobo.sln
 dotnet build Chobo.sln -c Release --no-restore
 dotnet test Chobo.Tests\Chobo.Tests.csproj -c Release --no-build -v minimal --blame-hang --blame-hang-timeout 30s
 .\TestingSuite\TestManager.ps1 -TestId release-smoke-<version> -TestName SmokeCreateTables,ChoboCrudSmoke -GlobalTimeoutSeconds 1800 -TestTimeoutSeconds 300
+.\TestingSuite\TestManager.ps1 -TestId release-large-ontime-<version> -TestName LargeOnTimeBackupGc -GlobalTimeoutSeconds 10800 -TestTimeoutSeconds 9000
+$envInfo = .\.codex\skills\chobo-ui-tests\scripts\start-ui-env.ps1 -Scenario large-table -TestId release-ui-large-table-<version>
+node .\.codex\skills\chobo-ui-tests\scripts\run-ui-scenario.mjs --env $envInfo.EnvFile --scenario large-table
+.\.codex\skills\chobo-ui-tests\scripts\stop-ui-env.ps1 -EnvFile $envInfo.EnvFile
 .\scripts\Build-Artifacts.ps1 -Configuration Release -Version <version>
 ```
 
-Use the `chobo-system-tests` skill for system-test failures, log inspection, or full-suite debugging. Docker-heavy system tests should run sequentially.
+Use the `chobo-system-tests` skill for system-test failures, log inspection, or full-suite debugging. Use the `chobo-ui-tests` skill for the large-table browser scenario. Docker-heavy system and UI tests should run sequentially.
+
+Do not continue to publishing or release artifact build until both local large-table checks have passed on the release candidate. `LargeOnTimeBackupGc` is the storage correctness gate: it downloads and processes the public OnTime dataset slice, validates full and no-op incremental backup sizes, restores the incremental chain, and verifies explicit S3 garbage collection by listing MinIO/S3 objects. The `large-table` UI scenario is the operator-experience gate: it drives backup, restore, delete confirmation, and GC from Chrome and records screenshots/reports, but it intentionally leaves raw S3 object deletion proof to the system test.
 
 Check the artifact output:
 
@@ -102,3 +108,4 @@ After the GitHub Actions release workflow completes, verify:
   - `shahargv/chobo:cli-latest`
 
 If the workflow fails after partial publishing, inspect which publish steps completed before retrying. Prefer rerunning the failed workflow job only when it is clear that re-uploading release assets and repushing Docker tags is safe for that version.
+

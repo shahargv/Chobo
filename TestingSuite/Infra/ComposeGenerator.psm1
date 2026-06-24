@@ -472,12 +472,24 @@ function New-ChoboComposeEnvironment {
         $lines.Add('      CHOBO_TEST_HOOKS_ENABLED: "true"')
         $lines.Add('      ASPNETCORE_ENVIRONMENT: SystemTest')
         $lines.Add('      Chobo__DataDirectory: /tmp/chobo-data')
-        $lines.Add('      Chobo__BackupRestore__SchedulerInterval: "00:00:01"')
-        $lines.Add('      Chobo__BackupRestore__PollInterval: "00:00:01"')
-        $lines.Add('      Chobo__RetentionManagement__Interval: "00:00:01"')
-        $lines.Add('      Chobo__RetentionManagement__MaxDop: "2"')
-        $lines.Add('      Chobo__BackupsGarbageCollector__Interval: "00:00:01"')
-        $lines.Add('      Chobo__BackupsGarbageCollector__MaxDop: "2"')
+        if (-not $plan.ChoboServerEnvironment.Contains('Chobo__BackupRestore__SchedulerInterval')) {
+            $lines.Add('      Chobo__BackupRestore__SchedulerInterval: "00:00:01"')
+        }
+        if (-not $plan.ChoboServerEnvironment.Contains('Chobo__BackupRestore__PollInterval')) {
+            $lines.Add('      Chobo__BackupRestore__PollInterval: "00:00:01"')
+        }
+        if (-not $plan.ChoboServerEnvironment.Contains('Chobo__RetentionManagement__Interval')) {
+            $lines.Add('      Chobo__RetentionManagement__Interval: "00:00:01"')
+        }
+        if (-not $plan.ChoboServerEnvironment.Contains('Chobo__RetentionManagement__MaxDop')) {
+            $lines.Add('      Chobo__RetentionManagement__MaxDop: "2"')
+        }
+        if (-not $plan.ChoboServerEnvironment.Contains('Chobo__BackupsGarbageCollector__Interval')) {
+            $lines.Add('      Chobo__BackupsGarbageCollector__Interval: "00:00:01"')
+        }
+        if (-not $plan.ChoboServerEnvironment.Contains('Chobo__BackupsGarbageCollector__MaxDop')) {
+            $lines.Add('      Chobo__BackupsGarbageCollector__MaxDop: "2"')
+        }
         foreach ($entry in $plan.ChoboServerEnvironment.GetEnumerator()) {
             $escapedValue = ([string]$entry.Value).Replace('"', '\"')
             $lines.Add("      $($entry.Key): `"$escapedValue`"")
@@ -507,3 +519,4 @@ function New-ChoboComposeEnvironment {
 }
 
 Export-ModuleMember -Function New-ChoboComposeEnvironment, Get-ChoboClusterServiceName, Get-ChoboSingleServiceName, Get-ChoboKeeperServiceName
+
