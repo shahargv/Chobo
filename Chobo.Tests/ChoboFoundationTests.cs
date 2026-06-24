@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Chobo.Contracts;
 using ChoboServer;
+using ChoboServer.Application;
 using ChoboServer.BackgroundServices;
 using ChoboServer.Data;
 using ChoboServer.Options;
@@ -392,7 +393,8 @@ public sealed class ChoboFoundationTests
             ClusterMode.Cluster,
             [new UpsertAccessNodeRequest("clickhouse-1"), new UpsertAccessNodeRequest("clickhouse-2", 9440, true)],
             "default",
-            "secret"));
+            "secret",
+            3));
 
         Assert.Equal("prod", created.Name);
         Assert.Equal(2, created.AccessNodes.Count);
@@ -522,6 +524,93 @@ public sealed class ChoboFoundationTests
     }
 
     [Fact]
+    public async Task Cluster_create_requires_global_maxdop_and_defaults_node_and_shard_maxdop()
+    {
+        await using var factory = CreateFactory();
+        var client = AuthenticatedClient(factory);
+        var created = await Post<ClusterDto>(client, "/api/v1/clusters", new UpsertClusterRequest(
+            "dop-defaults",
+            ClusterMode.SingleInstance,
+            [new UpsertAccessNodeRequest("localhost")],
+            null,
+            null,
+            7));
+
+        Assert.Equal(7, created.BackupRestoreMaxDop);
+        Assert.Equal(1, created.NodeMaxDopDefault);
+        Assert.Equal(1, created.ShardMaxDopDefault);
+        Assert.Empty(created.NodeMaxDopOverrides);
+        Assert.Empty(created.ShardMaxDopOverrides);
+    }
+
+    [Fact]
+    public async Task Queue_endpoints_list_move_and_force_backup_shard_rows()
+    {
+        await using var factory = CreateFactory();
+        var client = AuthenticatedClient(factory);
+        var backupId = Guid.NewGuid();
+        var tableId = Guid.NewGuid();
+        var shard1 = Guid.NewGuid();
+        var shard2 = Guid.NewGuid();
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+            var clusterId = Guid.NewGuid();
+            db.ClickHouseClusters.Add(new ClickHouseClusterEntity
+            {
+                Id = clusterId,
+                Name = "queue-cluster",
+                Mode = ClusterMode.SingleInstance,
+                BackupRestoreMaxDop = 3,
+                CreatedAt = DateTimeOffset.UtcNow,
+                AccessNodes = [new ClickHouseAccessNodeEntity { Host = "localhost", Port = 9000 }]
+            });
+            db.Backups.Add(new BackupEntity
+            {
+                Id = backupId,
+                TriggerType = BackupTriggerType.Manual,
+                Status = BackupRunStatus.Running,
+                BackupType = BackupType.Full,
+                SourceClusterId = clusterId,
+                RequestedByName = "test",
+                CreatedAt = DateTimeOffset.UtcNow
+            });
+            db.BackupTables.Add(new BackupTableEntity
+            {
+                Id = tableId,
+                BackupId = backupId,
+                EffectiveBackupType = BackupType.Full,
+                Database = "db",
+                Table = "tbl",
+                Engine = "MergeTree",
+                DataBackedUp = true,
+                S3Path = "s3://bucket/db/tbl",
+                Status = BackupTableStatus.Queued
+            });
+            db.BackupTableShards.AddRange(
+                new BackupTableShardEntity { Id = shard1, BackupTableId = tableId, EffectiveBackupType = BackupType.Full, SourceShardNumber = 1, SourceShardName = "s1", ReplicaNumber = 1, Host = "node1", Port = 9000, S3Path = "s3://bucket/db/tbl/1", Status = BackupTableStatus.Queued },
+                new BackupTableShardEntity { Id = shard2, BackupTableId = tableId, EffectiveBackupType = BackupType.Full, SourceShardNumber = 2, SourceShardName = "s2", ReplicaNumber = 1, Host = "node2", Port = 9000, S3Path = "s3://bucket/db/tbl/2", Status = BackupTableStatus.Queued });
+            await db.SaveChangesAsync();
+            var queue = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
+            await queue.EnsureBackupQueueItemsAsync(backupId);
+        }
+
+        var listed = await client.GetFromJsonAsync<List<BackupRestoreQueueItemDto>>("/api/v1/queue?kind=Backup&status=queued", JsonOptions);
+        Assert.NotNull(listed);
+        Assert.Equal(2, listed!.Count);
+        var second = listed.Single(x => x.ShardId == shard2);
+
+        var moved = await Post<BackupRestoreQueueItemDto>(client, $"/api/v1/queue/items/{second.Id}/move", new MoveQueueItemRequest(BackupRestoreQueueMoveDirection.Top));
+        Assert.Equal(second.Id, moved.Id);
+        var afterMove = await client.GetFromJsonAsync<List<BackupRestoreQueueItemDto>>("/api/v1/queue?kind=Backup&status=queued", JsonOptions);
+        Assert.Equal(second.Id, afterMove![0].Id);
+
+        var forced = await Post<BackupRestoreQueueItemDto>(client, $"/api/v1/queue/items/{listed[0].Id}/force", new { });
+        Assert.True(forced.IsForced);
+        Assert.NotNull(forced.ForcedAt);
+    }
+    [Fact]
     public async Task Cluster_update_replaces_nodes_without_concurrency_errors()
     {
         await using var factory = CreateFactory();
@@ -531,14 +620,16 @@ public sealed class ChoboFoundationTests
             ClusterMode.Cluster,
             [new UpsertAccessNodeRequest("clickhouse-1"), new UpsertAccessNodeRequest("clickhouse-2")],
             null,
-            null));
+            null,
+            3));
 
         var updated = await Put<ClusterDto>(client, $"/api/v1/clusters/{created.Id}", new UpsertClusterRequest(
             "prod-updated",
             ClusterMode.Cluster,
             [new UpsertAccessNodeRequest("clickhouse-3", 9440, true)],
             null,
-            null));
+            null,
+            3));
 
         Assert.Equal("prod-updated", updated.Name);
         Assert.Single(updated.AccessNodes);
@@ -977,7 +1068,8 @@ public sealed class ChoboFoundationTests
             ClusterMode.SingleInstance,
             [new UpsertAccessNodeRequest("localhost")],
             null,
-            null));
+            null,
+            3));
         var target = await Post<BackupTargetDto>(client, "/api/v1/targets/s3", new UpsertS3TargetRequest(
             "minio",
             "http://minio:9000",
@@ -1016,7 +1108,7 @@ public sealed class ChoboFoundationTests
 
         var clusterResponse = await client.PostAsJsonAsync(
             "/api/v1/clusters",
-            new UpsertClusterRequest("prod", ClusterMode.SingleInstance, [new UpsertAccessNodeRequest("", 70000)], null, null),
+            new UpsertClusterRequest("prod", ClusterMode.SingleInstance, [new UpsertAccessNodeRequest("", 70000)], null, null, 1),
             JsonOptions);
         Assert.Equal(HttpStatusCode.BadRequest, clusterResponse.StatusCode);
         var clusterError = await clusterResponse.Content.ReadAsStringAsync();

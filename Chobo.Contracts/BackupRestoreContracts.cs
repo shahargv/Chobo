@@ -139,6 +139,41 @@ public sealed record BackupGarbageCollectorQueueItemDto(
     int DeletionAttemptCount,
     string? DeletionError);
 
+public enum BackupRestoreQueueKind { All, Backup, Restore }
+
+public enum BackupRestoreQueueStatus { Queued, Running, Succeeded, PartiallySucceeded, Failed, Skipped, Canceled }
+
+public enum BackupRestoreQueueMoveDirection { Up, Down, Top, Bottom }
+
+public sealed record BackupRestoreQueueItemDto(
+    Guid Id,
+    BackupRestoreQueueKind Kind,
+    BackupRestoreQueueStatus Status,
+    long Position,
+    bool IsForced,
+    DateTimeOffset? ForcedAt,
+    Guid? ForcedByUserId,
+    string? ForcedByName,
+    Guid OperationId,
+    Guid TableId,
+    Guid ShardId,
+    Guid ClusterId,
+    string Database,
+    string Table,
+    int LogicalShardNumber,
+    string? LogicalShardName,
+    string? NodeHost,
+    int? NodePort,
+    bool? NodeUseTls,
+    string? ClickHouseOperationId,
+    string? ClickHouseStatus,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset? StartedAt,
+    DateTimeOffset? CompletedAt,
+    string? BlockingReason,
+    string? Error);
+
+public sealed record MoveQueueItemRequest(BackupRestoreQueueMoveDirection Direction, Guid? BeforeItemId = null);
 public sealed record RestoreDto(
     Guid Id,
     Guid BackupId,

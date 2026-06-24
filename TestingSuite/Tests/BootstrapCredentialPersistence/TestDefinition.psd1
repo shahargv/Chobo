@@ -40,7 +40,7 @@
         @{
             Name = 'add-cluster'
             Type = 'Cli'
-            Args = @('clusters', 'add', '--name', 'source', '--mode', 'SingleInstance', '--node', 'clickhouse-source:9000', '--username', 'default')
+            Args = @('clusters', 'add', '--name', 'source', '--mode', 'SingleInstance', '--node', 'clickhouse-source:9000', '--backup-restore-maxdop', '1', '--username', 'default')
             SaveJsonAs = 'cluster'
             ExpectJson = @(
                 @{ Path = 'id'; NotEmpty = $true }

@@ -520,6 +520,10 @@ public sealed class BackupRestoreExecutionTests
     public async Task Backup_runner_enforces_global_and_cluster_maxdop()
     {
         await using var globalFixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 2, PollInterval = TimeSpan.FromMilliseconds(1) });
+        var globalCluster = await globalFixture.Db.ClickHouseClusters.SingleAsync(x => x.Id == globalFixture.SourceClusterId);
+        globalCluster.ShardMaxDopDefault = 16;
+        globalCluster.NodeMaxDopDefault = 16;
+        await globalFixture.Db.SaveChangesAsync();
         globalFixture.ClickHouse.StartDelay = TimeSpan.FromMilliseconds(40);
         for (var i = 0; i < 6; i++)
         {
@@ -568,6 +572,394 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Backup_queue_with_maxdop_one_drains_all_rows()
+    {
+        await using var fixture = await TestFixture.CreateAsync(clusterMaxDop: 1, options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        fixture.ClickHouse.StartDelay = TimeSpan.FromMilliseconds(10);
+        for (var i = 0; i < 4; i++)
+        {
+            fixture.ClickHouse.Inventory.Add(Table("sales", $"drain_{i}", "MergeTree"));
+        }
+
+        var backupId = await fixture.CreateManualBackupAsync();
+        await fixture.RunBackupAsync(backupId);
+
+        fixture.Db.ChangeTracker.Clear();
+        var backup = await fixture.Db.Backups.Include(x => x.Tables).SingleAsync(x => x.Id == backupId);
+        Assert.Equal(BackupRunStatus.Succeeded, backup.Status);
+        Assert.Equal(4, fixture.ClickHouse.BackupStartTables.Count);
+        Assert.All(backup.Tables, table => Assert.Equal(BackupTableStatus.Succeeded, table.Status));
+        Assert.Equal(1, fixture.ClickHouse.MaxConcurrentBackupStarts);
+    }
+
+    [Fact]
+    public async Task Backup_queue_table_reorder_changes_execution_order()
+    {
+        await using var fixture = await TestFixture.CreateAsync(clusterMaxDop: 1, options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "aaa_first", BackupTableStatus.Queued, null, true),
+            new SeedBackupTable("sales", "zzz_promoted", BackupTableStatus.Queued, null, true)
+        ]);
+        using (var scope = fixture.Services.CreateScope())
+        {
+            var queue = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
+            await queue.EnsureBackupQueueItemsAsync(backup.Id);
+            var promotedTableId = await fixture.Db.BackupTables.Where(x => x.BackupId == backup.Id && x.Table == "zzz_promoted").Select(x => x.Id).SingleAsync();
+            await queue.MoveTableAsync(BackupRestoreQueueKind.Backup, promotedTableId, new MoveQueueItemRequest(BackupRestoreQueueMoveDirection.Top));
+        }
+
+        await fixture.RunBackupAsync(backup.Id);
+
+        Assert.Equal("zzz_promoted", fixture.ClickHouse.BackupStartTables.First());
+    }
+
+    [Fact]
+    public async Task Backup_queue_row_reorder_changes_next_shard()
+    {
+        await using var fixture = await TestFixture.CreateAsync(clusterMaxDop: 1, options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Queued, null, true)
+        ], shardCount: 3);
+        using (var scope = fixture.Services.CreateScope())
+        {
+            var queue = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
+            await queue.EnsureBackupQueueItemsAsync(backup.Id);
+            var shardThree = (await queue.ListAsync(BackupRestoreQueueKind.Backup, "queued", 10)).Single(x => x.LogicalShardNumber == 3);
+            await queue.MoveItemAsync(shardThree.Id, new MoveQueueItemRequest(BackupRestoreQueueMoveDirection.Top));
+        }
+
+        await fixture.RunBackupAsync(backup.Id);
+
+        Assert.Equal(3, fixture.ClickHouse.BackupStartShardNumbers.First());
+    }
+
+    [Fact]
+    public async Task Forced_backup_rows_bypass_global_maxdop_when_already_forced()
+    {
+        await using var fixture = await TestFixture.CreateAsync(clusterMaxDop: 1, options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        fixture.ClickHouse.StartDelay = TimeSpan.FromMilliseconds(60);
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "forced_a", BackupTableStatus.Queued, null, true),
+            new SeedBackupTable("sales", "forced_b", BackupTableStatus.Queued, null, true)
+        ]);
+        using (var scope = fixture.Services.CreateScope())
+        {
+            var queue = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
+            await queue.EnsureBackupQueueItemsAsync(backup.Id);
+            foreach (var item in await queue.ListAsync(BackupRestoreQueueKind.Backup, "queued", 10))
+            {
+                await queue.ForceAsync(item.Id);
+            }
+        }
+
+        await fixture.RunBackupAsync(backup.Id);
+
+        Assert.True(fixture.ClickHouse.MaxConcurrentBackupStarts > 1);
+    }
+
+    [Fact]
+    public async Task Shard_maxdop_limits_normal_rows_but_forced_rows_bypass_it()
+    {
+        await using var normalFixture = await TestFixture.CreateAsync(clusterMaxDop: 2, options: new ChoboBackupRestoreOptions { MaxDop = 2, PollInterval = TimeSpan.FromMilliseconds(1) });
+        normalFixture.ClickHouse.StartDelay = TimeSpan.FromMilliseconds(40);
+        var normalCluster = await normalFixture.Db.ClickHouseClusters.SingleAsync(x => x.Id == normalFixture.SourceClusterId);
+        normalCluster.ShardMaxDopDefault = 1;
+        await normalFixture.Db.SaveChangesAsync();
+        var normalBackup = await normalFixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "same_shard_a", BackupTableStatus.Queued, null, true),
+            new SeedBackupTable("sales", "same_shard_b", BackupTableStatus.Queued, null, true)
+        ]);
+        await normalFixture.RunBackupAsync(normalBackup.Id);
+        Assert.Equal(1, normalFixture.ClickHouse.MaxConcurrentBackupStarts);
+
+        await using var forcedFixture = await TestFixture.CreateAsync(clusterMaxDop: 2, options: new ChoboBackupRestoreOptions { MaxDop = 2, PollInterval = TimeSpan.FromMilliseconds(1) });
+        forcedFixture.ClickHouse.StartDelay = TimeSpan.FromMilliseconds(40);
+        var forcedCluster = await forcedFixture.Db.ClickHouseClusters.SingleAsync(x => x.Id == forcedFixture.SourceClusterId);
+        forcedCluster.ShardMaxDopDefault = 1;
+        await forcedFixture.Db.SaveChangesAsync();
+        var forcedBackup = await forcedFixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "forced_same_shard_a", BackupTableStatus.Queued, null, true),
+            new SeedBackupTable("sales", "forced_same_shard_b", BackupTableStatus.Queued, null, true)
+        ]);
+        using (var scope = forcedFixture.Services.CreateScope())
+        {
+            var queue = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
+            await queue.EnsureBackupQueueItemsAsync(forcedBackup.Id);
+            foreach (var item in await queue.ListAsync(BackupRestoreQueueKind.Backup, "queued", 10))
+            {
+                await queue.ForceAsync(item.Id);
+            }
+        }
+        await forcedFixture.RunBackupAsync(forcedBackup.Id);
+        Assert.True(forcedFixture.ClickHouse.MaxConcurrentBackupStarts > 1);
+    }
+
+    [Fact]
+    public async Task Node_maxdop_selects_different_replica_when_one_replica_is_busy()
+    {
+        await using var fixture = await TestFixture.CreateAsync(clusterMaxDop: 2, options: new ChoboBackupRestoreOptions { MaxDop = 2, PollInterval = TimeSpan.FromMilliseconds(1) });
+        fixture.ClickHouse.StartDelay = TimeSpan.FromMilliseconds(80);
+        fixture.ClickHouse.Topology.Clear();
+        fixture.ClickHouse.Topology.AddRange([
+            new ClickHouseShardReplicaInfo(1, "single", 1, "replica-a", 9000, false, 0),
+            new ClickHouseShardReplicaInfo(1, "single", 2, "replica-b", 9000, false, 0)
+        ]);
+        var cluster = await fixture.Db.ClickHouseClusters.SingleAsync(x => x.Id == fixture.SourceClusterId);
+        cluster.NodeMaxDopDefault = 1;
+        cluster.ShardMaxDopDefault = 2;
+        await fixture.Db.SaveChangesAsync();
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "replica_choice_a", BackupTableStatus.Queued, null, true),
+            new SeedBackupTable("sales", "replica_choice_b", BackupTableStatus.Queued, null, true)
+        ]);
+
+        MarkBackupAsReplicated(backup);
+        await fixture.Db.SaveChangesAsync();
+
+        await fixture.RunBackupAsync(backup.Id);
+
+        Assert.Equal(2, fixture.ClickHouse.BackupStartEndpoints.Select(x => x.Host).Distinct().Count());
+    }
+    [Fact]
+    public async Task Backup_random_replica_selection_does_not_always_pick_first_replica()
+    {
+        await using var fixture = await TestFixture.CreateAsync(clusterMaxDop: 1, options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        fixture.ClickHouse.Topology.Clear();
+        fixture.ClickHouse.Topology.AddRange([
+            new ClickHouseShardReplicaInfo(1, "single", 1, "replica-a", 9000, false, 0),
+            new ClickHouseShardReplicaInfo(1, "single", 2, "replica-b", 9000, false, 0),
+            new ClickHouseShardReplicaInfo(1, "single", 3, "replica-c", 9000, false, 0)
+        ]);
+
+        for (var i = 0; i < 20; i++)
+        {
+            var backup = await fixture.SeedBackupWithTablesAsync([
+                new SeedBackupTable("sales", $"random_{i}", BackupTableStatus.Queued, null, true)
+            ]);
+            MarkBackupAsReplicated(backup);
+            await fixture.Db.SaveChangesAsync();
+            await fixture.RunBackupAsync(backup.Id);
+        }
+
+        Assert.True(fixture.ClickHouse.BackupStartEndpoints.Select(x => x.Host).Distinct().Count() >= 2);
+    }
+
+    [Fact]
+    public async Task Restore_queue_table_reorder_changes_restore_execution_order()
+    {
+        await using var fixture = await TestFixture.CreateAsync(clusterMaxDop: 1, options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "aaa_restore", BackupTableStatus.Succeeded, "backup-op-a", true),
+            new SeedBackupTable("sales", "zzz_restore", BackupTableStatus.Succeeded, "backup-op-z", true)
+        ]);
+        backup.Status = BackupRunStatus.Succeeded;
+        var restore = await fixture.SeedRestoreAsync(backup, [
+            new SeedRestoreTable("sales", "aaa_restore", RestoreTableStatus.Queued, null),
+            new SeedRestoreTable("sales", "zzz_restore", RestoreTableStatus.Queued, null)
+        ]);
+        using (var scope = fixture.Services.CreateScope())
+        {
+            var queue = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
+            await queue.EnsureRestoreQueueItemsAsync(restore.Id);
+            var promotedTableId = await fixture.Db.RestoreTables.Where(x => x.RestoreId == restore.Id && x.SourceTable == "zzz_restore").Select(x => x.Id).SingleAsync();
+            await queue.MoveTableAsync(BackupRestoreQueueKind.Restore, promotedTableId, new MoveQueueItemRequest(BackupRestoreQueueMoveDirection.Top));
+        }
+
+        await fixture.RunRestoreAsync(restore.Id);
+
+        Assert.Equal("zzz_restore", fixture.ClickHouse.RestoreStartTables.First());
+    }
+
+    [Fact]
+    public async Task Restore_queue_row_reorder_changes_next_shard()
+    {
+        await using var fixture = await TestFixture.CreateAsync(clusterMaxDop: 1, options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders_restore_rows", BackupTableStatus.Succeeded, "backup-op", true)
+        ], shardCount: 3);
+        backup.Status = BackupRunStatus.Succeeded;
+        var restore = await fixture.SeedRestoreAsync(backup, [
+            new SeedRestoreTable("sales", "orders_restore_rows", RestoreTableStatus.Queued, null)
+        ]);
+        using (var scope = fixture.Services.CreateScope())
+        {
+            var queue = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
+            await queue.EnsureRestoreQueueItemsAsync(restore.Id);
+            var shardThree = (await queue.ListAsync(BackupRestoreQueueKind.Restore, "queued", 10)).Single(x => x.LogicalShardNumber == 3);
+            await queue.MoveItemAsync(shardThree.Id, new MoveQueueItemRequest(BackupRestoreQueueMoveDirection.Top));
+        }
+
+        await fixture.RunRestoreAsync(restore.Id);
+
+        Assert.Equal(3, fixture.ClickHouse.RestoreStartShardNumbers.First());
+    }
+
+    [Fact]
+    public async Task Restore_per_cluster_maxdop_limits_concurrency()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 4, PollInterval = TimeSpan.FromMilliseconds(1) });
+        fixture.ClickHouse.StartDelay = TimeSpan.FromMilliseconds(40);
+        var targetCluster = await fixture.Db.ClickHouseClusters.SingleAsync(x => x.Id == fixture.TargetClusterId);
+        targetCluster.BackupRestoreMaxDop = 2;
+        targetCluster.NodeMaxDopDefault = 16;
+        targetCluster.ShardMaxDopDefault = 16;
+        await fixture.Db.SaveChangesAsync();
+        var backup = await fixture.SeedBackupWithTablesAsync(Enumerable.Range(0, 5)
+            .Select(i => new SeedBackupTable("sales", $"restore_cluster_dop_{i}", BackupTableStatus.Succeeded, $"backup-op-{i}", true))
+            .ToList());
+        backup.Status = BackupRunStatus.Succeeded;
+        var restore = await fixture.SeedRestoreAsync(backup, backup.Tables
+            .Select(t => new SeedRestoreTable(t.Database, t.Table, RestoreTableStatus.Queued, null))
+            .ToList());
+
+        await fixture.RunRestoreAsync(restore.Id);
+
+        Assert.Equal(2, fixture.ClickHouse.MaxConcurrentRestoreStarts);
+    }
+
+    [Fact]
+    public async Task Restore_shard_maxdop_limits_normal_rows_but_forced_rows_bypass_it()
+    {
+        await using var normalFixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 2, PollInterval = TimeSpan.FromMilliseconds(1) });
+        normalFixture.ClickHouse.StartDelay = TimeSpan.FromMilliseconds(40);
+        var normalCluster = await normalFixture.Db.ClickHouseClusters.SingleAsync(x => x.Id == normalFixture.TargetClusterId);
+        normalCluster.BackupRestoreMaxDop = 2;
+        normalCluster.NodeMaxDopDefault = 16;
+        normalCluster.ShardMaxDopDefault = 1;
+        await normalFixture.Db.SaveChangesAsync();
+        var normalBackup = await normalFixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "restore_same_shard_a", BackupTableStatus.Succeeded, "backup-op-a", true),
+            new SeedBackupTable("sales", "restore_same_shard_b", BackupTableStatus.Succeeded, "backup-op-b", true)
+        ]);
+        normalBackup.Status = BackupRunStatus.Succeeded;
+        var normalRestore = await normalFixture.SeedRestoreAsync(normalBackup, normalBackup.Tables
+            .Select(t => new SeedRestoreTable(t.Database, t.Table, RestoreTableStatus.Queued, null))
+            .ToList());
+        await normalFixture.RunRestoreAsync(normalRestore.Id);
+        Assert.Equal(1, normalFixture.ClickHouse.MaxConcurrentRestoreStarts);
+
+        await using var forcedFixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 2, PollInterval = TimeSpan.FromMilliseconds(1) });
+        forcedFixture.ClickHouse.StartDelay = TimeSpan.FromMilliseconds(40);
+        var forcedCluster = await forcedFixture.Db.ClickHouseClusters.SingleAsync(x => x.Id == forcedFixture.TargetClusterId);
+        forcedCluster.BackupRestoreMaxDop = 2;
+        forcedCluster.NodeMaxDopDefault = 16;
+        forcedCluster.ShardMaxDopDefault = 1;
+        await forcedFixture.Db.SaveChangesAsync();
+        var forcedBackup = await forcedFixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "restore_forced_same_shard_a", BackupTableStatus.Succeeded, "backup-op-a", true),
+            new SeedBackupTable("sales", "restore_forced_same_shard_b", BackupTableStatus.Succeeded, "backup-op-b", true)
+        ]);
+        forcedBackup.Status = BackupRunStatus.Succeeded;
+        var forcedRestore = await forcedFixture.SeedRestoreAsync(forcedBackup, forcedBackup.Tables
+            .Select(t => new SeedRestoreTable(t.Database, t.Table, RestoreTableStatus.Queued, null))
+            .ToList());
+        using (var scope = forcedFixture.Services.CreateScope())
+        {
+            var queue = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
+            await queue.EnsureRestoreQueueItemsAsync(forcedRestore.Id);
+            foreach (var item in await queue.ListAsync(BackupRestoreQueueKind.Restore, "queued", 10))
+            {
+                await queue.ForceAsync(item.Id);
+            }
+        }
+        await forcedFixture.RunRestoreAsync(forcedRestore.Id);
+        Assert.True(forcedFixture.ClickHouse.MaxConcurrentRestoreStarts > 1);
+    }
+
+    [Fact]
+    public async Task Restore_node_maxdop_selects_different_replica_when_one_replica_is_busy()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 2, PollInterval = TimeSpan.FromMilliseconds(1) });
+        fixture.ClickHouse.StartDelay = TimeSpan.FromMilliseconds(80);
+        fixture.ClickHouse.Topology.Clear();
+        fixture.ClickHouse.Topology.AddRange([
+            new ClickHouseShardReplicaInfo(1, "single", 1, "restore-a", 9000, false, 0),
+            new ClickHouseShardReplicaInfo(1, "single", 2, "restore-b", 9000, false, 0)
+        ]);
+        var cluster = await fixture.Db.ClickHouseClusters.SingleAsync(x => x.Id == fixture.TargetClusterId);
+        cluster.BackupRestoreMaxDop = 2;
+        cluster.NodeMaxDopDefault = 1;
+        cluster.ShardMaxDopDefault = 2;
+        await fixture.Db.SaveChangesAsync();
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "restore_replica_choice_a", BackupTableStatus.Succeeded, "backup-op-a", true),
+            new SeedBackupTable("sales", "restore_replica_choice_b", BackupTableStatus.Succeeded, "backup-op-b", true)
+        ]);
+        MarkBackupAsReplicated(backup);
+        backup.Status = BackupRunStatus.Succeeded;
+        await fixture.Db.SaveChangesAsync();
+        var restore = await fixture.SeedRestoreAsync(backup, backup.Tables
+            .Select(t => new SeedRestoreTable(t.Database, t.Table, RestoreTableStatus.Queued, null))
+            .ToList());
+
+        await fixture.RunRestoreAsync(restore.Id);
+
+        Assert.Equal(2, fixture.ClickHouse.RestoreStartEndpoints.Select(x => x.Host).Distinct().Count());
+    }
+
+    [Fact]
+    public async Task Restore_random_replica_selection_does_not_always_pick_first_replica()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        fixture.ClickHouse.Topology.Clear();
+        fixture.ClickHouse.Topology.AddRange([
+            new ClickHouseShardReplicaInfo(1, "single", 1, "restore-a", 9000, false, 0),
+            new ClickHouseShardReplicaInfo(1, "single", 2, "restore-b", 9000, false, 0),
+            new ClickHouseShardReplicaInfo(1, "single", 3, "restore-c", 9000, false, 0)
+        ]);
+
+        for (var i = 0; i < 20; i++)
+        {
+            var backup = await fixture.SeedBackupWithTablesAsync([
+                new SeedBackupTable("sales", $"restore_random_{i}", BackupTableStatus.Succeeded, $"backup-op-{i}", true)
+            ]);
+            MarkBackupAsReplicated(backup);
+            backup.Status = BackupRunStatus.Succeeded;
+            await fixture.Db.SaveChangesAsync();
+            var restore = await fixture.SeedRestoreAsync(backup, [
+                new SeedRestoreTable("sales", $"restore_random_{i}", RestoreTableStatus.Queued, null)
+            ]);
+            await fixture.RunRestoreAsync(restore.Id);
+        }
+
+        Assert.True(fixture.ClickHouse.RestoreStartEndpoints.Select(x => x.Host).Distinct().Count() >= 2);
+    }
+
+    [Fact]
+    public async Task Restore_single_instance_defaults_drain_queue_successfully()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "restore_single_instance", BackupTableStatus.Succeeded, "backup-op", true)
+        ], shardCount: 2);
+        backup.Status = BackupRunStatus.Succeeded;
+        var restore = await fixture.SeedRestoreAsync(backup, [
+            new SeedRestoreTable("sales", "restore_single_instance", RestoreTableStatus.Queued, null)
+        ]);
+
+        await fixture.RunRestoreAsync(restore.Id);
+
+        fixture.Db.ChangeTracker.Clear();
+        var restored = await fixture.Db.Restores.Include(x => x.Tables).ThenInclude(x => x.Shards).SingleAsync(x => x.Id == restore.Id);
+        Assert.Equal(RestoreRunStatus.Succeeded, restored.Status);
+        Assert.All(restored.Tables.SelectMany(x => x.Shards), shard => Assert.Equal(RestoreTableStatus.Succeeded, shard.Status));
+        Assert.Equal(1, fixture.ClickHouse.MaxConcurrentRestoreStarts);
+    }
+    [Fact]
+    public async Task Schema_only_backup_does_not_leave_active_queue_rows()
+    {
+        await using var fixture = await TestFixture.CreateAsync(clusterMaxDop: 1, options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        fixture.ClickHouse.Inventory.Add(Table("sales", "schema_a", "MergeTree"));
+        fixture.ClickHouse.Inventory.Add(Table("sales", "schema_b", "MergeTree"));
+        var backupId = await fixture.CreateManualBackupAsync(schemaOnly: true);
+
+        await fixture.RunBackupAsync(backupId);
+
+        using var scope = fixture.Services.CreateScope();
+        var queue = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
+        Assert.Empty(await queue.ListAsync(BackupRestoreQueueKind.Backup, "active", 100));
+    }
+    [Fact]
     public async Task Backup_resume_continues_known_operation_ids_and_does_not_rerun_completed_tables()
     {
         await using var fixture = await TestFixture.CreateAsync();
@@ -586,6 +978,34 @@ public sealed class BackupRestoreExecutionTests
         Assert.All(tables, table => Assert.Equal(BackupTableStatus.Succeeded, table.Status));
     }
 
+    [Fact]
+    public async Task Backup_resume_reclaims_started_queue_row_and_continues_known_operation()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "resume_started_queue", BackupTableStatus.Running, "backup-known-started", true)
+        ]);
+        fixture.ClickHouse.KnownOperations.Add("backup-known-started", "BACKUP_CREATED");
+        using (var scope = fixture.Services.CreateScope())
+        {
+            var queue = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
+            await queue.EnsureBackupQueueItemsAsync(backup.Id);
+        }
+        var queueRow = await fixture.Db.BackupRestoreQueueItems.SingleAsync(x => x.Kind == BackupRestoreQueueKind.Backup && x.OperationId == backup.Id);
+        queueRow.StartedAt = DateTimeOffset.UtcNow.AddMinutes(-5);
+        queueRow.NodeHost = "source";
+        queueRow.NodePort = 9000;
+        queueRow.NodeUseTls = false;
+        await fixture.Db.SaveChangesAsync();
+
+        await fixture.RunBackupAsync(backup.Id);
+
+        fixture.Db.ChangeTracker.Clear();
+        var after = await fixture.Db.Backups.Include(x => x.Tables).ThenInclude(x => x.Shards).SingleAsync(x => x.Id == backup.Id);
+        Assert.Equal(BackupRunStatus.Succeeded, after.Status);
+        Assert.All(after.Tables.SelectMany(x => x.Shards), shard => Assert.Equal(BackupTableStatus.Succeeded, shard.Status));
+        Assert.Empty(fixture.ClickHouse.BackupStartTables);
+    }
     [Fact]
     public async Task Backup_resume_fails_uncertain_missing_clickhouse_operation()
     {
@@ -629,6 +1049,39 @@ public sealed class BackupRestoreExecutionTests
         Assert.DoesNotContain("orders", fixture.ClickHouse.RestoreStartTables);
         Assert.Contains("items", fixture.ClickHouse.RestoreStartTables);
     }
+    [Fact]
+    public async Task Restore_resume_reclaims_started_queue_row_and_continues_known_operation()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "resume_started_queue", BackupTableStatus.Succeeded, "backup-op", true)
+        ]);
+        backup.Status = BackupRunStatus.Succeeded;
+        var restore = await fixture.SeedRestoreAsync(backup, [
+            new SeedRestoreTable("sales", "resume_started_queue", RestoreTableStatus.Running, "restore-known-started")
+        ]);
+        fixture.ClickHouse.KnownOperations.Add("restore-known-started", "RESTORED");
+        using (var scope = fixture.Services.CreateScope())
+        {
+            var queue = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
+            await queue.EnsureRestoreQueueItemsAsync(restore.Id);
+        }
+        var queueRow = await fixture.Db.BackupRestoreQueueItems.SingleAsync(x => x.Kind == BackupRestoreQueueKind.Restore && x.OperationId == restore.Id);
+        queueRow.StartedAt = DateTimeOffset.UtcNow.AddMinutes(-5);
+        queueRow.NodeHost = "restore";
+        queueRow.NodePort = 9000;
+        queueRow.NodeUseTls = false;
+        await fixture.Db.SaveChangesAsync();
+
+        await fixture.RunRestoreAsync(restore.Id);
+
+        fixture.Db.ChangeTracker.Clear();
+        var after = await fixture.Db.Restores.Include(x => x.Tables).ThenInclude(x => x.Shards).SingleAsync(x => x.Id == restore.Id);
+        Assert.Equal(RestoreRunStatus.Succeeded, after.Status);
+        Assert.All(after.Tables.SelectMany(x => x.Shards), shard => Assert.Equal(RestoreTableStatus.Succeeded, shard.Status));
+        Assert.Empty(fixture.ClickHouse.RestoreStartTables);
+    }
+
 
     [Fact]
     public async Task Restore_list_includes_shard_details()
@@ -1501,6 +1954,43 @@ public sealed class BackupRestoreExecutionTests
         Assert.Contains("restore-op-1", fixture.ClickHouse.KilledQueries);
         Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "canceled" && x.EntityType == "restore" && x.EntityId == restore.Id.ToString()));
     }
+    [Fact]
+    public async Task Restore_cancel_stops_inflight_worker_without_marking_shard_successful()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        fixture.ClickHouse.BlockOperationStatus = true;
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "restore_cancel_inflight", BackupTableStatus.Succeeded, "backup-op", true)
+        ]);
+        backup.Status = BackupRunStatus.Succeeded;
+        var restore = await fixture.SeedRestoreAsync(backup, [
+            new SeedRestoreTable("sales", "restore_cancel_inflight", RestoreTableStatus.Queued, null)
+        ]);
+
+        var runTask = fixture.RunRestoreAsync(restore.Id);
+        await fixture.ClickHouse.WaitForBlockedStatusAsync();
+
+        fixture.Db.ChangeTracker.Clear();
+        var runningRestore = await fixture.Db.Restores.Include(x => x.Tables).ThenInclude(x => x.Shards).SingleAsync(x => x.Id == restore.Id);
+        var startedShard = runningRestore.Tables.SelectMany(x => x.Shards).Single(x => x.Status == RestoreTableStatus.Running);
+        Assert.False(string.IsNullOrWhiteSpace(startedShard.ClickHouseOperationId));
+
+        var canceled = await fixture.Services.GetRequiredService<RestoreApplicationService>().CancelAsync(restore.Id);
+        Assert.NotNull(canceled);
+        Assert.Equal(RestoreRunStatus.Canceled, canceled.Status);
+        Assert.Contains(startedShard.ClickHouseOperationId!, fixture.ClickHouse.KilledQueries);
+
+        fixture.ClickHouse.ReleaseBlockedStatus();
+        await runTask;
+
+        fixture.Db.ChangeTracker.Clear();
+        var after = await fixture.Db.Restores.Include(x => x.Tables).ThenInclude(x => x.Shards).SingleAsync(x => x.Id == restore.Id);
+        Assert.Equal(RestoreRunStatus.Canceled, after.Status);
+        Assert.All(after.Tables.SelectMany(x => x.Shards), shard => Assert.Equal(RestoreTableStatus.Skipped, shard.Status));
+        Assert.Empty(await fixture.Db.BackupRestoreQueueItems.Where(x => x.Kind == BackupRestoreQueueKind.Restore && x.OperationId == restore.Id && x.CompletedAt == null).ToListAsync());
+        Assert.False(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "shard-succeeded" && x.EntityType == "restore-table-shard"));
+    }
+
 
     [Fact]
     public async Task Restore_rejects_deleted_or_delete_pending_backups()
@@ -2178,6 +2668,17 @@ public sealed class BackupRestoreExecutionTests
         stopwatch.Stop();
         return stopwatch.Elapsed;
     }
+    private static void MarkBackupAsReplicated(BackupEntity backup)
+    {
+        foreach (var table in backup.Tables)
+        {
+            table.Engine = "ReplicatedMergeTree";
+            if (table.SchemaDefinition is not null)
+            {
+                table.SchemaDefinition.Engine = "ReplicatedMergeTree";
+            }
+        }
+    }
     private static ClickHouseTableInfo Table(string database, string table, string engine, string columnsJson = "[]", string? schemaHash = null, string? createSql = null) =>
         new(database, table, engine, createSql ?? $"CREATE TABLE {database}.{table} (id UInt64) ENGINE = {engine} ORDER BY id", columnsJson, schemaHash ?? $"{database}.{table}.{engine}.{columnsJson}");
 
@@ -2224,12 +2725,17 @@ public sealed class BackupRestoreExecutionTests
     {
         private readonly object _lock = new();
         private int _activeBackupStarts;
+        private int _activeRestoreStarts;
         public List<ClickHouseTableInfo> Inventory { get; } = [];
         public List<ClickHouseShardReplicaInfo> Topology { get; } = [new(1, "single", 1, "source", 9000, false, 0)];
         public Dictionary<string, string> KnownOperations { get; } = new(StringComparer.Ordinal);
         public List<string> BackupStartTables { get; } = [];
+        public List<int> BackupStartShardNumbers { get; } = [];
+        public List<ClickHouseNodeEndpoint> BackupStartEndpoints { get; } = [];
         public List<string?> BackupBasePaths { get; } = [];
         public List<string> RestoreStartTables { get; } = [];
+        public List<int> RestoreStartShardNumbers { get; } = [];
+        public List<ClickHouseNodeEndpoint> RestoreStartEndpoints { get; } = [];
         public List<string> ExecuteSql { get; } = [];
         public List<ClickHouseNodeEndpoint> GetTablesEndpoints { get; } = [];
         public int GetTablesCallCount { get; private set; }
@@ -2238,6 +2744,7 @@ public sealed class BackupRestoreExecutionTests
         public List<ClickHouseNodeEndpoint> ExecuteEndpoints { get; } = [];
         public List<(ClickHouseNodeEndpoint Endpoint, string Sql)> EndpointExecuteSql { get; } = [];
         public int MaxConcurrentBackupStarts { get; private set; }
+        public int MaxConcurrentRestoreStarts { get; private set; }
         public TimeSpan StartDelay { get; set; }
         public bool BlockOperationStatus { get; set; }
         public Exception? GetTablesException { get; set; }
@@ -2326,6 +2833,8 @@ public sealed class BackupRestoreExecutionTests
                 _activeBackupStarts++;
                 MaxConcurrentBackupStarts = Math.Max(MaxConcurrentBackupStarts, _activeBackupStarts);
                 BackupStartTables.Add(table.Table);
+                BackupStartShardNumbers.Add(shard.SourceShardNumber);
+                BackupStartEndpoints.Add(endpoint);
                 BackupBasePaths.Add(baseBackupPath);
             }
 
@@ -2361,12 +2870,26 @@ public sealed class BackupRestoreExecutionTests
             return StartRestoreShardAsync(new ClickHouseNodeEndpoint("restore", 9000, false), cluster, target, shard, backupTable, backupShard, cancellationToken);
         }
 
-        public Task<ClickHouseOperationResult> StartRestoreShardAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, BackupTargetEntity target, RestoreTableShardEntity table, BackupTableEntity backupTable, BackupTableShardEntity backupShard, CancellationToken cancellationToken)
+        public async Task<ClickHouseOperationResult> StartRestoreShardAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, BackupTargetEntity target, RestoreTableShardEntity table, BackupTableEntity backupTable, BackupTableShardEntity backupShard, CancellationToken cancellationToken)
         {
+            lock (_lock)
+            {
+                _activeRestoreStarts++;
+                MaxConcurrentRestoreStarts = Math.Max(MaxConcurrentRestoreStarts, _activeRestoreStarts);
+                RestoreStartTables.Add(backupTable.Table);
+                RestoreStartShardNumbers.Add(table.TargetShardNumber ?? table.SourceShardNumber);
+                RestoreStartEndpoints.Add(endpoint);
+            }
+
+            if (StartDelay > TimeSpan.Zero)
+            {
+                await Task.Delay(StartDelay, cancellationToken);
+            }
+
             string operationId;
             lock (_lock)
             {
-                RestoreStartTables.Add(backupTable.Table);
+                _activeRestoreStarts--;
                 operationId = $"restore-{backupTable.Table}-s{backupShard.SourceShardNumber}-{Guid.NewGuid():N}";
                 if (!DropStartedRestoreOperation)
                 {
@@ -2384,9 +2907,8 @@ public sealed class BackupRestoreExecutionTests
                     }
                 }
             }
-            return Task.FromResult(new ClickHouseOperationResult(operationId, "RESTORING"));
+            return new ClickHouseOperationResult(operationId, "RESTORING");
         }
-
         public async Task<ClickHouseOperationStatus> GetOperationStatusAsync(ClickHouseClusterEntity cluster, string operationId, CancellationToken cancellationToken)
         {
             return await GetOperationStatusAsync(new ClickHouseNodeEndpoint("source", 9000, false), cluster, operationId, cancellationToken);
@@ -2545,6 +3067,7 @@ public sealed class BackupRestoreExecutionTests
                 .AddScoped<SystemDefaultBackupPolicyService>()
                 .AddScoped<IBackupStorageManifestService, BackupStorageManifestService>()
                 .AddScoped<RestoreApplicationService>()
+                .AddScoped<BackupRestoreQueueApplicationService>()
                 .AddScoped<BackupRunnerService>()
                 .AddScoped<RestoreRunnerService>()
                 .AddScoped<BackupCleanupService>()
@@ -2571,7 +3094,7 @@ public sealed class BackupRestoreExecutionTests
                     Id = sourceClusterId,
                     Name = "source",
                     Mode = ClusterMode.SingleInstance,
-                    BackupRestoreMaxDop = clusterMaxDop,
+                    BackupRestoreMaxDop = clusterMaxDop ?? options?.MaxDop ?? 3,
                     AccessNodes = [new ClickHouseAccessNodeEntity { Host = "source", Port = 9000 }]
                 },
                 new ClickHouseClusterEntity
@@ -2701,7 +3224,7 @@ public sealed class BackupRestoreExecutionTests
                     {
                         BackupTableShardId = backupShard.Id,
                         SourceShardNumber = backupShard.SourceShardNumber,
-                        TargetShardNumber = 1,
+                        TargetShardNumber = backupShard.SourceShardNumber,
                         TargetHost = "restore",
                         TargetPort = 9000,
                         LayoutRole = "Preserve",
@@ -2977,4 +3500,12 @@ public sealed class BackupRestoreExecutionTests
         public override DateTimeOffset GetUtcNow() => utcNow;
     }
 }
+
+
+
+
+
+
+
+
 

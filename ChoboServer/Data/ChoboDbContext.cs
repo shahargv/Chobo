@@ -23,6 +23,7 @@ public sealed class ChoboDbContext(DbContextOptions<ChoboDbContext> options) : D
     public DbSet<RestoreEntity> Restores => Set<RestoreEntity>();
     public DbSet<RestoreTableEntity> RestoreTables => Set<RestoreTableEntity>();
     public DbSet<RestoreTableShardEntity> RestoreTableShards => Set<RestoreTableShardEntity>();
+    public DbSet<BackupRestoreQueueItemEntity> BackupRestoreQueueItems => Set<BackupRestoreQueueItemEntity>();
     public DbSet<SqliteSelfBackupStateEntity> SqliteSelfBackupStates => Set<SqliteSelfBackupStateEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -58,6 +59,12 @@ public sealed class ChoboDbContext(DbContextOptions<ChoboDbContext> options) : D
         modelBuilder.Entity<BackupScheduleEntity>().HasIndex(x => new { x.IsDeleted, x.Name });
         modelBuilder.Entity<BackupScheduleEntity>().HasIndex(x => new { x.PolicyId, x.IsDeleted });
         modelBuilder.Entity<SchemaDefinitionEntity>().HasIndex(x => x.SchemaHash).IsUnique();
+        modelBuilder.Entity<BackupRestoreQueueItemEntity>().Property(x => x.Kind).HasConversion<int>();
+        modelBuilder.Entity<BackupRestoreQueueItemEntity>().HasIndex(x => new { x.IsForced, x.Position });
+        modelBuilder.Entity<BackupRestoreQueueItemEntity>().HasIndex(x => new { x.Kind, x.OperationId });
+        modelBuilder.Entity<BackupRestoreQueueItemEntity>().HasIndex(x => x.ShardId).IsUnique();
+        modelBuilder.Entity<BackupRestoreQueueItemEntity>().HasIndex(x => new { x.ClusterId, x.LogicalShardNumber });
+        modelBuilder.Entity<BackupRestoreQueueItemEntity>().HasIndex(x => new { x.NodeHost, x.NodePort, x.NodeUseTls });
         modelBuilder.Entity<BackupEntity>().Property(x => x.ContentMode).HasConversion<int>();
         modelBuilder.Entity<BackupEntity>().HasIndex(x => x.Status);
         modelBuilder.Entity<BackupEntity>().HasIndex(x => x.PolicyId);

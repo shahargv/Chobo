@@ -12,6 +12,7 @@ public sealed class RestoreRunnerService(
     IServiceScopeFactory scopeFactory,
     ChoboDbContext db,
     IOptions<ChoboBackupRestoreOptions> options,
+    BackupRestoreQueueApplicationService queue,
     IAuditService audit,
     Serilog.ILogger logger)
 {
@@ -44,21 +45,14 @@ public sealed class RestoreRunnerService(
             restore.Status = RestoreRunStatus.Running;
             restore.StartedAt ??= DateTimeOffset.UtcNow;
             await db.SaveChangesAsync(cancellationToken);
+            await queue.EnsureRestoreQueueItemsAsync(restore.Id, cancellationToken);
+            await queue.ResetIncompleteRestoreClaimsAsync(restore.Id, cancellationToken);
             await audit.RecordAsync("started", AuditEntityType.Restore, restore.Id.ToString(), new { restore.BackupId, restore.TargetClusterId });
 
             var maxDop = EffectiveMaxDop(restore.TargetCluster!);
-            _logger.Information("Executing restore {RestoreId} with effective maxdop {MaxDop} and {TableCount} table(s).", restore.Id, maxDop, restore.Tables.Count);
-            using var semaphore = new SemaphoreSlim(maxDop, maxDop);
-            var tasks = restore.Tables
-                .Where(x => x.Status is RestoreTableStatus.Queued or RestoreTableStatus.Running)
-                .Select(async table =>
-                {
-                    await semaphore.WaitAsync(cancellationToken);
-                    try { await RunTableAsync(restore.Id, table.Id, cancellationToken); }
-                    finally { semaphore.Release(); }
-                })
-                .ToList();
-            await Task.WhenAll(tasks);
+            _logger.Information("Executing restore {RestoreId} with per-cluster maxdop {MaxDop} and {TableCount} table(s).", restore.Id, maxDop, restore.Tables.Count);
+            await PrepareRestoreTablesAsync(restore.Id, cancellationToken);
+            await RunRestoreShardWorkAsync(restore.Id, maxDop, cancellationToken);
 
             if (await db.Restores.Where(x => x.Id == restore.Id).Select(x => x.Status).FirstAsync(cancellationToken) == RestoreRunStatus.Canceled)
             {
@@ -66,8 +60,11 @@ public sealed class RestoreRunnerService(
                 return;
             }
 
-            var statuses = await db.RestoreTables.Where(x => x.RestoreId == restore.Id).Select(x => x.Status).ToListAsync(cancellationToken);
-            var tableCount = await db.RestoreTables.CountAsync(x => x.RestoreId == restore.Id, cancellationToken);
+            await FinalizeRestoreTablesAsync(restore.Id, cancellationToken);
+            db.ChangeTracker.Clear();
+            restore = await db.Restores.Include(x => x.Tables).FirstAsync(x => x.Id == restoreId, cancellationToken);
+            var statuses = restore.Tables.Select(x => x.Status).ToList();
+            var tableCount = restore.Tables.Count;
             restore.Status = AggregateRestoreStatus(statuses);
             restore.CompletedAt = DateTimeOffset.UtcNow;
             restore.FailureReason = restore.Status is RestoreRunStatus.Failed or RestoreRunStatus.PartiallySucceeded
@@ -99,6 +96,10 @@ public sealed class RestoreRunnerService(
                     shard.CompletedAt ??= now;
                 }
             }
+            foreach (var item in db.BackupRestoreQueueItems.Where(x => x.Kind == BackupRestoreQueueKind.Restore && x.OperationId == restore.Id && x.CompletedAt == null))
+            {
+                item.CompletedAt = now;
+            }
             await db.SaveChangesAsync(CancellationToken.None);
             await audit.RecordAsync("failed", AuditEntityType.Restore, restore.Id.ToString(), new { error = ex.Message, restore.FailureReason });
         }
@@ -114,24 +115,45 @@ public sealed class RestoreRunnerService(
 
         _logger.Information("Restore {RestoreId} finished with status {Status}. Failure reason: {FailureReason}.", restore.Id, restore.Status, restore.FailureReason);
     }
-    private async Task RunTableAsync(Guid restoreId, Guid tableId, CancellationToken cancellationToken)
+    private enum RestoreShardRunResult
+    {
+        Completed,
+        RetryLater
+    }
+
+    private async Task PrepareRestoreTablesAsync(Guid restoreId, CancellationToken cancellationToken)
+    {
+        var tableIdsByQueue = await db.BackupRestoreQueueItems.AsNoTracking()
+            .Where(x => x.Kind == BackupRestoreQueueKind.Restore && x.OperationId == restoreId)
+            .GroupBy(x => x.TableId)
+            .Select(x => new { TableId = x.Key, Position = x.Min(i => i.Position) })
+            .ToDictionaryAsync(x => x.TableId, x => x.Position, cancellationToken);
+        var tableIds = await db.RestoreTables.AsNoTracking()
+            .Where(x => x.RestoreId == restoreId && (x.Status == RestoreTableStatus.Queued || x.Status == RestoreTableStatus.Running))
+            .Select(x => x.Id)
+            .ToListAsync(cancellationToken);
+        foreach (var tableId in tableIds.OrderBy(x => tableIdsByQueue.TryGetValue(x, out var position) ? position : long.MaxValue))
+        {
+            await PrepareRestoreTableAsync(restoreId, tableId, cancellationToken);
+        }
+    }
+
+    private async Task PrepareRestoreTableAsync(Guid restoreId, Guid tableId, CancellationToken cancellationToken)
     {
         using var scope = scopeFactory.CreateScope();
         var scopedDb = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
         var scopedClickHouse = scope.ServiceProvider.GetRequiredService<IClickHouseAdapter>();
         var scopedAudit = scope.ServiceProvider.GetRequiredService<IAuditService>();
-        var scopedOptions = scope.ServiceProvider.GetRequiredService<IOptions<ChoboBackupRestoreOptions>>();
-        var scopedTestHooks = scope.ServiceProvider.GetRequiredService<ITestHookCoordinator>();
+        var scopedQueue = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
 
         var restore = await scopedDb.Restores
             .Include(x => x.TargetCluster).ThenInclude(x => x!.AccessNodes)
             .Include(x => x.Backup).ThenInclude(x => x!.Target)
-            .Include(x => x.Tables).ThenInclude(x => x.Shards)
+            .Include(x => x.Tables.Where(table => table.Id == tableId)).ThenInclude(x => x.Shards)
             .FirstAsync(x => x.Id == restoreId, cancellationToken);
         var table = restore.Tables.Single(x => x.Id == tableId);
-        if (restore.Status == RestoreRunStatus.Canceled)
+        if (restore.Status == RestoreRunStatus.Canceled || table.Status is RestoreTableStatus.Succeeded or RestoreTableStatus.Failed or RestoreTableStatus.PartiallySucceeded or RestoreTableStatus.Skipped)
         {
-            _logger.Information("Restore table {RestoreTableId} skipped because restore {RestoreId} was canceled.", table.Id, restore.Id);
             return;
         }
         var backupTable = await scopedDb.BackupTables.Include(x => x.SchemaDefinition).Include(x => x.Shards).FirstAsync(x => x.Id == table.BackupTableId, cancellationToken);
@@ -144,8 +166,12 @@ public sealed class RestoreRunnerService(
 
         try
         {
+            var shardPositions = await scopedDb.BackupRestoreQueueItems.AsNoTracking()
+                .Where(x => x.Kind == BackupRestoreQueueKind.Restore && x.OperationId == restore.Id && x.TableId == table.Id)
+                .ToDictionaryAsync(x => x.ShardId, x => x.Position, cancellationToken);
             var orderedShards = table.Shards
-                .OrderBy(x => x.TargetShardNumber ?? int.MaxValue)
+                .OrderBy(x => shardPositions.TryGetValue(x.Id, out var position) ? position : long.MaxValue)
+                .ThenBy(x => x.TargetShardNumber ?? int.MaxValue)
                 .ThenBy(x => x.SourceShardNumber)
                 .ToList();
             var hasSubmittedOperations = orderedShards.Any(x => !string.IsNullOrWhiteSpace(x.ClickHouseOperationId));
@@ -185,6 +211,12 @@ public sealed class RestoreRunnerService(
                 table.Status = RestoreTableStatus.Succeeded;
                 table.ClickHouseStatus = "SCHEMA_ONLY";
                 table.CompletedAt = DateTimeOffset.UtcNow;
+                foreach (var shard in orderedShards)
+                {
+                    shard.Status = RestoreTableStatus.Succeeded;
+                    shard.CompletedAt ??= DateTimeOffset.UtcNow;
+                    await scopedQueue.MarkCompletedAsync(BackupRestoreQueueKind.Restore, shard.Id, cancellationToken);
+                }
                 await scopedDb.SaveChangesAsync(cancellationToken);
                 _logger.Information("Restore table {RestoreTableId} {TargetDatabase}.{TargetTable} completed as schema-only.", table.Id, table.TargetDatabase, table.TargetTable);
                 await scopedAudit.RecordAsync("table-skipped", AuditEntityType.RestoreTable, table.Id.ToString(), new { reason = "schema-only", requested = orderedShards.Count == 0 && backupTable.DataBackedUp });
@@ -196,79 +228,239 @@ public sealed class RestoreRunnerService(
             {
                 await scopedClickHouse.ExecuteAsync(firstEndpoint, restore.TargetCluster!, ClickHouseSql.RewriteCreateTableNameIfNotExists(backupTable.SchemaDefinition!.CreateTableSql, table.TargetDatabase, table.TargetTable), cancellationToken);
             }
-
-            foreach (var shard in orderedShards.Where(x => x.Status is RestoreTableStatus.Queued or RestoreTableStatus.Running))
+            await scopedDb.SaveChangesAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, "Restore table {RestoreTableId} {TargetDatabase}.{TargetTable} failed during preparation.", table.Id, table.TargetDatabase, table.TargetTable);
+            table.Status = RestoreTableStatus.Failed;
+            table.Error = ex.Message;
+            table.CompletedAt = DateTimeOffset.UtcNow;
+            await FailPendingRestoreShardsAsync(table, ex.Message, scopedAudit);
+            foreach (var shard in table.Shards)
             {
-                if (await scopedDb.Restores.Where(x => x.Id == restore.Id).Select(x => x.Status).FirstAsync(cancellationToken) == RestoreRunStatus.Canceled)
-                {
-                    _logger.Information("Restore table {RestoreTableId} stopped before shard {ShardId} because restore {RestoreId} was canceled.", table.Id, shard.Id, restore.Id);
-                    return;
-                }
-                var endpoint = new ClickHouseNodeEndpoint(shard.TargetHost, shard.TargetPort, shard.TargetUseTls);
-                var backupShard = backupTable.Shards.Single(x => x.Id == shard.BackupTableShardId);
-                await scopedClickHouse.ExecuteAsync(endpoint, restore.TargetCluster!, $"CREATE DATABASE IF NOT EXISTS {ClickHouseSql.Identifier(shard.RestoreDatabase)}", cancellationToken);
-                if (usesTemporaryShardTables)
-                {
-                    await scopedClickHouse.ExecuteAsync(endpoint, restore.TargetCluster!, ClickHouseSql.RewriteCreateTableNameIfNotExists(backupTable.SchemaDefinition!.CreateTableSql, table.TargetDatabase, table.TargetTable), cancellationToken);
-                }
+                await scopedQueue.MarkCompletedAsync(BackupRestoreQueueKind.Restore, shard.Id, CancellationToken.None);
+            }
+            await scopedDb.SaveChangesAsync(CancellationToken.None);
+            await scopedAudit.RecordAsync("table-failed", AuditEntityType.RestoreTable, table.Id.ToString(), new { error = ex.Message });
+        }
+    }
 
-                shard.Status = RestoreTableStatus.Running;
-                shard.StartedAt ??= DateTimeOffset.UtcNow;
+    private async Task RunRestoreShardWorkAsync(Guid restoreId, int maxDop, CancellationToken cancellationToken)
+    {
+        var queuedWorkCount = await db.BackupRestoreQueueItems.AsNoTracking()
+            .CountAsync(x => x.Kind == BackupRestoreQueueKind.Restore && x.OperationId == restoreId && x.CompletedAt == null, cancellationToken);
+        if (queuedWorkCount == 0)
+        {
+            return;
+        }
+
+        var forcedWorkCount = await db.BackupRestoreQueueItems.AsNoTracking()
+            .CountAsync(x => x.Kind == BackupRestoreQueueKind.Restore && x.OperationId == restoreId && x.StartedAt == null && x.CompletedAt == null && x.IsForced, cancellationToken);
+        var workerCount = Math.Min(queuedWorkCount, Math.Max(1, maxDop) + forcedWorkCount);
+        var workers = Enumerable.Range(0, workerCount)
+            .Select(async _ =>
+            {
+                while (true)
+                {
+                    BackupRestoreQueueApplicationService.QueueClaimResult claim;
+                    using (var statusScope = scopeFactory.CreateScope())
+                    {
+                        var statusDb = statusScope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+                        if (await IsRestoreCancellationTerminalAsync(statusDb, restoreId, cancellationToken))
+                        {
+                            _logger.Information("Restore {RestoreId} shard worker observed cancellation and stopped taking new shard work.", restoreId);
+                            return;
+                        }
+                        var queue = statusScope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
+                        claim = await queue.TryTakeNextRestoreWorkAsync(restoreId, cancellationToken);
+                    }
+                    if (claim.WorkItem is null)
+                    {
+                        if (!claim.HasQueuedWork)
+                        {
+                            return;
+                        }
+                        await Task.Delay(options.Value.PollInterval, cancellationToken);
+                        continue;
+                    }
+
+                    var item = claim.WorkItem;
+                    var result = await RunRestoreShardAsync(restoreId, item.TableId, item.ShardId, item.IsForced, cancellationToken);
+                    if (result == RestoreShardRunResult.RetryLater)
+                    {
+                        await Task.Delay(options.Value.PollInterval, cancellationToken);
+                    }
+                }
+            })
+            .ToList();
+
+        await Task.WhenAll(workers);
+    }
+
+    private static async Task<bool> IsRestoreCancellationTerminalAsync(ChoboDbContext scopedDb, Guid restoreId, CancellationToken cancellationToken)
+    {
+        var status = await scopedDb.Restores.Where(x => x.Id == restoreId).Select(x => x.Status).FirstAsync(cancellationToken);
+        return status == RestoreRunStatus.Canceled;
+    }
+
+    private async Task<RestoreShardRunResult> RunRestoreShardAsync(Guid restoreId, Guid tableId, Guid shardId, bool isForcedQueueItem, CancellationToken cancellationToken)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var scopedDb = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+        var scopedClickHouse = scope.ServiceProvider.GetRequiredService<IClickHouseAdapter>();
+        var scopedAudit = scope.ServiceProvider.GetRequiredService<IAuditService>();
+        var scopedOptions = scope.ServiceProvider.GetRequiredService<IOptions<ChoboBackupRestoreOptions>>();
+        var scopedQueue = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
+        var scopedTestHooks = scope.ServiceProvider.GetRequiredService<ITestHookCoordinator>();
+
+        var restore = await scopedDb.Restores
+            .Include(x => x.TargetCluster).ThenInclude(x => x!.AccessNodes)
+            .Include(x => x.Backup).ThenInclude(x => x!.Target)
+            .Include(x => x.Tables.Where(table => table.Id == tableId)).ThenInclude(x => x.Shards)
+            .FirstAsync(x => x.Id == restoreId, cancellationToken);
+        var table = restore.Tables.Single();
+        var shard = table.Shards.Single(x => x.Id == shardId);
+        if (restore.Status == RestoreRunStatus.Canceled || shard.Status is RestoreTableStatus.Succeeded or RestoreTableStatus.Failed or RestoreTableStatus.PartiallySucceeded or RestoreTableStatus.Skipped)
+        {
+            return RestoreShardRunResult.Completed;
+        }
+
+        var backupTable = await scopedDb.BackupTables.Include(x => x.SchemaDefinition).Include(x => x.Shards).FirstAsync(x => x.Id == table.BackupTableId, cancellationToken);
+        var backupShard = backupTable.Shards.Single(x => x.Id == shard.BackupTableShardId);
+        var usesTemporaryShardTables = table.Shards.Any(x => !string.Equals(x.RestoreTableName, table.TargetTable, StringComparison.Ordinal));
+        var endpoint = new ClickHouseNodeEndpoint(shard.TargetHost, shard.TargetPort, shard.TargetUseTls);
+
+        if (string.IsNullOrWhiteSpace(shard.ClickHouseOperationId) && IsReplicatedMergeTreeEngine(backupTable.Engine))
+        {
+            var candidates = (await scopedClickHouse.GetTopologyAsync(restore.TargetCluster!, cancellationToken))
+                .Where(x => x.ShardNumber == (shard.TargetShardNumber ?? shard.SourceShardNumber))
+                .OrderBy(_ => Random.Shared.Next())
+                .ToList();
+            var selectedCandidateIndex = -1;
+            for (var i = 0; i < candidates.Count; i++)
+            {
+                if (!await scopedQueue.TryReserveStartedNodeAsync(BackupRestoreQueueKind.Restore, shard.Id, restore.TargetClusterId, candidates[i].Endpoint, isForcedQueueItem, cancellationToken))
+                {
+                    continue;
+                }
+                selectedCandidateIndex = i;
+                break;
+            }
+            if (selectedCandidateIndex < 0 && candidates.Count > 0)
+            {
+                await ReleaseRestoreShardForRetryAsync(scopedDb, scopedQueue, shard, cancellationToken);
+                return RestoreShardRunResult.RetryLater;
+            }
+            if (selectedCandidateIndex >= 0)
+            {
+                var selected = candidates[selectedCandidateIndex];
+                endpoint = selected.Endpoint;
+                shard.TargetShardName = selected.ShardName;
+                shard.TargetReplicaNumber = selected.ReplicaNumber;
+                shard.TargetHost = selected.Host;
+                shard.TargetPort = selected.Port;
+                shard.TargetUseTls = selected.UseTls;
                 await scopedDb.SaveChangesAsync(cancellationToken);
-                await scopedAudit.RecordAsync("shard-started", AuditEntityType.RestoreTableShard, shard.Id.ToString(), new { sourceShard = shard.SourceShardNumber, targetShard = shard.TargetShardNumber, targetNode = $"{shard.TargetHost}:{shard.TargetPort}", layout = restore.Layout });
+            }
+            else if (!await scopedQueue.TryReserveStartedNodeAsync(BackupRestoreQueueKind.Restore, shard.Id, restore.TargetClusterId, endpoint, isForcedQueueItem, cancellationToken))
+            {
+                await ReleaseRestoreShardForRetryAsync(scopedDb, scopedQueue, shard, cancellationToken);
+                return RestoreShardRunResult.RetryLater;
+            }
+        }
 
-                try
+        try
+        {
+            await scopedQueue.MarkStartedAsync(BackupRestoreQueueKind.Restore, shard.Id, endpoint, cancellationToken);
+            await scopedClickHouse.ExecuteAsync(endpoint, restore.TargetCluster!, $"CREATE DATABASE IF NOT EXISTS {ClickHouseSql.Identifier(shard.RestoreDatabase)}", cancellationToken);
+            if (usesTemporaryShardTables)
+            {
+                await scopedClickHouse.ExecuteAsync(endpoint, restore.TargetCluster!, ClickHouseSql.RewriteCreateTableNameIfNotExists(backupTable.SchemaDefinition!.CreateTableSql, table.TargetDatabase, table.TargetTable), cancellationToken);
+            }
+
+            shard.Status = RestoreTableStatus.Running;
+            shard.StartedAt ??= DateTimeOffset.UtcNow;
+            await scopedDb.SaveChangesAsync(cancellationToken);
+            await scopedAudit.RecordAsync("shard-started", AuditEntityType.RestoreTableShard, shard.Id.ToString(), new { sourceShard = shard.SourceShardNumber, targetShard = shard.TargetShardNumber, targetNode = $"{shard.TargetHost}:{shard.TargetPort}", layout = restore.Layout, forced = isForcedQueueItem });
+
+            if (!string.IsNullOrWhiteSpace(shard.ClickHouseOperationId))
+            {
+                var status = await scopedClickHouse.GetOperationStatusAsync(endpoint, restore.TargetCluster!, shard.ClickHouseOperationId, cancellationToken);
+                if (status.Exists)
                 {
-                    if (!string.IsNullOrWhiteSpace(shard.ClickHouseOperationId))
+                    if (!await PollRestoreShardAsync(scopedDb, restore.Id, scopedClickHouse, endpoint, restore.TargetCluster!, shard, status, scopedOptions.Value.PollInterval, cancellationToken))
                     {
-                        var status = await scopedClickHouse.GetOperationStatusAsync(endpoint, restore.TargetCluster!, shard.ClickHouseOperationId, cancellationToken);
-                        if (status.Exists)
-                        {
-                            await PollRestoreShardAsync(scopedClickHouse, endpoint, restore.TargetCluster!, shard, status, scopedOptions.Value.PollInterval, cancellationToken);
-                        }
-                        else
-                        {
-                            throw MissingOperationException(shard.ClickHouseOperationId);
-                        }
+                        return RestoreShardRunResult.Completed;
                     }
-
-                    if (string.IsNullOrWhiteSpace(shard.ClickHouseOperationId))
-                    {
-                        var operation = await scopedClickHouse.StartRestoreShardAsync(endpoint, restore.TargetCluster!, restore.Backup!.Target!, shard, backupTable, backupShard, cancellationToken);
-                        shard.ClickHouseOperationId = operation.OperationId;
-                        shard.ClickHouseStatus = operation.Status;
-                        table.ClickHouseOperationId ??= operation.OperationId;
-                        table.ClickHouseStatus = operation.Status;
-                        await scopedDb.SaveChangesAsync(cancellationToken);
-                        await scopedAudit.RecordAsync("clickhouse-operation-submitted", AuditEntityType.RestoreTableShard, shard.Id.ToString(), new { operation.OperationId, operation.Status, sourceShard = shard.SourceShardNumber, targetShard = shard.TargetShardNumber });
-                        await scopedTestHooks.MaybeDelayRestoreBeforePollAsync(cancellationToken);
-                        await PollRestoreShardAsync(scopedClickHouse, endpoint, restore.TargetCluster!, shard, new ClickHouseOperationStatus(true, operation.Status, null), scopedOptions.Value.PollInterval, cancellationToken);
-                    }
-
-                    if (!string.Equals(shard.RestoreTableName, table.TargetTable, StringComparison.Ordinal))
-                    {
-                        var insertSql = table.Warning is null
-                            ? $"INSERT INTO {ClickHouseSql.Qualified(table.TargetDatabase, table.TargetTable)} SELECT * FROM {ClickHouseSql.Qualified(shard.RestoreDatabase, shard.RestoreTableName)}"
-                            : BuildMismatchAppendInsertSql(existing!, backupTable.SchemaDefinition!, table.TargetDatabase, table.TargetTable, shard.RestoreTableName);
-                        await scopedClickHouse.ExecuteAsync(endpoint, restore.TargetCluster!, insertSql, cancellationToken);
-                        await scopedClickHouse.ExecuteAsync(endpoint, restore.TargetCluster!, $"DROP TABLE IF EXISTS {ClickHouseSql.Qualified(shard.RestoreDatabase, shard.RestoreTableName)}", cancellationToken);
-                    }
-
-                    shard.Status = RestoreTableStatus.Succeeded;
-                    shard.CompletedAt = DateTimeOffset.UtcNow;
-                    await scopedDb.SaveChangesAsync(cancellationToken);
-                    await scopedAudit.RecordAsync("shard-succeeded", AuditEntityType.RestoreTableShard, shard.Id.ToString(), new { sourceShard = shard.SourceShardNumber, targetShard = shard.TargetShardNumber, shard.ClickHouseStatus });
                 }
-                catch (Exception ex)
+                else
                 {
-                    shard.Status = RestoreTableStatus.Failed;
-                    shard.Error = ex.Message;
-                    shard.CompletedAt = DateTimeOffset.UtcNow;
-                    await scopedDb.SaveChangesAsync(CancellationToken.None);
-                    await scopedAudit.RecordAsync("shard-failed", AuditEntityType.RestoreTableShard, shard.Id.ToString(), new { error = ex.Message, sourceShard = shard.SourceShardNumber, targetShard = shard.TargetShardNumber });
+                    throw MissingOperationException(shard.ClickHouseOperationId);
                 }
             }
 
+            if (string.IsNullOrWhiteSpace(shard.ClickHouseOperationId))
+            {
+                var operation = await scopedClickHouse.StartRestoreShardAsync(endpoint, restore.TargetCluster!, restore.Backup!.Target!, shard, backupTable, backupShard, cancellationToken);
+                shard.ClickHouseOperationId = operation.OperationId;
+                shard.ClickHouseStatus = operation.Status;
+                table.ClickHouseOperationId ??= operation.OperationId;
+                table.ClickHouseStatus = operation.Status;
+                await scopedDb.SaveChangesAsync(cancellationToken);
+                await scopedAudit.RecordAsync("clickhouse-operation-submitted", AuditEntityType.RestoreTableShard, shard.Id.ToString(), new { operation.OperationId, operation.Status, sourceShard = shard.SourceShardNumber, targetShard = shard.TargetShardNumber });
+                await scopedTestHooks.MaybeDelayRestoreBeforePollAsync(cancellationToken);
+                if (!await PollRestoreShardAsync(scopedDb, restore.Id, scopedClickHouse, endpoint, restore.TargetCluster!, shard, new ClickHouseOperationStatus(true, operation.Status, null), scopedOptions.Value.PollInterval, cancellationToken))
+                {
+                    return RestoreShardRunResult.Completed;
+                }
+            }
+
+            if (!string.Equals(shard.RestoreTableName, table.TargetTable, StringComparison.Ordinal))
+            {
+                var existing = await scopedClickHouse.GetTableAsync(endpoint, restore.TargetCluster!, table.TargetDatabase, table.TargetTable, cancellationToken);
+                var insertSql = table.Warning is null
+                    ? $"INSERT INTO {ClickHouseSql.Qualified(table.TargetDatabase, table.TargetTable)} SELECT * FROM {ClickHouseSql.Qualified(shard.RestoreDatabase, shard.RestoreTableName)}"
+                    : BuildMismatchAppendInsertSql(existing!, backupTable.SchemaDefinition!, table.TargetDatabase, table.TargetTable, shard.RestoreTableName);
+                await scopedClickHouse.ExecuteAsync(endpoint, restore.TargetCluster!, insertSql, cancellationToken);
+                await scopedClickHouse.ExecuteAsync(endpoint, restore.TargetCluster!, $"DROP TABLE IF EXISTS {ClickHouseSql.Qualified(shard.RestoreDatabase, shard.RestoreTableName)}", cancellationToken);
+            }
+
+            shard.Status = RestoreTableStatus.Succeeded;
+            shard.CompletedAt = DateTimeOffset.UtcNow;
+            await scopedDb.SaveChangesAsync(cancellationToken);
+            await scopedAudit.RecordAsync("shard-succeeded", AuditEntityType.RestoreTableShard, shard.Id.ToString(), new { sourceShard = shard.SourceShardNumber, targetShard = shard.TargetShardNumber, shard.ClickHouseStatus });
+            await scopedQueue.MarkCompletedAsync(BackupRestoreQueueKind.Restore, shard.Id, cancellationToken);
+            return RestoreShardRunResult.Completed;
+        }
+        catch (Exception ex)
+        {
+            shard.Status = RestoreTableStatus.Failed;
+            shard.Error = ex.Message;
+            shard.CompletedAt = DateTimeOffset.UtcNow;
+            await scopedDb.SaveChangesAsync(CancellationToken.None);
+            await scopedAudit.RecordAsync("shard-failed", AuditEntityType.RestoreTableShard, shard.Id.ToString(), new { error = ex.Message, sourceShard = shard.SourceShardNumber, targetShard = shard.TargetShardNumber });
+            await scopedQueue.MarkCompletedAsync(BackupRestoreQueueKind.Restore, shard.Id, CancellationToken.None);
+            return RestoreShardRunResult.Completed;
+        }
+    }
+
+    private static async Task ReleaseRestoreShardForRetryAsync(ChoboDbContext scopedDb, BackupRestoreQueueApplicationService scopedQueue, RestoreTableShardEntity shard, CancellationToken cancellationToken)
+    {
+        shard.Status = RestoreTableStatus.Queued;
+        shard.StartedAt = null;
+        await scopedDb.SaveChangesAsync(cancellationToken);
+        await scopedQueue.ReleaseStartedAsync(BackupRestoreQueueKind.Restore, shard.Id, cancellationToken);
+    }
+
+    private async Task FinalizeRestoreTablesAsync(Guid restoreId, CancellationToken cancellationToken)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var scopedDb = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+        var scopedAudit = scope.ServiceProvider.GetRequiredService<IAuditService>();
+        var tables = await scopedDb.RestoreTables.Include(x => x.Shards).Where(x => x.RestoreId == restoreId).ToListAsync(cancellationToken);
+        foreach (var table in tables.Where(x => x.CompletedAt is null || x.Status == RestoreTableStatus.Running))
+        {
             table.Status = AggregateRestoreTableStatus(table.Shards.Select(x => x.Status).ToList());
             table.ClickHouseStatus = table.Shards.Any(x => x.Status == RestoreTableStatus.Failed)
                 ? "PARTIAL_OR_FAILED"
@@ -277,23 +469,12 @@ public sealed class RestoreRunnerService(
                 ? BuildRestoreShardFailureReason(table.Shards.Where(x => x.Status == RestoreTableStatus.Failed).ToList())
                 : null;
             table.CompletedAt = DateTimeOffset.UtcNow;
-            await scopedDb.SaveChangesAsync(cancellationToken);
             _logger.Information("Restore table {RestoreTableId} {TargetDatabase}.{TargetTable} completed with ClickHouse status {Status}.", table.Id, table.TargetDatabase, table.TargetTable, table.ClickHouseStatus);
             var tableAction = table.Status == RestoreTableStatus.Succeeded ? "table-succeeded" : table.Status == RestoreTableStatus.PartiallySucceeded ? "table-partially-succeeded" : "table-failed";
             await scopedAudit.RecordAsync(tableAction, AuditEntityType.RestoreTable, table.Id.ToString(), new { table.TargetDatabase, table.TargetTable, shardCount = table.Shards.Count, failureReason = table.Error });
         }
-        catch (Exception ex)
-        {
-            _logger.Error(ex, "Restore table {RestoreTableId} {TargetDatabase}.{TargetTable} failed.", table.Id, table.TargetDatabase, table.TargetTable);
-            table.Status = RestoreTableStatus.Failed;
-            table.Error = ex.Message;
-            table.CompletedAt = DateTimeOffset.UtcNow;
-            await FailPendingRestoreShardsAsync(table, ex.Message, scopedAudit);
-            await scopedDb.SaveChangesAsync(CancellationToken.None);
-            await scopedAudit.RecordAsync("table-failed", AuditEntityType.RestoreTable, table.Id.ToString(), new { error = ex.Message });
-        }
+        await scopedDb.SaveChangesAsync(cancellationToken);
     }
-
     private static async Task EnsureTargetTableExistsOnAllShardsAsync(IClickHouseAdapter adapter, ClickHouseClusterEntity cluster, BackupTableEntity backupTable, RestoreTableEntity table, CancellationToken cancellationToken)
     {
         var topology = await adapter.GetTopologyAsync(cluster, cancellationToken);
@@ -359,10 +540,14 @@ public sealed class RestoreRunnerService(
         }
     }
 
-    private static async Task PollRestoreShardAsync(IClickHouseAdapter adapter, ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, RestoreTableShardEntity shard, ClickHouseOperationStatus current, TimeSpan interval, CancellationToken cancellationToken)
+    private static async Task<bool> PollRestoreShardAsync(ChoboDbContext db, Guid restoreId, IClickHouseAdapter adapter, ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, RestoreTableShardEntity shard, ClickHouseOperationStatus current, TimeSpan interval, CancellationToken cancellationToken)
     {
         while (true)
         {
+            if (await db.Restores.Where(x => x.Id == restoreId).Select(x => x.Status).FirstAsync(cancellationToken) == RestoreRunStatus.Canceled)
+            {
+                return false;
+            }
             if (!current.Exists)
             {
                 throw MissingOperationException(shard.ClickHouseOperationId);
@@ -371,7 +556,7 @@ public sealed class RestoreRunnerService(
             shard.ClickHouseStatus = current.Status;
             if (string.Equals(current.Status, "RESTORED", StringComparison.OrdinalIgnoreCase))
             {
-                return;
+                return true;
             }
             if (current.Status?.Contains("FAILED", StringComparison.OrdinalIgnoreCase) == true)
             {
@@ -391,8 +576,11 @@ public sealed class RestoreRunnerService(
         }
     }
 
+
+    private static bool IsReplicatedMergeTreeEngine(string engine) =>
+        engine.Contains("Replicated", StringComparison.OrdinalIgnoreCase) && engine.Contains("MergeTree", StringComparison.OrdinalIgnoreCase);
     private int EffectiveMaxDop(ClickHouseClusterEntity cluster) =>
-        Math.Max(1, cluster.BackupRestoreMaxDop is > 0 ? cluster.BackupRestoreMaxDop.Value : options.Value.MaxDop <= 0 ? 3 : options.Value.MaxDop);
+        Math.Max(1, cluster.BackupRestoreMaxDop > 0 ? cluster.BackupRestoreMaxDop : options.Value.MaxDop <= 0 ? 3 : options.Value.MaxDop);
 
     private async Task<string> GetRestoreFailureReasonAsync(Guid restoreId, CancellationToken cancellationToken)
     {
@@ -500,6 +688,17 @@ public sealed class RestoreRunnerService(
         return RestoreTableStatus.Failed;
     }
 }
+
+
+
+
+
+
+
+
+
+
+
 
 
 

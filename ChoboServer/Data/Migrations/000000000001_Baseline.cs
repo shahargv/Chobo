@@ -79,7 +79,11 @@ public sealed class Baseline : Migration
                 EncryptedUserNameKeyId TEXT NULL,
                 EncryptedPassword TEXT NULL,
                 EncryptedPasswordKeyId TEXT NULL,
-                BackupRestoreMaxDop INTEGER NULL,
+                BackupRestoreMaxDop INTEGER NOT NULL,
+                NodeMaxDopDefault INTEGER NOT NULL DEFAULT 1,
+                NodeMaxDopOverridesJson TEXT NOT NULL DEFAULT '[]',
+                ShardMaxDopDefault INTEGER NOT NULL DEFAULT 1,
+                ShardMaxDopOverridesJson TEXT NOT NULL DEFAULT '[]',
                 ClickHouseClusterName TEXT NULL,
                 IsDeleted INTEGER NOT NULL,
                 CreatedAt INTEGER NOT NULL,
@@ -249,6 +253,28 @@ public sealed class Baseline : Migration
                 CONSTRAINT FK_BackupTableShards_BackupTableShards_ParentFullBackupTableShardId FOREIGN KEY (ParentFullBackupTableShardId) REFERENCES BackupTableShards (Id)
             );
 
+
+            CREATE TABLE IF NOT EXISTS BackupRestoreQueueItems (
+                Id TEXT NOT NULL CONSTRAINT PK_BackupRestoreQueueItems PRIMARY KEY,
+                Kind INTEGER NOT NULL,
+                Position INTEGER NOT NULL,
+                IsForced INTEGER NOT NULL,
+                ForcedAt INTEGER NULL,
+                ForcedByUserId TEXT NULL,
+                ForcedByName TEXT NULL,
+                OperationId TEXT NOT NULL,
+                TableId TEXT NOT NULL,
+                ShardId TEXT NOT NULL,
+                ClusterId TEXT NOT NULL,
+                LogicalShardNumber INTEGER NOT NULL,
+                LogicalShardName TEXT NULL,
+                NodeHost TEXT NULL,
+                NodePort INTEGER NULL,
+                NodeUseTls INTEGER NULL,
+                CreatedAt INTEGER NOT NULL,
+                StartedAt INTEGER NULL,
+                CompletedAt INTEGER NULL
+            );
             CREATE TABLE IF NOT EXISTS Restores (
                 Id TEXT NOT NULL CONSTRAINT PK_Restores PRIMARY KEY,
                 BackupId TEXT NOT NULL,
@@ -370,6 +396,13 @@ public sealed class Baseline : Migration
             CREATE INDEX IF NOT EXISTS IX_BackupTableShards_EffectiveBackupType_ParentFullBackupTableShardId ON BackupTableShards (EffectiveBackupType, ParentFullBackupTableShardId);
             CREATE INDEX IF NOT EXISTS IX_BackupTableShards_Status ON BackupTableShards (Status);
             CREATE INDEX IF NOT EXISTS IX_BackupTableShards_ParentFullBackupTableShardId ON BackupTableShards (ParentFullBackupTableShardId);
+            CREATE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_IsForced_Position ON BackupRestoreQueueItems (IsForced, Position);
+            CREATE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_Kind_OperationId ON BackupRestoreQueueItems (Kind, OperationId);
+            CREATE UNIQUE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_ShardId ON BackupRestoreQueueItems (ShardId);
+            CREATE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_ClusterId_LogicalShardNumber ON BackupRestoreQueueItems (ClusterId, LogicalShardNumber);
+            CREATE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_NodeHost_NodePort_NodeUseTls ON BackupRestoreQueueItems (NodeHost, NodePort, NodeUseTls);
+            CREATE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_ClusterId_NodeHost_NodePort_NodeUseTls_StartedAt_CompletedAt ON BackupRestoreQueueItems (ClusterId, NodeHost, NodePort, NodeUseTls, StartedAt, CompletedAt);
+            CREATE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_Kind_StartedAt_CompletedAt_IsForced_Position ON BackupRestoreQueueItems (Kind, StartedAt, CompletedAt, IsForced, Position);
             CREATE INDEX IF NOT EXISTS IX_Restores_Status ON Restores (Status);
             CREATE INDEX IF NOT EXISTS IX_Restores_BackupId ON Restores (BackupId);
             CREATE INDEX IF NOT EXISTS IX_Restores_TargetClusterId ON Restores (TargetClusterId);
@@ -386,6 +419,7 @@ public sealed class Baseline : Migration
     {
         migrationBuilder.Sql("""
             DROP TABLE IF EXISTS RestoreTableShards;
+            DROP TABLE IF EXISTS BackupRestoreQueueItems;
             DROP TABLE IF EXISTS RestoreTables;
             DROP TABLE IF EXISTS Restores;
             DROP TABLE IF EXISTS BackupTableShards;

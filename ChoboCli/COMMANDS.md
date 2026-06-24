@@ -37,8 +37,8 @@ ChoboCli users remove-token --id <user-id> --token-id <token-id>
 ```powershell
 ChoboCli clusters list
 ChoboCli clusters add --name prod --mode Cluster --node ch1:8123,ch2:8123 --username default --password secret --backup-restore-maxdop 3 --clickhouse-cluster-name prod_cluster
-ChoboCli clusters add --name local --mode SingleInstance --host localhost --port 8123
-ChoboCli clusters update --id <cluster-id> --name prod --mode Cluster --node ch1:8123,ch2:8123
+ChoboCli clusters add --name local --mode SingleInstance --host localhost --port 8123 --backup-restore-maxdop 1
+ChoboCli clusters update --id <cluster-id> --name prod --mode Cluster --node ch1:8123,ch2:8123 --backup-restore-maxdop 3
 ChoboCli clusters update-credentials --id <cluster-id> --username default --password secret
 ChoboCli clusters test-connection --id <cluster-id>
 ChoboCli clusters remove --id <cluster-id>

@@ -12,6 +12,7 @@ namespace ChoboServer.Application;
 public sealed class RestoreApplicationService(
     ChoboDbContext db,
     IBackupRestoreQueues queues,
+    BackupRestoreQueueApplicationService queueItems,
     IClickHouseAdapter clickHouse,
     IAuditService audit,
     ActorContext actor,
@@ -190,6 +191,7 @@ public sealed class RestoreApplicationService(
 
         db.Restores.Add(restore);
         await db.SaveChangesAsync(cancellationToken);
+        await queueItems.EnsureRestoreQueueItemsAsync(restore.Id, cancellationToken);
         _logger.Information("Restore {RestoreId} created by {ActorName} for backup {BackupId} into cluster {TargetClusterId} with {TableCount} table(s).", restore.Id, actor.ActorName, restore.BackupId, restore.TargetClusterId, restore.Tables.Count);
         await audit.RecordAsync("created", AuditEntityType.Restore, restore.Id.ToString(), new { operationId = restore.Id, restore.BackupId, restore.TargetClusterId, tableCount = restore.Tables.Count, shardCount = restore.Tables.Sum(x => x.Shards.Count), layout, request.SourceShard, request.SourceShards, request.TargetShard, request.TargetShards, request.SchemaOnly, tableOptions = restore.Tables.Select(x => new { x.SourceDatabase, x.SourceTable, x.TargetDatabase, x.TargetTable, x.Append, x.AllowSchemaMismatch, x.SchemaOnly }).ToList() });
         await queues.QueueRestoreAsync(restore.Id, cancellationToken);
@@ -241,7 +243,7 @@ public sealed class RestoreApplicationService(
                 shard.CompletedAt ??= now;
             }
         }
-
+        await queueItems.CompleteOperationAsync(BackupRestoreQueueKind.Restore, restore.Id, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         var killResults = await KillRestoreOperationsAsync(restore, cancellationToken);
         await audit.RecordAsync("canceled", AuditEntityType.Restore, id.ToString(), new { operationId = id, actor.UserId, actor.ActorName, killed = killResults.Killed, killFailures = killResults.Failures });
@@ -452,4 +454,6 @@ public sealed class RestoreApplicationService(
         return options;
     }
 }
+
+
 

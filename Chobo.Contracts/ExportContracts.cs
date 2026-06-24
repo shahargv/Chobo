@@ -26,7 +26,7 @@ public sealed record UserExport(Guid Id, string UserName, bool IsActive, DateTim
 
 public sealed record AccessTokenExport(Guid Id, Guid UserId, string Name, string TokenHash, string TokenLookupHash, string Salt, bool IsActive, DateTimeOffset CreatedAt, DateTimeOffset? DeactivatedAt);
 
-public sealed record ClusterExport(Guid Id, string Name, ClusterMode Mode, string? ClickHouseClusterName, IReadOnlyList<AccessNodeDto> AccessNodes, string? EncryptedUserName, Guid? EncryptedUserNameKeyId, string? EncryptedPassword, Guid? EncryptedPasswordKeyId, int? BackupRestoreMaxDop, bool IsDeleted, DateTimeOffset CreatedAt, DateTimeOffset? UpdatedAt, DateTimeOffset? DeletedAt);
+public sealed record ClusterExport(Guid Id, string Name, ClusterMode Mode, string? ClickHouseClusterName, IReadOnlyList<AccessNodeDto> AccessNodes, string? EncryptedUserName, Guid? EncryptedUserNameKeyId, string? EncryptedPassword, Guid? EncryptedPasswordKeyId, int? BackupRestoreMaxDop, int NodeMaxDopDefault, IReadOnlyList<ClusterNodeMaxDopOverrideDto> NodeMaxDopOverrides, int ShardMaxDopDefault, IReadOnlyList<ClusterShardMaxDopOverrideDto> ShardMaxDopOverrides, bool IsDeleted, DateTimeOffset CreatedAt, DateTimeOffset? UpdatedAt, DateTimeOffset? DeletedAt);
 
 public sealed record BackupTargetExport(Guid Id, string Name, BackupTargetType Type, S3TargetSettingsDto S3, string? EncryptedAccessKey, Guid? EncryptedAccessKeyKeyId, string? EncryptedSecretKey, Guid? EncryptedSecretKeyKeyId, bool IsDeleted, DateTimeOffset CreatedAt, DateTimeOffset? UpdatedAt, DateTimeOffset? DeletedAt);
 

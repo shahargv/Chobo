@@ -61,7 +61,21 @@ public sealed class UpsertClusterRequestValidator : AbstractValidator<UpsertClus
         RuleForEach(x => x.AccessNodes).SetValidator(new UpsertAccessNodeRequestValidator());
         RuleFor(x => x.UserName).MaximumLength(256).When(x => x.UserName is not null);
         RuleFor(x => x.Password).MaximumLength(4096).When(x => x.Password is not null);
-        RuleFor(x => x.BackupRestoreMaxDop).InclusiveBetween(1, 1024).When(x => x.BackupRestoreMaxDop is not null);
+        RuleFor(x => x.BackupRestoreMaxDop).InclusiveBetween(1, 1024);
+        RuleFor(x => x.NodeMaxDopDefault).InclusiveBetween(1, 1024);
+        RuleFor(x => x.ShardMaxDopDefault).InclusiveBetween(1, 1024);
+        RuleForEach(x => x.NodeMaxDopOverrides).ChildRules(node =>
+        {
+            node.RuleFor(x => x.Host).NotEmpty().MaximumLength(512);
+            node.RuleFor(x => x.Port).InclusiveBetween(1, 65535);
+            node.RuleFor(x => x.MaxDop).InclusiveBetween(1, 1024);
+        });
+        RuleForEach(x => x.ShardMaxDopOverrides).ChildRules(shard =>
+        {
+            shard.RuleFor(x => x.ShardNumber).GreaterThan(0);
+            shard.RuleFor(x => x.ShardName).MaximumLength(512).When(x => x.ShardName is not null);
+            shard.RuleFor(x => x.MaxDop).InclusiveBetween(1, 1024);
+        });
         RuleFor(x => x.ClickHouseClusterName).MaximumLength(256).When(x => x.ClickHouseClusterName is not null);
     }
 }
@@ -400,7 +414,7 @@ public sealed class ClusterExportValidator : AbstractValidator<ClusterExport>
         RuleFor(x => x.Mode).IsInEnum();
         RuleFor(x => x.AccessNodes).NotNull().NotEmpty();
         RuleForEach(x => x.AccessNodes).SetValidator(new AccessNodeDtoValidator());
-        RuleFor(x => x.BackupRestoreMaxDop).InclusiveBetween(1, 1024).When(x => x.BackupRestoreMaxDop is not null);
+        RuleFor(x => x.BackupRestoreMaxDop).InclusiveBetween(1, 1024).When(x => x.BackupRestoreMaxDop.HasValue);
         RuleFor(x => x.CreatedAt).NotEqual(default(DateTimeOffset));
     }
 }

@@ -35,7 +35,7 @@
         @{
             Name = 'add-single-cluster'
             Type = 'Cli'
-            Args = @('clusters', 'add', '--name', 'source-single', '--mode', 'SingleInstance', '--host', '{sourceSingle.Host}', '--username', 'default')
+            Args = @('clusters', 'add', '--name', 'source-single', '--mode', 'SingleInstance', '--host', '{sourceSingle.Host}', '--backup-restore-maxdop', '1', '--username', 'default')
             SaveJsonAs = 'sourceSingleCluster'
         }
         @{
@@ -121,7 +121,7 @@
         }
         @{ Name = 'update-single-credentials'; Type = 'Cli'; Args = @('clusters', 'update-credentials', '--id', '{sourceSingleCluster.id}', '--username', 'default') }
         @{ Name = 'update-sharded-credentials'; Type = 'Cli'; Args = @('clusters', 'update-credentials', '--id', '{sourceShardedCluster.id}', '--username', 'default') }
-        @{ Name = 'add-restore-single'; Type = 'Cli'; Args = @('clusters', 'add', '--name', 'restore-single', '--mode', 'SingleInstance', '--host', '{restoreSingle.Host}', '--username', 'default'); SaveJsonAs = 'restoreSingleCluster' }
+        @{ Name = 'add-restore-single'; Type = 'Cli'; Args = @('clusters', 'add', '--name', 'restore-single', '--mode', 'SingleInstance', '--host', '{restoreSingle.Host}', '--backup-restore-maxdop', '1', '--username', 'default'); SaveJsonAs = 'restoreSingleCluster' }
         @{ Name = 'add-restore-sharded'; Type = 'Cli'; Args = @('clusters', 'add', '--name', 'restore-sharded', '--mode', 'Cluster', '--node', 'clickhouse-restoresharded-s1-r1:9000', '--clickhouse-cluster-name', '{restoreSharded.ClusterName}', '--backup-restore-maxdop', '1', '--username', 'default'); SaveJsonAs = 'restoreShardedCluster' }
         @{ Name = 'restore-single-incremental'; Type = 'Cli'; Args = @('restore', 'initiate', '--backup-id', '{singleIncremental.id}', '--target-cluster-id', '{restoreSingleCluster.id}'); SaveJsonAs = 'singleRestore' }
         @{ Name = 'wait-restore-single'; Type = 'Cli'; Args = @('restores', 'wait', '--id', '{singleRestore.id}', '--timeout-seconds', '90', '--poll-seconds', '1'); ExpectJson = @(@{ Path = 'status'; Equals = 'Succeeded' }) }

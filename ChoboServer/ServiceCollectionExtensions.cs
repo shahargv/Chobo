@@ -138,6 +138,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<BackupRunnerService>();
         services.AddScoped<RestoreRunnerService>();
         services.AddScoped<BackupCleanupService>();
+        services.AddScoped<BackupRestoreQueueApplicationService>();
         services.AddSingleton(TimeProvider.System);
         services.AddSingleton<IBackupRestoreQueues, BackupRestoreQueues>();
         services.AddHostedService<BackupRestoreResumeBackgroundService>();

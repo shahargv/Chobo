@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Chobo.Contracts;
 using ChoboServer.Data;
 using ChoboServer.Repositories;
@@ -55,7 +56,11 @@ public sealed class ClusterApplicationService(
         {
             Name = request.Name.Trim(),
             Mode = request.Mode,
-            BackupRestoreMaxDop = NormalizeMaxDop(request.BackupRestoreMaxDop),
+            BackupRestoreMaxDop = NormalizeRequiredMaxDop(request.BackupRestoreMaxDop),
+            NodeMaxDopDefault = NormalizeRequiredMaxDop(request.NodeMaxDopDefault),
+            NodeMaxDopOverridesJson = SerializeNodeOverrides(request.NodeMaxDopOverrides),
+            ShardMaxDopDefault = NormalizeRequiredMaxDop(request.ShardMaxDopDefault),
+            ShardMaxDopOverridesJson = SerializeShardOverrides(request.ShardMaxDopOverrides),
             ClickHouseClusterName = NormalizeClusterName(request.ClickHouseClusterName),
             EncryptedUserName = userName?.Ciphertext,
             EncryptedUserNameKeyId = userName?.KeyId,
@@ -85,7 +90,11 @@ public sealed class ClusterApplicationService(
         var previous = ToDto(cluster);
         cluster.Name = request.Name.Trim();
         cluster.Mode = request.Mode;
-        cluster.BackupRestoreMaxDop = NormalizeMaxDop(request.BackupRestoreMaxDop);
+        cluster.BackupRestoreMaxDop = NormalizeRequiredMaxDop(request.BackupRestoreMaxDop);
+        cluster.NodeMaxDopDefault = NormalizeRequiredMaxDop(request.NodeMaxDopDefault);
+        cluster.NodeMaxDopOverridesJson = SerializeNodeOverrides(request.NodeMaxDopOverrides);
+        cluster.ShardMaxDopDefault = NormalizeRequiredMaxDop(request.ShardMaxDopDefault);
+        cluster.ShardMaxDopOverridesJson = SerializeShardOverrides(request.ShardMaxDopOverrides);
         cluster.ClickHouseClusterName = NormalizeClusterName(request.ClickHouseClusterName);
         cluster.UpdatedAt = DateTimeOffset.UtcNow;
         if (request.UserName is not null)
@@ -205,6 +214,22 @@ public sealed class ClusterApplicationService(
         {
             throw new ArgumentException("Access nodes require host and valid port.");
         }
+        if (request.BackupRestoreMaxDop <= 0)
+        {
+            throw new ArgumentException("BackupRestoreMaxDop is required and must be positive.");
+        }
+        if (request.NodeMaxDopDefault <= 0 || request.ShardMaxDopDefault <= 0)
+        {
+            throw new ArgumentException("NodeMaxDopDefault and ShardMaxDopDefault must be positive.");
+        }
+        if (request.NodeMaxDopOverrides?.Any(x => string.IsNullOrWhiteSpace(x.Host) || x.Port < 1 || x.MaxDop <= 0) == true)
+        {
+            throw new ArgumentException("Node MaxDop overrides require host, valid port, and positive MaxDop.");
+        }
+        if (request.ShardMaxDopOverrides?.Any(x => x.ShardNumber <= 0 || x.MaxDop <= 0) == true)
+        {
+            throw new ArgumentException("Shard MaxDop overrides require positive shard number and MaxDop.");
+        }
     }
 
     private static ClickHouseAccessNodeEntity ToEntity(UpsertAccessNodeRequest request) =>
@@ -217,13 +242,29 @@ public sealed class ClusterApplicationService(
             x.Mode,
             x.AccessNodes.Select(n => new AccessNodeDto(n.Id, n.Host, n.Port, n.UseTls)).ToList(),
             x.BackupRestoreMaxDop,
+            x.NodeMaxDopDefault,
+            DeserializeNodeOverrides(x.NodeMaxDopOverridesJson),
+            x.ShardMaxDopDefault,
+            DeserializeShardOverrides(x.ShardMaxDopOverridesJson),
             x.ClickHouseClusterName,
             x.IsDeleted,
             x.CreatedAt,
             x.UpdatedAt);
 
-    private static int? NormalizeMaxDop(int? maxDop) =>
-        maxDop is null or <= 0 ? null : maxDop;
+    private static int NormalizeRequiredMaxDop(int maxDop) =>
+        maxDop <= 0 ? throw new ArgumentException("MaxDop must be positive.") : maxDop;
+
+    private static string SerializeNodeOverrides(IReadOnlyList<ClusterNodeMaxDopOverrideDto>? overrides) =>
+        JsonSerializer.Serialize((overrides ?? []).OrderBy(x => x.Host, StringComparer.Ordinal).ThenBy(x => x.Port).ThenBy(x => x.UseTls).ToList());
+
+    private static string SerializeShardOverrides(IReadOnlyList<ClusterShardMaxDopOverrideDto>? overrides) =>
+        JsonSerializer.Serialize((overrides ?? []).OrderBy(x => x.ShardNumber).ThenBy(x => x.ShardName, StringComparer.Ordinal).ToList());
+
+    private static IReadOnlyList<ClusterNodeMaxDopOverrideDto> DeserializeNodeOverrides(string? json) =>
+        string.IsNullOrWhiteSpace(json) ? [] : JsonSerializer.Deserialize<IReadOnlyList<ClusterNodeMaxDopOverrideDto>>(json) ?? [];
+
+    private static IReadOnlyList<ClusterShardMaxDopOverrideDto> DeserializeShardOverrides(string? json) =>
+        string.IsNullOrWhiteSpace(json) ? [] : JsonSerializer.Deserialize<IReadOnlyList<ClusterShardMaxDopOverrideDto>>(json) ?? [];
 
     private static string? NormalizeClusterName(string? clusterName) =>
         string.IsNullOrWhiteSpace(clusterName) ? null : clusterName.Trim();

@@ -250,6 +250,245 @@
         }
       }
     },
+    "/api/v1/queue": {
+      "get": {
+        "tags": [
+          "BackupRestoreQueue"
+        ],
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/BackupRestoreQueueKind"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "default": "active"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 500
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BackupRestoreQueueItemDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BackupRestoreQueueItemDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BackupRestoreQueueItemDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/queue/items/{id}/move": {
+      "post": {
+        "tags": [
+          "BackupRestoreQueue"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MoveQueueItemRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MoveQueueItemRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/MoveQueueItemRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupRestoreQueueItemDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupRestoreQueueItemDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupRestoreQueueItemDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/queue/tables/{kind}/{tableId}/move": {
+      "post": {
+        "tags": [
+          "BackupRestoreQueue"
+        ],
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/BackupRestoreQueueKind"
+            }
+          },
+          {
+            "name": "tableId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MoveQueueItemRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MoveQueueItemRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/MoveQueueItemRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BackupRestoreQueueItemDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BackupRestoreQueueItemDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BackupRestoreQueueItemDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/queue/items/{id}/force": {
+      "post": {
+        "tags": [
+          "BackupRestoreQueue"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupRestoreQueueItemDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupRestoreQueueItemDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupRestoreQueueItemDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/backups/manual": {
       "post": {
         "tags": [
@@ -3525,6 +3764,147 @@
         },
         "additionalProperties": false
       },
+      "BackupRestoreQueueItemDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/BackupRestoreQueueKind"
+          },
+          "status": {
+            "$ref": "#/components/schemas/BackupRestoreQueueStatus"
+          },
+          "position": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "isForced": {
+            "type": "boolean"
+          },
+          "forcedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "forcedByUserId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "forcedByName": {
+            "type": "string",
+            "nullable": true
+          },
+          "operationId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "tableId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "shardId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "clusterId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "database": {
+            "type": "string",
+            "nullable": true
+          },
+          "table": {
+            "type": "string",
+            "nullable": true
+          },
+          "logicalShardNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "logicalShardName": {
+            "type": "string",
+            "nullable": true
+          },
+          "nodeHost": {
+            "type": "string",
+            "nullable": true
+          },
+          "nodePort": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "nodeUseTls": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "clickHouseOperationId": {
+            "type": "string",
+            "nullable": true
+          },
+          "clickHouseStatus": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "completedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "blockingReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "error": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "BackupRestoreQueueKind": {
+        "enum": [
+          "All",
+          "Backup",
+          "Restore"
+        ],
+        "type": "string"
+      },
+      "BackupRestoreQueueMoveDirection": {
+        "enum": [
+          "Up",
+          "Down",
+          "Top",
+          "Bottom"
+        ],
+        "type": "string"
+      },
+      "BackupRestoreQueueStatus": {
+        "enum": [
+          "Queued",
+          "Running",
+          "Succeeded",
+          "PartiallySucceeded",
+          "Failed",
+          "Skipped",
+          "Canceled"
+        ],
+        "type": "string"
+      },
       "BackupRetentionDto": {
         "type": "object",
         "properties": {
@@ -4270,7 +4650,28 @@
           },
           "backupRestoreMaxDop": {
             "type": "integer",
-            "format": "int32",
+            "format": "int32"
+          },
+          "nodeMaxDopDefault": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "nodeMaxDopOverrides": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClusterNodeMaxDopOverrideDto"
+            },
+            "nullable": true
+          },
+          "shardMaxDopDefault": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "shardMaxDopOverrides": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClusterShardMaxDopOverrideDto"
+            },
             "nullable": true
           },
           "clickHouseClusterName": {
@@ -4340,6 +4741,28 @@
             "format": "int32",
             "nullable": true
           },
+          "nodeMaxDopDefault": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "nodeMaxDopOverrides": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClusterNodeMaxDopOverrideDto"
+            },
+            "nullable": true
+          },
+          "shardMaxDopDefault": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "shardMaxDopOverrides": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClusterShardMaxDopOverrideDto"
+            },
+            "nullable": true
+          },
           "isDeleted": {
             "type": "boolean"
           },
@@ -4366,6 +4789,45 @@
           "Cluster"
         ],
         "type": "string"
+      },
+      "ClusterNodeMaxDopOverrideDto": {
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": "string",
+            "nullable": true
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "useTls": {
+            "type": "boolean"
+          },
+          "maxDop": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ClusterShardMaxDopOverrideDto": {
+        "type": "object",
+        "properties": {
+          "shardNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "shardName": {
+            "type": "string",
+            "nullable": true
+          },
+          "maxDop": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
       },
       "CreateAccessTokenRequest": {
         "type": "object",
@@ -4913,6 +5375,20 @@
           },
           "schemaOnly": {
             "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MoveQueueItemRequest": {
+        "type": "object",
+        "properties": {
+          "direction": {
+            "$ref": "#/components/schemas/BackupRestoreQueueMoveDirection"
+          },
+          "beforeItemId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -5947,11 +6423,32 @@
           },
           "backupRestoreMaxDop": {
             "type": "integer",
-            "format": "int32",
-            "nullable": true
+            "format": "int32"
           },
           "clickHouseClusterName": {
             "type": "string",
+            "nullable": true
+          },
+          "nodeMaxDopDefault": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "nodeMaxDopOverrides": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClusterNodeMaxDopOverrideDto"
+            },
+            "nullable": true
+          },
+          "shardMaxDopDefault": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "shardMaxDopOverrides": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClusterShardMaxDopOverrideDto"
+            },
             "nullable": true
           }
         },
@@ -6170,6 +6667,9 @@
     },
     {
       "name": "BackupGarbageCollector"
+    },
+    {
+      "name": "BackupRestoreQueue"
     },
     {
       "name": "Backups"
