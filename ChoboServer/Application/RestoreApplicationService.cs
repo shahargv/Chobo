@@ -151,7 +151,7 @@ public sealed class RestoreApplicationService(
                 }
 
                 var shardPlans = PlanShardRestores(layout, backupShards, targetRepresentatives, request.TargetShard, request.TargetShards);
-                var useTemporaryRestoreTables = restoreTable.Append || shardPlans.Count > 1;
+                var useTemporaryRestoreTables = restoreTable.Append && restoreTable.AllowSchemaMismatch;
                 foreach (var plan in shardPlans)
                 {
                     var shard = new RestoreTableShardEntity
