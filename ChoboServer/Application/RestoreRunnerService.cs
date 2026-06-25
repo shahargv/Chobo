@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Chobo.Contracts;
 using ChoboServer.Data;
 using ChoboServer.Options;
@@ -16,6 +17,7 @@ public sealed class RestoreRunnerService(
     IAuditService audit,
     Serilog.ILogger logger)
 {
+    private static readonly ConcurrentDictionary<Guid, byte> ActiveRestoreRuns = new();
     private readonly Serilog.ILogger _logger = logger.ForContext<RestoreRunnerService>();
 
     public async Task RunAsync(Guid restoreId, CancellationToken cancellationToken = default)
@@ -38,13 +40,20 @@ public sealed class RestoreRunnerService(
             return;
         }
 
+        if (!ActiveRestoreRuns.TryAdd(restore.Id, 0))
+        {
+            _logger.Information("Restore run {RestoreId} is already active in this process; duplicate execution request skipped.", restore.Id);
+            return;
+        }
+
         try
         {
             _logger.Information("Starting restore run {RestoreId}. Current status: {Status}.", restore.Id, restore.Status);
             ValidateRestore(restore);
-            restore.Status = RestoreRunStatus.Running;
-            restore.StartedAt ??= DateTimeOffset.UtcNow;
-            await db.SaveChangesAsync(cancellationToken);
+            if (!await TryClaimRestoreAsync(restore, cancellationToken))
+            {
+                return;
+            }
             await queue.EnsureRestoreQueueItemsAsync(restore.Id, cancellationToken);
             await queue.ResetIncompleteRestoreClaimsAsync(restore.Id, cancellationToken);
             await audit.RecordAsync("started", AuditEntityType.Restore, restore.Id.ToString(), new { restore.BackupId, restore.TargetClusterId });
@@ -103,6 +112,37 @@ public sealed class RestoreRunnerService(
             await db.SaveChangesAsync(CancellationToken.None);
             await audit.RecordAsync("failed", AuditEntityType.Restore, restore.Id.ToString(), new { error = ex.Message, restore.FailureReason });
         }
+        finally
+        {
+            ActiveRestoreRuns.TryRemove(restore.Id, out _);
+        }
+    }
+
+    private async Task<bool> TryClaimRestoreAsync(RestoreEntity restore, CancellationToken cancellationToken)
+    {
+        if (restore.Status == RestoreRunStatus.Running)
+        {
+            return true;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var claimed = await db.Restores
+            .Where(x => x.Id == restore.Id && x.Status == RestoreRunStatus.Queued)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(x => x.Status, RestoreRunStatus.Running)
+                .SetProperty(x => x.StartedAt, now), cancellationToken);
+        if (claimed == 1)
+        {
+            restore.Status = RestoreRunStatus.Running;
+            restore.StartedAt ??= now;
+            return true;
+        }
+
+        var currentStatus = await db.Restores
+            .Where(x => x.Id == restore.Id)
+            .Select(x => x.Status)
+            .FirstOrDefaultAsync(cancellationToken);
+        return currentStatus == RestoreRunStatus.Running;
     }
 
     private void LogRestoreCompletion(RestoreEntity restore)
@@ -196,6 +236,13 @@ public sealed class RestoreRunnerService(
             if (!hasSubmittedOperations && existing is null && table.Append)
             {
                 throw new InvalidOperationException($"Append restore requires target table {table.TargetDatabase}.{table.TargetTable} to already exist.");
+            }
+            if (!hasSubmittedOperations && table.Append && table.Warning is null)
+            {
+                foreach (var shard in orderedShards)
+                {
+                    shard.RestoreTableName = table.TargetTable;
+                }
             }
             if (!hasSubmittedOperations && existing is null && !table.Append && restore.Layout != RestoreLayout.Redistribute)
             {
@@ -378,7 +425,7 @@ public sealed class RestoreRunnerService(
         {
             await scopedQueue.MarkStartedAsync(BackupRestoreQueueKind.Restore, shard.Id, endpoint, cancellationToken);
             await scopedClickHouse.ExecuteAsync(endpoint, restore.TargetCluster!, $"CREATE DATABASE IF NOT EXISTS {ClickHouseSql.Identifier(shard.RestoreDatabase)}", cancellationToken);
-            if (usesTemporaryShardTables)
+            if (usesTemporaryShardTables || (!table.Append && table.Shards.Count > 1))
             {
                 await scopedClickHouse.ExecuteAsync(endpoint, restore.TargetCluster!, ClickHouseSql.RewriteCreateTableNameIfNotExists(backupTable.SchemaDefinition!.CreateTableSql, table.TargetDatabase, table.TargetTable), cancellationToken);
             }
@@ -406,7 +453,8 @@ public sealed class RestoreRunnerService(
 
             if (string.IsNullOrWhiteSpace(shard.ClickHouseOperationId))
             {
-                var operation = await scopedClickHouse.StartRestoreShardAsync(endpoint, restore.TargetCluster!, restore.Backup!.Target!, shard, backupTable, backupShard, cancellationToken);
+                var allowNonEmptyTables = string.Equals(shard.RestoreTableName, table.TargetTable, StringComparison.Ordinal);
+                var operation = await scopedClickHouse.StartRestoreShardAsync(endpoint, restore.TargetCluster!, restore.Backup!.Target!, shard, backupTable, backupShard, allowNonEmptyTables, cancellationToken);
                 shard.ClickHouseOperationId = operation.OperationId;
                 shard.ClickHouseStatus = operation.Status;
                 table.ClickHouseOperationId ??= operation.OperationId;

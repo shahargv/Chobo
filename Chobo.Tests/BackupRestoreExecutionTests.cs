@@ -1169,6 +1169,29 @@ public sealed class BackupRestoreExecutionTests
         Assert.Equal(1, fixture.ClickHouse.MaxConcurrentRestoreStarts);
     }
     [Fact]
+    public async Task Restore_runner_skips_duplicate_execution_for_same_restore_id()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "restore_duplicate", BackupTableStatus.Succeeded, "backup-op", true)
+        ]);
+        backup.Status = BackupRunStatus.Succeeded;
+        var restore = await fixture.SeedRestoreAsync(backup, [
+            new SeedRestoreTable("sales", "restore_duplicate", RestoreTableStatus.Queued, null)
+        ]);
+        fixture.ClickHouse.BlockOperationStatus = true;
+
+        var firstRun = fixture.RunRestoreAsync(restore.Id);
+        await fixture.ClickHouse.WaitForBlockedStatusAsync();
+        await fixture.RunRestoreAsync(restore.Id);
+
+        fixture.ClickHouse.ReleaseBlockedStatus();
+        await firstRun;
+
+        Assert.Single(fixture.ClickHouse.RestoreStartTables);
+        Assert.Equal(1, await fixture.Db.AuditEntries.CountAsync(x => x.Action == "started" && x.EntityType == "restore" && x.EntityId == restore.Id.ToString()));
+    }
+    [Fact]
     public async Task Backup_runner_skips_duplicate_execution_for_same_backup_id()
     {
         await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
@@ -2777,6 +2800,93 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Direct_restore_passes_allow_non_empty_tables_for_precreated_target_table()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Succeeded, "backup-op", true)
+        ]);
+        backup.Status = BackupRunStatus.Succeeded;
+        await fixture.Db.SaveChangesAsync();
+
+        var restore = await fixture.Services.GetRequiredService<RestoreApplicationService>().InitiateAsync(new InitiateRestoreRequest(
+            backup.Id,
+            fixture.TargetClusterId,
+            null,
+            null,
+            "restored",
+            "orders_copy",
+            false,
+            false));
+
+        await fixture.RunRestoreAsync(restore.Id);
+
+        Assert.Equal(["orders_copy"], fixture.ClickHouse.RestoreTargetTables);
+        Assert.Equal([true], fixture.ClickHouse.RestoreAllowNonEmptyTables);
+    }
+    [Fact]
+    public async Task Append_restore_with_matching_schema_restores_directly_to_target_table()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Succeeded, "backup-op", true)
+        ]);
+        backup.Status = BackupRunStatus.Succeeded;
+        await fixture.Db.SaveChangesAsync();
+        var schemaHash = backup.Tables.Single().SchemaDefinition!.SchemaHash;
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree", schemaHash: schemaHash));
+
+        var restore = await fixture.Services.GetRequiredService<RestoreApplicationService>().InitiateAsync(new InitiateRestoreRequest(
+            backup.Id,
+            fixture.TargetClusterId,
+            null,
+            null,
+            null,
+            null,
+            true,
+            false,
+            ConfirmDestructive: true));
+
+        var table = Assert.Single(restore.Tables);
+        var shard = Assert.Single(table.Shards);
+        Assert.Equal("orders", shard.RestoreTableName);
+        Assert.False(shard.RestoreTableName.StartsWith("__chobo_restore_", StringComparison.Ordinal));
+
+        await fixture.RunRestoreAsync(restore.Id);
+
+        Assert.Equal(["orders"], fixture.ClickHouse.RestoreTargetTables);
+        Assert.Equal([true], fixture.ClickHouse.RestoreAllowNonEmptyTables);
+        Assert.DoesNotContain(fixture.ClickHouse.ExecuteSql, sql => sql.Contains("__chobo_restore_", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Append_restore_with_schema_mismatch_allowed_still_uses_temporary_table()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Succeeded, "backup-op", true)
+        ]);
+        backup.Status = BackupRunStatus.Succeeded;
+        await fixture.Db.SaveChangesAsync();
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree", schemaHash: "different-schema"));
+
+        var restore = await fixture.Services.GetRequiredService<RestoreApplicationService>().InitiateAsync(new InitiateRestoreRequest(
+            backup.Id,
+            fixture.TargetClusterId,
+            null,
+            null,
+            null,
+            null,
+            true,
+            true,
+            ConfirmDestructive: true));
+
+        var table = Assert.Single(restore.Tables);
+        var shard = Assert.Single(table.Shards);
+        Assert.StartsWith("__chobo_restore_", shard.RestoreTableName, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Restore_schema_only_creates_tables_without_submitting_restore_operations()
     {
         await using var fixture = await TestFixture.CreateAsync();
@@ -3150,6 +3260,8 @@ public sealed class BackupRestoreExecutionTests
         public List<string> RestoreStartTables { get; } = [];
         public List<int> RestoreStartShardNumbers { get; } = [];
         public List<ClickHouseNodeEndpoint> RestoreStartEndpoints { get; } = [];
+        public List<string> RestoreTargetTables { get; } = [];
+        public List<bool> RestoreAllowNonEmptyTables { get; } = [];
         public List<string> ExecuteSql { get; } = [];
         public List<ClickHouseNodeEndpoint> GetTablesEndpoints { get; } = [];
         public int GetTablesCallCount { get; private set; }
@@ -3312,10 +3424,10 @@ public sealed class BackupRestoreExecutionTests
         {
             var shard = new RestoreTableShardEntity { SourceShardNumber = 1, RestoreDatabase = table.TargetDatabase, RestoreTableName = table.TargetTable };
             var backupShard = new BackupTableShardEntity { SourceShardNumber = 1, S3Path = backupTable.S3Path };
-            return StartRestoreShardAsync(new ClickHouseNodeEndpoint("restore", 9000, false), cluster, target, shard, backupTable, backupShard, cancellationToken);
+            return StartRestoreShardAsync(new ClickHouseNodeEndpoint("restore", 9000, false), cluster, target, shard, backupTable, backupShard, table.Append, cancellationToken);
         }
 
-        public async Task<ClickHouseOperationResult> StartRestoreShardAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, BackupTargetEntity target, RestoreTableShardEntity table, BackupTableEntity backupTable, BackupTableShardEntity backupShard, CancellationToken cancellationToken)
+        public async Task<ClickHouseOperationResult> StartRestoreShardAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, BackupTargetEntity target, RestoreTableShardEntity table, BackupTableEntity backupTable, BackupTableShardEntity backupShard, bool allowNonEmptyTables, CancellationToken cancellationToken)
         {
             lock (_lock)
             {
@@ -3328,6 +3440,8 @@ public sealed class BackupRestoreExecutionTests
                 RestoreStartTables.Add(backupTable.Table);
                 RestoreStartShardNumbers.Add(table.TargetShardNumber ?? table.SourceShardNumber);
                 RestoreStartEndpoints.Add(endpoint);
+                RestoreTargetTables.Add(table.RestoreTableName);
+                RestoreAllowNonEmptyTables.Add(allowNonEmptyTables);
             }
 
             if (RequiredConcurrentRestoreStartsBeforeRelease > 0)
