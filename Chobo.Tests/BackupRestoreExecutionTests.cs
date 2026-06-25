@@ -325,6 +325,30 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Manual_policy_backup_finishes_queueing_after_request_cancellation_once_created()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+        fixture.ClickHouse.BlockTopology = true;
+        var policy = await fixture.SeedPolicyAsync();
+        var service = fixture.Services.GetRequiredService<BackupApplicationService>();
+        var queues = fixture.Services.GetRequiredService<IBackupRestoreQueues>();
+        using var cts = new CancellationTokenSource();
+
+        var task = service.ManualAsync(new ManualBackupRequest(Guid.Empty, null, PolicySelector.Empty, BackupType.Incremental, PolicyId: policy.Id), cts.Token);
+        await fixture.ClickHouse.WaitForBlockedTopologyAsync();
+        cts.Cancel();
+        fixture.ClickHouse.ReleaseBlockedTopology();
+
+        var backup = await task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        fixture.Db.ChangeTracker.Clear();
+        Assert.True(await fixture.Db.BackupRestoreQueueItems.AnyAsync(x => x.Kind == BackupRestoreQueueKind.Backup && x.OperationId == backup.Id));
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "queued" && x.EntityId == backup.Id.ToString()));
+        Assert.True(queues.Backups.Reader.TryRead(out var queuedBackupId));
+        Assert.Equal(backup.Id, queuedBackupId);
+    }
+    [Fact]
     public async Task Manual_schema_only_backup_stores_schema_without_starting_data_backup()
     {
         await using var fixture = await TestFixture.CreateAsync();
@@ -2977,6 +3001,7 @@ public sealed class BackupRestoreExecutionTests
         public int MaxConcurrentRestoreStarts { get; private set; }
         public TimeSpan StartDelay { get; set; }
         public bool BlockOperationStatus { get; set; }
+        public bool BlockTopology { get; set; }
         public Exception? GetTablesException { get; set; }
         public Exception? ExecuteException { get; set; }
         public string NextBackupStatus { get; set; } = "BACKUP_CREATED";
@@ -2989,6 +3014,8 @@ public sealed class BackupRestoreExecutionTests
         public Dictionary<string, string> OperationErrors { get; } = new(StringComparer.Ordinal);
         private TaskCompletionSource _statusBlocked = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private TaskCompletionSource _releaseStatus = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private TaskCompletionSource _topologyBlocked = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private TaskCompletionSource _releaseTopology = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task<IReadOnlyList<ClickHouseTableInfo>> GetTablesAsync(ClickHouseClusterEntity cluster, CancellationToken cancellationToken)
         {
@@ -3047,8 +3074,16 @@ public sealed class BackupRestoreExecutionTests
             return Task.CompletedTask;
         }
 
-        public Task<IReadOnlyList<ClickHouseShardReplicaInfo>> GetTopologyAsync(ClickHouseClusterEntity cluster, CancellationToken cancellationToken) =>
-            Task.FromResult<IReadOnlyList<ClickHouseShardReplicaInfo>>(Topology.ToList());
+        public async Task<IReadOnlyList<ClickHouseShardReplicaInfo>> GetTopologyAsync(ClickHouseClusterEntity cluster, CancellationToken cancellationToken)
+        {
+            if (BlockTopology)
+            {
+                _topologyBlocked.TrySetResult();
+                await _releaseTopology.Task.WaitAsync(cancellationToken);
+            }
+
+            return Topology.ToList();
+        }
 
         public async Task<ClickHouseOperationResult> StartBackupAsync(ClickHouseClusterEntity cluster, BackupTargetEntity target, BackupTableEntity table, string? baseBackupPath, CancellationToken cancellationToken)
         {
@@ -3176,6 +3211,10 @@ public sealed class BackupRestoreExecutionTests
         public Task WaitForBlockedStatusAsync() => _statusBlocked.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         public void ReleaseBlockedStatus() => _releaseStatus.TrySetResult();
+
+        public Task WaitForBlockedTopologyAsync() => _topologyBlocked.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        public void ReleaseBlockedTopology() => _releaseTopology.TrySetResult();
     }
 
     private sealed class FakeBackupStorageOperations : IBackupStorageOperations

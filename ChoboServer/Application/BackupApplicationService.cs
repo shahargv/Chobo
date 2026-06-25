@@ -92,24 +92,24 @@ public sealed class BackupApplicationService(
         await db.SaveChangesAsync(cancellationToken);
         _logger.Information("Manual backup {BackupId} created by {ActorName} for cluster {ClusterId} target {TargetId} type {BackupType} contentMode={ContentMode}.", backup.Id, actor.ActorName, clusterId, targetId, backup.BackupType, backup.ContentMode);
         await audit.RecordAsync("created", AuditEntityType.Backup, backup.Id.ToString(), new { operationId = backup.Id, backup.TriggerType, backup.BackupType, backup.ContentMode, backup.SourceClusterId, backup.TargetId, backup.PolicyId });
+
+        // After the backup row is committed, finish queue preparation even if the HTTP client disconnects.
+        // Otherwise a slow inventory read can leave a permanent Queued backup with no queue item.
+        var postCommitCancellationToken = CancellationToken.None;
         try
         {
-            await preparation.PrepareQueueItemsAsync(backup.Id, cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
+            await preparation.PrepareQueueItemsAsync(backup.Id, postCommitCancellationToken);
         }
         catch (Exception ex)
         {
             _logger.Warning(ex, "Manual backup {BackupId} queue item preparation failed before executor pickup; executor will retry preparation.", backup.Id);
             await audit.RecordAsync("queue-preparation-deferred", AuditEntityType.Backup, backup.Id.ToString(), new { operationId = backup.Id, error = ex.Message });
         }
-        await queues.QueueBackupAsync(backup.Id, backup.ContentMode, cancellationToken);
+        await queues.QueueBackupAsync(backup.Id, backup.ContentMode, postCommitCancellationToken);
         _logger.Information("Manual backup {BackupId} queued.", backup.Id);
         await audit.RecordAsync("queued", AuditEntityType.Backup, backup.Id.ToString(), new { operationId = backup.Id, reason = "manual" });
 
-        return BackupRestoreMapping.ToDto(await LoadAsync(backup.Id, cancellationToken) ?? backup);
+        return BackupRestoreMapping.ToDto(await LoadAsync(backup.Id, postCommitCancellationToken) ?? backup);
     }
     public async Task<IReadOnlyList<BackupDto>> ListAsync(Guid? policyId, string? clusterName, string? tableName, BackupRunStatus? status, DateTimeOffset? from, DateTimeOffset? to, bool includeTables = true, CancellationToken cancellationToken = default)
     {
