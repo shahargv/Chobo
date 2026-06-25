@@ -11,6 +11,7 @@ public sealed class BackupRestoreQueueApplicationService(
     ActorContext actor)
 {
     private const long PositionStep = 1000;
+    private const long MinimumQueuedPosition = 1000;
 
     public async Task EnsureBackupQueueItemsAsync(Guid backupId, CancellationToken cancellationToken = default)
     {
@@ -285,10 +286,10 @@ public sealed class BackupRestoreQueueApplicationService(
             await EnsureQueuedAsync(item, cancellationToken);
         }
         var oldPositions = items.Select(x => new { x.Id, x.Position }).ToList();
-        var firstNewPosition = await CalculateMovePositionAsync(items[0].Position, request, cancellationToken);
+        var firstNewPosition = await CalculateTableMovePositionAsync(items[0].Position, request, cancellationToken);
         for (var i = 0; i < items.Count; i++)
         {
-            items[i].Position = firstNewPosition + (i * PositionStep);
+            items[i].Position = firstNewPosition;
         }
         await db.SaveChangesAsync(cancellationToken);
         await audit.RecordAsync("queue-table-moved", kind == BackupRestoreQueueKind.Backup ? AuditEntityType.BackupTable : AuditEntityType.RestoreTable, tableId.ToString(), new { kind, tableId, oldPositions, newPositions = items.Select(x => new { x.Id, x.Position }).ToList(), request.Direction, request.BeforeItemId });
@@ -487,11 +488,21 @@ public sealed class BackupRestoreQueueApplicationService(
     {
         if (request.Direction == BackupRestoreQueueMoveDirection.Top && request.BeforeItemId is null)
         {
-            return await MinPositionAsync(cancellationToken) - (Math.Max(1, itemCount) * PositionStep);
+            return await MinQueuedPositionAsync(cancellationToken) - (Math.Max(1, itemCount) * PositionStep);
         }
 
         return await CalculateMovePositionAsync(currentPosition, request, cancellationToken);
     }
+    private async Task<long> CalculateTableMovePositionAsync(long currentPosition, MoveQueueItemRequest request, CancellationToken cancellationToken)
+    {
+        if (request.Direction == BackupRestoreQueueMoveDirection.Top && request.BeforeItemId is null)
+        {
+            return await MinQueuedPositionAsync(cancellationToken) - 1;
+        }
+
+        return await CalculateMovePositionAsync(currentPosition, request, cancellationToken);
+    }
+
     private async Task<long> CalculateMovePositionAsync(long currentPosition, MoveQueueItemRequest request, CancellationToken cancellationToken)
     {
         if (request.BeforeItemId is { } beforeItemId)
@@ -502,7 +513,7 @@ public sealed class BackupRestoreQueueApplicationService(
         }
         return request.Direction switch
         {
-            BackupRestoreQueueMoveDirection.Top => await MinPositionAsync(cancellationToken) - PositionStep,
+            BackupRestoreQueueMoveDirection.Top => await MinQueuedPositionAsync(cancellationToken) - 1,
             BackupRestoreQueueMoveDirection.Bottom => await MaxPositionAsync(cancellationToken) + PositionStep,
             BackupRestoreQueueMoveDirection.Up => await PreviousPositionAsync(currentPosition, cancellationToken) is { } previous ? previous - 1 : currentPosition,
             BackupRestoreQueueMoveDirection.Down => await NextGreaterPositionAsync(currentPosition, cancellationToken) is { } next ? next + 1 : currentPosition,
@@ -510,7 +521,8 @@ public sealed class BackupRestoreQueueApplicationService(
         };
     }
 
-    private async Task<long> NextPositionAsync(CancellationToken cancellationToken) => await MaxPositionAsync(cancellationToken) + PositionStep;
+    private async Task<long> NextPositionAsync(CancellationToken cancellationToken) => Math.Max(MinimumQueuedPosition, await MaxPositionAsync(cancellationToken) + PositionStep);
+    private async Task<long> MinQueuedPositionAsync(CancellationToken cancellationToken) => await db.BackupRestoreQueueItems.Where(x => x.StartedAt == null && x.CompletedAt == null).Select(x => (long?)x.Position).MinAsync(cancellationToken) ?? MinimumQueuedPosition;
     private async Task<long> MinPositionAsync(CancellationToken cancellationToken) => await db.BackupRestoreQueueItems.Select(x => (long?)x.Position).MinAsync(cancellationToken) ?? 0;
     private async Task<long> MaxPositionAsync(CancellationToken cancellationToken) => await db.BackupRestoreQueueItems.Select(x => (long?)x.Position).MaxAsync(cancellationToken) ?? 0;
     private async Task<long?> PreviousPositionAsync(long position, CancellationToken cancellationToken) => await db.BackupRestoreQueueItems.Where(x => x.Position < position).OrderByDescending(x => x.Position).Select(x => (long?)x.Position).FirstOrDefaultAsync(cancellationToken);

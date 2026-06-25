@@ -668,6 +668,43 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Backup_queue_table_move_top_keeps_table_shards_together()
+    {
+        await using var fixture = await TestFixture.CreateAsync(clusterMaxDop: 1, options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "aaa_first", BackupTableStatus.Queued, null, true),
+            new SeedBackupTable("sales", "mmm_middle", BackupTableStatus.Queued, null, true),
+            new SeedBackupTable("sales", "zzz_promoted", BackupTableStatus.Queued, null, true)
+        ], shardCount: 2);
+
+        using (var scope = fixture.Services.CreateScope())
+        {
+            var queue = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
+            await queue.EnsureBackupQueueItemsAsync(backup.Id);
+            var promotedTableId = await fixture.Db.BackupTables.Where(x => x.BackupId == backup.Id && x.Table == "zzz_promoted").Select(x => x.Id).SingleAsync();
+            var minQueuedPosition = await fixture.Db.BackupRestoreQueueItems
+                .Where(x => x.Kind == BackupRestoreQueueKind.Backup && x.OperationId == backup.Id && x.StartedAt == null && x.CompletedAt == null)
+                .MinAsync(x => x.Position);
+
+            await queue.MoveTableAsync(BackupRestoreQueueKind.Backup, promotedTableId, new MoveQueueItemRequest(BackupRestoreQueueMoveDirection.Top));
+
+            var promotedPositions = await fixture.Db.BackupRestoreQueueItems
+                .Where(x => x.Kind == BackupRestoreQueueKind.Backup && x.TableId == promotedTableId)
+                .Select(x => x.Position)
+                .ToListAsync();
+            var otherPositions = await fixture.Db.BackupRestoreQueueItems
+                .Where(x => x.Kind == BackupRestoreQueueKind.Backup && x.OperationId == backup.Id && x.TableId != promotedTableId)
+                .Select(x => x.Position)
+                .ToListAsync();
+
+            var promotedPosition = Assert.Single(promotedPositions.Distinct());
+            Assert.Equal(1000, minQueuedPosition);
+            Assert.Equal(minQueuedPosition - 1, promotedPosition);
+            Assert.True(promotedPosition < otherPositions.Min());
+        }
+    }
+
+    [Fact]
     public async Task Backup_queue_row_reorder_changes_next_shard()
     {
         await using var fixture = await TestFixture.CreateAsync(clusterMaxDop: 1, options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
