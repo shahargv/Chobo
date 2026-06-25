@@ -704,6 +704,7 @@ public sealed class BackupRestoreExecutionTests
         globalCluster.ShardMaxDopDefault = 16;
         globalCluster.NodeMaxDopDefault = 16;
         await globalFixture.Db.SaveChangesAsync();
+        globalFixture.ClickHouse.RequiredConcurrentBackupStartsBeforeRelease = 2;
         globalFixture.ClickHouse.StartDelay = TimeSpan.FromMilliseconds(40);
         for (var i = 0; i < 6; i++)
         {
@@ -732,6 +733,7 @@ public sealed class BackupRestoreExecutionTests
     public async Task Backup_runner_prefers_shard_parallelism_before_starting_next_table()
     {
         await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 3, PollInterval = TimeSpan.FromMilliseconds(1) });
+        fixture.ClickHouse.RequiredConcurrentBackupStartsBeforeRelease = 3;
         fixture.ClickHouse.StartDelay = TimeSpan.FromMilliseconds(40);
         fixture.ClickHouse.Topology.Clear();
         fixture.ClickHouse.Topology.Add(new ClickHouseShardReplicaInfo(1, "shard-1", 1, "source-s1", 9000, false, 0));
@@ -854,6 +856,7 @@ public sealed class BackupRestoreExecutionTests
     public async Task Forced_backup_rows_bypass_global_maxdop_when_already_forced()
     {
         await using var fixture = await TestFixture.CreateAsync(clusterMaxDop: 1, options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        fixture.ClickHouse.RequiredConcurrentBackupStartsBeforeRelease = 2;
         fixture.ClickHouse.StartDelay = TimeSpan.FromMilliseconds(60);
         var backup = await fixture.SeedBackupWithTablesAsync([
             new SeedBackupTable("sales", "forced_a", BackupTableStatus.Queued, null, true),
@@ -890,6 +893,7 @@ public sealed class BackupRestoreExecutionTests
         Assert.Equal(1, normalFixture.ClickHouse.MaxConcurrentBackupStarts);
 
         await using var forcedFixture = await TestFixture.CreateAsync(clusterMaxDop: 2, options: new ChoboBackupRestoreOptions { MaxDop = 2, PollInterval = TimeSpan.FromMilliseconds(1) });
+        forcedFixture.ClickHouse.RequiredConcurrentBackupStartsBeforeRelease = 2;
         forcedFixture.ClickHouse.StartDelay = TimeSpan.FromMilliseconds(40);
         var forcedCluster = await forcedFixture.Db.ClickHouseClusters.SingleAsync(x => x.Id == forcedFixture.SourceClusterId);
         forcedCluster.ShardMaxDopDefault = 1;
@@ -1021,6 +1025,7 @@ public sealed class BackupRestoreExecutionTests
         targetCluster.NodeMaxDopDefault = 16;
         targetCluster.ShardMaxDopDefault = 16;
         await fixture.Db.SaveChangesAsync();
+        fixture.ClickHouse.RequiredConcurrentRestoreStartsBeforeRelease = 2;
         var backup = await fixture.SeedBackupWithTablesAsync(Enumerable.Range(0, 5)
             .Select(i => new SeedBackupTable("sales", $"restore_cluster_dop_{i}", BackupTableStatus.Succeeded, $"backup-op-{i}", true))
             .ToList());
@@ -1056,6 +1061,7 @@ public sealed class BackupRestoreExecutionTests
         Assert.Equal(1, normalFixture.ClickHouse.MaxConcurrentRestoreStarts);
 
         await using var forcedFixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 2, PollInterval = TimeSpan.FromMilliseconds(1) });
+        forcedFixture.ClickHouse.RequiredConcurrentRestoreStartsBeforeRelease = 2;
         forcedFixture.ClickHouse.StartDelay = TimeSpan.FromMilliseconds(40);
         var forcedCluster = await forcedFixture.Db.ClickHouseClusters.SingleAsync(x => x.Id == forcedFixture.TargetClusterId);
         forcedCluster.BackupRestoreMaxDop = 2;
@@ -3154,6 +3160,8 @@ public sealed class BackupRestoreExecutionTests
         public int MaxConcurrentBackupStarts { get; private set; }
         public int MaxConcurrentRestoreStarts { get; private set; }
         public TimeSpan StartDelay { get; set; }
+        public int RequiredConcurrentBackupStartsBeforeRelease { get; set; }
+        public int RequiredConcurrentRestoreStartsBeforeRelease { get; set; }
         public bool BlockOperationStatus { get; set; }
         public bool BlockTopology { get; set; }
         public Exception? GetTablesException { get; set; }
@@ -3172,6 +3180,8 @@ public sealed class BackupRestoreExecutionTests
         private TaskCompletionSource _releaseStatus = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private TaskCompletionSource _topologyBlocked = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private TaskCompletionSource _releaseTopology = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private TaskCompletionSource _backupStartGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private TaskCompletionSource _restoreStartGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task<IReadOnlyList<ClickHouseTableInfo>> GetTablesAsync(ClickHouseClusterEntity cluster, CancellationToken cancellationToken)
         {
@@ -3253,13 +3263,21 @@ public sealed class BackupRestoreExecutionTests
             {
                 _activeBackupStarts++;
                 MaxConcurrentBackupStarts = Math.Max(MaxConcurrentBackupStarts, _activeBackupStarts);
+                if (RequiredConcurrentBackupStartsBeforeRelease > 0 && MaxConcurrentBackupStarts >= RequiredConcurrentBackupStartsBeforeRelease)
+                {
+                    _backupStartGate.TrySetResult();
+                }
                 BackupStartTables.Add(table.Table);
                 BackupStartShardNumbers.Add(shard.SourceShardNumber);
                 BackupStartEndpoints.Add(endpoint);
                 BackupBasePaths.Add(baseBackupPath);
             }
 
-            if (StartDelay > TimeSpan.Zero)
+            if (RequiredConcurrentBackupStartsBeforeRelease > 0)
+            {
+                await _backupStartGate.Task.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+            }
+            else if (StartDelay > TimeSpan.Zero)
             {
                 await Task.Delay(StartDelay, cancellationToken);
             }
@@ -3303,12 +3321,20 @@ public sealed class BackupRestoreExecutionTests
             {
                 _activeRestoreStarts++;
                 MaxConcurrentRestoreStarts = Math.Max(MaxConcurrentRestoreStarts, _activeRestoreStarts);
+                if (RequiredConcurrentRestoreStartsBeforeRelease > 0 && MaxConcurrentRestoreStarts >= RequiredConcurrentRestoreStartsBeforeRelease)
+                {
+                    _restoreStartGate.TrySetResult();
+                }
                 RestoreStartTables.Add(backupTable.Table);
                 RestoreStartShardNumbers.Add(table.TargetShardNumber ?? table.SourceShardNumber);
                 RestoreStartEndpoints.Add(endpoint);
             }
 
-            if (StartDelay > TimeSpan.Zero)
+            if (RequiredConcurrentRestoreStartsBeforeRelease > 0)
+            {
+                await _restoreStartGate.Task.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+            }
+            else if (StartDelay > TimeSpan.Zero)
             {
                 await Task.Delay(StartDelay, cancellationToken);
             }
