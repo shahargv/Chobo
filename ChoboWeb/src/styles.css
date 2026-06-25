@@ -762,6 +762,9 @@ pre, .token-box {
 .restore-review-details { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .restore-history-panel { margin-top: 2px; }
 .restore-history-panel .section-head p { margin-top: 4px; color: var(--muted); font-size: 13px; }
+.restore-mapping-editor .table-wrap {
+  max-height: min(52vh, 560px);
+}
 .restore-mapping-editor .data-grid table { min-width: 1040px; }
 .restore-mapping-editor input,
 .restore-mapping-editor select { min-width: 150px; }

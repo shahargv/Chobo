@@ -22,17 +22,18 @@ export function RestoreStepper({ step, errors, onStep }: { step: RestoreStep; er
   );
 }
 
-export function BackupChoiceStep({ backups, selectedBackupId, onSelect, clusterName, isLoading = false }: { backups: BackupDto[]; selectedBackupId: string; onSelect: (backupId: string) => void; clusterName: (clusterId: string) => string; isLoading?: boolean }) {
+export function BackupChoiceStep({ backups, selectedBackupId, onSelect, clusterName, policyName, isLoading = false }: { backups: BackupDto[]; selectedBackupId: string; onSelect: (backupId: string) => void; clusterName: (clusterId: string) => string; policyName: (policyId?: string | null) => string; isLoading?: boolean }) {
   if (!isLoading && backups.length === 0) return <Empty text="No backups are available yet. Create a backup before starting a restore." />;
   return (
     <div className="restore-step-content">
       <StepIntro icon={<Database size={20} />} title="Choose the backup to restore from" body="This sets the recovery point and the list of tables and shards you can restore. Nothing is changed until the final review step." />
-      <DataTable headers={["Use", "Created", "Type", "Source cluster", "Tables", "Status"]} isLoading={isLoading}>
+      <DataTable headers={["Use", "Created", "Type", "Policy", "Source cluster", "Tables", "Status"]} isLoading={isLoading}>
         {backups.map((backup) => (
           <tr key={backup.id}>
             <td><input className="row-checkbox" aria-label={`Use backup ${backup.id}`} type="radio" checked={selectedBackupId === backup.id} onChange={() => onSelect(backup.id)} /></td>
             <td>{formatTime(backup.createdAt)}</td>
             <td>{backup.backupType}</td>
+            <td>{policyName(backup.policyId)}</td>
             <td>{clusterName(backup.sourceClusterId)}</td>
             <td>{backup.tableCount}</td>
             <td><Status value={backup.status} /></td>
