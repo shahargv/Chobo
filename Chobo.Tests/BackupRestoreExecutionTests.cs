@@ -1154,6 +1154,79 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Garbage_collector_prunes_completed_queue_rows_before_new_positions_are_assigned()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var completed = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "completed", BackupTableStatus.Queued, null, true)
+        ], shardCount: 1);
+        var next = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "next", BackupTableStatus.Queued, null, true)
+        ], shardCount: 1);
+
+        using (var scope = fixture.Services.CreateScope())
+        {
+            await scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>().EnsureBackupQueueItemsAsync(completed.Id);
+        }
+        await fixture.Db.BackupRestoreQueueItems
+            .Where(x => x.OperationId == completed.Id)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.CompletedAt, DateTimeOffset.UtcNow));
+
+        await fixture.Services.GetRequiredService<BackupsGarbageCollectorBackgroundService>().RunOnceAsync();
+
+        using (var scope = fixture.Services.CreateScope())
+        {
+            await scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>().EnsureBackupQueueItemsAsync(next.Id);
+        }
+
+        var row = await fixture.Db.BackupRestoreQueueItems.SingleAsync(x => x.OperationId == next.Id);
+        Assert.Equal(1000, row.Position);
+        Assert.False(await fixture.Db.BackupRestoreQueueItems.AnyAsync(x => x.OperationId == completed.Id));
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "queue-completed-pruned" && x.EntityType == "backup-garbage-collector"));
+    }
+
+    [Fact]
+    public async Task Garbage_collector_prunes_completed_restore_rows_and_keeps_active_queue_rows()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var restoreSourceBackup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "completed_restore", BackupTableStatus.Succeeded, "backup-complete", true)
+        ], shardCount: 1);
+        var activeBackup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "active_backup", BackupTableStatus.Queued, null, true)
+        ], shardCount: 1);
+        var restore = await fixture.SeedRestoreAsync(restoreSourceBackup, [
+            new SeedRestoreTable("sales", "completed_restore", RestoreTableStatus.Succeeded, "restore-complete")
+        ]);
+        var next = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "next_after_active", BackupTableStatus.Queued, null, true)
+        ], shardCount: 1);
+
+        using (var scope = fixture.Services.CreateScope())
+        {
+            var queue = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
+            await queue.EnsureBackupQueueItemsAsync(activeBackup.Id);
+            await queue.EnsureRestoreQueueItemsAsync(restore.Id);
+        }
+
+        await fixture.Db.BackupRestoreQueueItems
+            .Where(x => x.Kind == BackupRestoreQueueKind.Restore && x.OperationId == restore.Id)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.CompletedAt, DateTimeOffset.UtcNow));
+        await fixture.Services.GetRequiredService<BackupsGarbageCollectorBackgroundService>().RunOnceAsync();
+
+        Assert.False(await fixture.Db.BackupRestoreQueueItems.AnyAsync(x => x.Kind == BackupRestoreQueueKind.Restore && x.OperationId == restore.Id));
+        var activeRow = await fixture.Db.BackupRestoreQueueItems.SingleAsync(x => x.Kind == BackupRestoreQueueKind.Backup && x.OperationId == activeBackup.Id);
+        Assert.Null(activeRow.CompletedAt);
+
+        using (var scope = fixture.Services.CreateScope())
+        {
+            await scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>().EnsureBackupQueueItemsAsync(next.Id);
+        }
+
+        var nextRow = await fixture.Db.BackupRestoreQueueItems.SingleAsync(x => x.OperationId == next.Id);
+        Assert.True(nextRow.Position > activeRow.Position);
+    }
+    [Fact]
     public async Task Schema_only_backup_does_not_leave_active_queue_rows()
     {
         await using var fixture = await TestFixture.CreateAsync(clusterMaxDop: 1, options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });

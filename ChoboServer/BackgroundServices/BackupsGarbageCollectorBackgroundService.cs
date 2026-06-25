@@ -149,10 +149,11 @@ public sealed class BackupsGarbageCollectorBackgroundService(
             var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
             var audit = scope.ServiceProvider.GetRequiredService<IAuditService>();
             _logger.Information("Backup garbage collection mark phase started.");
+            var queuePruned = await PruneCompletedQueueItemsAsync(db, audit, cancellationToken);
             var failedMarked = await MarkFailedBackupsAsync(db, audit, cancellationToken);
             var orphanedMarked = await MarkOrphanIncrementalBackupsAsync(db, audit, cancellationToken);
             markedCount = failedMarked + orphanedMarked;
-            _logger.Information("Backup garbage collection mark phase completed. Failed marked={FailedMarkedCount}, orphaned marked={OrphanedMarkedCount}, total marked={MarkedCount}.", failedMarked, orphanedMarked, markedCount);
+            _logger.Information("Backup garbage collection mark phase completed. Completed queue rows pruned={QueuePrunedCount}, failed marked={FailedMarkedCount}, orphaned marked={OrphanedMarkedCount}, total marked={MarkedCount}.", queuePruned, failedMarked, orphanedMarked, markedCount);
             pending = await GetPendingCleanupAsync(db, null, cancellationToken);
             _logger.Information("Backup garbage collection cleanup queue built with {PendingCleanupCount} item(s).", pending.Count);
         }
@@ -224,6 +225,20 @@ public sealed class BackupsGarbageCollectorBackgroundService(
         }, cancellationToken);
 
         return new BackupGarbageCollectorRunResult(markedCount, pending.Count, cleanedCount, failedCount);
+    }
+
+    private async Task<int> PruneCompletedQueueItemsAsync(ChoboDbContext db, IAuditService audit, CancellationToken cancellationToken)
+    {
+        var deleted = await db.BackupRestoreQueueItems
+            .Where(x => x.CompletedAt != null)
+            .ExecuteDeleteAsync(cancellationToken);
+        if (deleted > 0)
+        {
+            _logger.Information("Backup garbage collection pruned {QueuePrunedCount} completed backup/restore queue row(s).", deleted);
+            await audit.RecordAsync("queue-completed-pruned", AuditEntityType.BackupGarbageCollector, null, new { deleted });
+        }
+
+        return deleted;
     }
 
     private async Task<int> MarkFailedBackupsAsync(ChoboDbContext db, IAuditService audit, CancellationToken cancellationToken)
