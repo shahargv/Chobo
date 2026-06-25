@@ -16,6 +16,7 @@ export function RestoreWizard() {
   const queryClient = useQueryClient();
   const backups = useQuery({ queryKey: ["backups", "restore"], queryFn: () => api.backups({}, { includeTables: true }) });
   const clusters = useQuery({ queryKey: ["clusters"], queryFn: () => api.clusters() });
+  const policies = useQuery({ queryKey: ["policies"], queryFn: () => api.policies() });
   const [step, setStep] = useState<RestoreStep>(0);
   const [request, setRequest] = useState<InitiateRestoreRequest>({ backupId: "", targetClusterId: "", append: false, allowSchemaMismatch: false, layout: "Preserve", schemaOnly: false, confirmDestructive: false });
   const [mappings, setMappings] = useState<RestoreMappingDraft[]>([]);
@@ -30,6 +31,7 @@ export function RestoreWizard() {
     enabled: Boolean(request.targetClusterId)
   });
   const clusterById = useMemo(() => new Map((clusters.data ?? []).map((cluster) => [cluster.id, cluster])), [clusters.data]);
+  const policyById = useMemo(() => new Map((policies.data ?? []).map((policy) => [policy.id, policy])), [policies.data]);
   const restorableBackups = useMemo(() => (backups.data ?? []).filter(isBackupRestorable), [backups.data]);
   const selectedBackup = restorableBackups.find((backup) => backup.id === request.backupId) ?? null;
   const sourceShardOptions = useMemo(() => getSourceShardOptions(selectedBackup), [selectedBackup]);
@@ -134,7 +136,7 @@ export function RestoreWizard() {
         <div className="restore-main panel">
           <RestoreStepper step={step} errors={restoreErrors} onStep={setStep} />
           <div className="restore-step-body">
-            {step === 0 && <BackupChoiceStep isLoading={backups.isLoading} backups={restorableBackups} selectedBackupId={request.backupId} onSelect={(backupId) => setRequest({ ...request, backupId })} clusterName={(clusterId) => clusterById.get(clusterId)?.name ?? clusterId} />}
+            {step === 0 && <BackupChoiceStep isLoading={backups.isLoading || policies.isLoading} backups={restorableBackups} selectedBackupId={request.backupId} onSelect={(backupId) => setRequest({ ...request, backupId })} clusterName={(clusterId) => clusterById.get(clusterId)?.name ?? clusterId} policyName={(policyId) => policyId ? policyById.get(policyId)?.name ?? policyId : "Manual"} />}
             {step === 1 && <DestinationStep request={request} onChange={setRequest} clusters={clusters.data ?? []} targetShardOptions={targetShardOptions} selectedTargetShards={selectedTargetShards} onTargetShardsChange={setSelectedTargetShards} targetShardsLoading={targetTopology.isFetching} preserveLayoutDisabled={preserveLayoutDisabled} preserveLayoutReason={preserveLayoutReason} />}
             {step === 2 && <ScopeStep backup={selectedBackup} mappings={mappings} onMappingsChange={setMappings} sourceShardOptions={sourceShardOptions} selectedSourceShards={selectedSourceShards} onSourceShardsChange={setSelectedSourceShards} />}
             {step === 3 && <ReviewStep backup={selectedBackup} targetClusterName={clusterById.get(request.targetClusterId)?.name ?? request.targetClusterId} request={request} mappings={selectedMappings} sourceShardOptions={sourceShardOptions} selectedSourceShards={selectedSourceShards} targetShardOptions={targetShardOptions} selectedTargetShards={selectedTargetShards} errors={restoreErrors} />}
