@@ -261,7 +261,7 @@ public sealed class S3BackupStorageOperations(ICredentialProtector protector, IO
             ServiceURL = endpoint.ToString(),
             AuthenticationRegion = region,
             ForcePathStyle = target.ForcePathStyle,
-            Timeout = options.Value.S3RequestTimeout <= TimeSpan.Zero ? TimeSpan.FromMinutes(10) : options.Value.S3RequestTimeout,
+            Timeout = options.Value.S3RequestTimeout <= TimeSpan.Zero ? TimeSpan.FromMinutes(1) : options.Value.S3RequestTimeout,
             MaxErrorRetry = Math.Max(0, options.Value.S3MaxErrorRetry)
         };
 
