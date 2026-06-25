@@ -108,7 +108,7 @@ CHOBO_BACKUP_RESTORE_POLL_INTERVAL
       "MaxDop": 2
     },
     "BackupStorageOperations": {
-      "S3RequestTimeout": "00:10:00",
+      "S3RequestTimeout": "00:01:00",
       "S3MaxErrorRetry": 5,
       "S3DeleteBatchSize": 1000
     }
@@ -131,7 +131,7 @@ Chobo__RetentionManagement__Interval=00:30:00
 Chobo__RetentionManagement__MaxDop=2
 Chobo__BackupsGarbageCollector__Interval=00:30:00
 Chobo__BackupsGarbageCollector__MaxDop=2
-Chobo__BackupStorageOperations__S3RequestTimeout=00:10:00
+Chobo__BackupStorageOperations__S3RequestTimeout=00:01:00
 Chobo__BackupStorageOperations__S3MaxErrorRetry=5
 Chobo__BackupStorageOperations__S3DeleteBatchSize=1000
 ```
@@ -261,7 +261,7 @@ ChoboCli logs show --last 500
       "MaxDop": 2
     },
     "BackupStorageOperations": {
-      "S3RequestTimeout": "00:10:00",
+      "S3RequestTimeout": "00:01:00",
       "S3MaxErrorRetry": 5,
       "S3DeleteBatchSize": 1000
     },

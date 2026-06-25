@@ -12,6 +12,7 @@ public sealed class BackupApplicationService(
     ChoboDbContext db,
     IBackupRestoreQueues queues,
     BackupRestoreQueueApplicationService queueItems,
+    BackupPreparationService preparation,
     IClickHouseAdapter clickHouse,
     IAuditService audit,
     ActorContext actor,
@@ -91,13 +92,26 @@ public sealed class BackupApplicationService(
         await db.SaveChangesAsync(cancellationToken);
         _logger.Information("Manual backup {BackupId} created by {ActorName} for cluster {ClusterId} target {TargetId} type {BackupType} contentMode={ContentMode}.", backup.Id, actor.ActorName, clusterId, targetId, backup.BackupType, backup.ContentMode);
         await audit.RecordAsync("created", AuditEntityType.Backup, backup.Id.ToString(), new { operationId = backup.Id, backup.TriggerType, backup.BackupType, backup.ContentMode, backup.SourceClusterId, backup.TargetId, backup.PolicyId });
+        try
+        {
+            await preparation.PrepareQueueItemsAsync(backup.Id, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning(ex, "Manual backup {BackupId} queue item preparation failed before executor pickup; executor will retry preparation.", backup.Id);
+            await audit.RecordAsync("queue-preparation-deferred", AuditEntityType.Backup, backup.Id.ToString(), new { operationId = backup.Id, error = ex.Message });
+        }
         await queues.QueueBackupAsync(backup.Id, backup.ContentMode, cancellationToken);
         _logger.Information("Manual backup {BackupId} queued.", backup.Id);
         await audit.RecordAsync("queued", AuditEntityType.Backup, backup.Id.ToString(), new { operationId = backup.Id, reason = "manual" });
 
         return BackupRestoreMapping.ToDto(await LoadAsync(backup.Id, cancellationToken) ?? backup);
     }
-    public async Task<IReadOnlyList<BackupDto>> ListAsync(Guid? policyId, string? clusterName, string? tableName, BackupRunStatus? status, bool includeTables = true, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<BackupDto>> ListAsync(Guid? policyId, string? clusterName, string? tableName, BackupRunStatus? status, DateTimeOffset? from, DateTimeOffset? to, bool includeTables = true, CancellationToken cancellationToken = default)
     {
         var query = includeTables
             ? db.Backups.Include(x => x.SourceCluster).Include(x => x.Tables).ThenInclude(x => x.Shards).AsQueryable()
@@ -110,6 +124,14 @@ public sealed class BackupApplicationService(
         if (status is not null)
         {
             query = query.Where(x => x.Status == status);
+        }
+        if (from is not null)
+        {
+            query = query.Where(x => x.CreatedAt >= from);
+        }
+        if (to is not null)
+        {
+            query = query.Where(x => x.CreatedAt <= to);
         }
         if (!string.IsNullOrWhiteSpace(clusterName))
         {
@@ -169,11 +191,30 @@ public sealed class BackupApplicationService(
                 .GroupBy(x => x.BackupId)
                 .Select(x => new BackupTableStats(x.Key, x.Count(), x.Where(t => t.BackupSizeBytes != null).Sum(t => t.BackupSizeBytes)))
                 .ToListAsync(cancellationToken);
+        var tableRelatedFullRows = summaryIds.Count == 0
+            ? []
+            : await db.BackupTables
+                .AsNoTracking()
+                .Where(x => summaryIds.Contains(x.BackupId) && x.ParentFullBackupId != null)
+                .Select(x => new BackupRelatedFullRow(x.BackupId, x.ParentFullBackupId!.Value))
+                .ToListAsync(cancellationToken);
+        var shardRelatedFullRows = summaryIds.Count == 0
+            ? []
+            : await db.BackupTableShards
+                .AsNoTracking()
+                .Where(x => x.BackupTable != null && summaryIds.Contains(x.BackupTable.BackupId) && x.ParentFullBackupId != null)
+                .Select(x => new BackupRelatedFullRow(x.BackupTable!.BackupId, x.ParentFullBackupId!.Value))
+                .ToListAsync(cancellationToken);
+        var relatedFullRows = tableRelatedFullRows.Concat(shardRelatedFullRows).Distinct().ToList();
         var statsByBackupId = tableStats.ToDictionary(x => x.BackupId);
+        var relatedFullIdsByBackupId = relatedFullRows
+            .GroupBy(x => x.BackupId)
+            .ToDictionary(x => x.Key, x => (IReadOnlyList<Guid>)x.Select(row => row.RelatedFullBackupId).Distinct().OrderBy(id => id).ToList());
         return summaries
             .Select(x =>
             {
                 statsByBackupId.TryGetValue(x.Id, out var stats);
+                relatedFullIdsByBackupId.TryGetValue(x.Id, out var relatedFullBackupIds);
                 return BackupRestoreMapping.ToSummaryDto(
                     x.Id,
                     x.TriggerType,
@@ -203,11 +244,11 @@ public sealed class BackupApplicationService(
                     x.DeletionError,
                     x.DeletionAttemptCount,
                     stats?.TableCount ?? 0,
-                    stats?.BackupSizeBytes);
+                    stats?.BackupSizeBytes,
+                    relatedFullBackupIds ?? []);
             })
             .ToList();
     }
-
     public async Task<BackupDto?> GetAsync(Guid id, bool includeTables = true, CancellationToken cancellationToken = default)
     {
         if (includeTables)
@@ -220,7 +261,13 @@ public sealed class BackupApplicationService(
             .Where(x => x.Id == id)
             .Select(x => new { Backup = x, TableCount = x.Tables.Count, BackupSizeBytes = x.Tables.Where(t => t.BackupSizeBytes != null).Sum(t => t.BackupSizeBytes) })
             .FirstOrDefaultAsync(cancellationToken);
-        return summary is null ? null : BackupRestoreMapping.ToDto(summary.Backup, summary.TableCount, summary.BackupSizeBytes, includeTables: false);
+        if (summary is null)
+        {
+            return null;
+        }
+
+        var relatedFullBackupIds = await RelatedFullBackupIdsAsync(id, cancellationToken);
+        return BackupRestoreMapping.ToDto(summary.Backup, summary.TableCount, summary.BackupSizeBytes, relatedFullBackupIds, includeTables: false);
     }
 
     public async Task<BackupDto?> PinAsync(Guid id, CancellationToken cancellationToken = default)
@@ -413,6 +460,7 @@ public sealed class BackupApplicationService(
         int DeletionAttemptCount);
 
     private sealed record BackupTableStats(Guid BackupId, int TableCount, long? BackupSizeBytes);
+    private sealed record BackupRelatedFullRow(Guid BackupId, Guid RelatedFullBackupId);
     private async Task<(int Killed, IReadOnlyList<string> Failures)> KillBackupOperationsAsync(BackupEntity backup, CancellationToken cancellationToken)
     {
         if (backup.SourceCluster is null)
@@ -455,6 +503,21 @@ public sealed class BackupApplicationService(
         }
 
         return (killed, failures);
+    }
+
+    private async Task<IReadOnlyList<Guid>> RelatedFullBackupIdsAsync(Guid backupId, CancellationToken cancellationToken)
+    {
+        var tableParents = await db.BackupTables
+            .AsNoTracking()
+            .Where(x => x.BackupId == backupId && x.ParentFullBackupId != null)
+            .Select(x => x.ParentFullBackupId!.Value)
+            .ToListAsync(cancellationToken);
+        var shardParents = await db.BackupTableShards
+            .AsNoTracking()
+            .Where(x => x.BackupTable != null && x.BackupTable.BackupId == backupId && x.ParentFullBackupId != null)
+            .Select(x => x.ParentFullBackupId!.Value)
+            .ToListAsync(cancellationToken);
+        return tableParents.Concat(shardParents).Distinct().OrderBy(x => x).ToList();
     }
     private Task<BackupEntity?> LoadAsync(Guid id, CancellationToken cancellationToken) =>
         db.Backups
@@ -503,4 +566,3 @@ public sealed class BackupApplicationService(
         return options;
     }
 }
-

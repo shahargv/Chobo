@@ -649,6 +649,22 @@
             }
           },
           {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
             "name": "includeTables",
             "in": "query",
             "schema": {
@@ -3443,6 +3459,14 @@
           "backupSizeBytes": {
             "type": "integer",
             "format": "int64",
+            "nullable": true
+          },
+          "relatedFullBackupIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
             "nullable": true
           },
           "tables": {
@@ -6299,6 +6323,10 @@
           "policyId": {
             "type": "string",
             "format": "uuid",
+            "nullable": true
+          },
+          "policyName": {
+            "type": "string",
             "nullable": true
           },
           "createdAt": {

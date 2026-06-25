@@ -307,6 +307,24 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Policy_manual_execution_prepares_queue_rows_before_executor_runs()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+        var policy = await fixture.SeedPolicyAsync();
+        var service = fixture.Services.GetRequiredService<BackupApplicationService>();
+
+        var backup = await service.ManualAsync(new ManualBackupRequest(Guid.Empty, null, PolicySelector.Empty, PolicyId: policy.Id));
+
+        fixture.Db.ChangeTracker.Clear();
+        var item = await fixture.Db.BackupRestoreQueueItems.SingleAsync(x => x.Kind == BackupRestoreQueueKind.Backup && x.OperationId == backup.Id);
+        Assert.Null(item.StartedAt);
+        Assert.Null(item.CompletedAt);
+        Assert.Equal(fixture.SourceClusterId, item.ClusterId);
+        Assert.True(await fixture.Db.BackupTableShards.AnyAsync(x => x.Id == item.ShardId && x.Status == BackupTableStatus.Queued));
+    }
+
+    [Fact]
     public async Task Manual_schema_only_backup_stores_schema_without_starting_data_backup()
     {
         await using var fixture = await TestFixture.CreateAsync();
@@ -442,12 +460,18 @@ public sealed class BackupRestoreExecutionTests
     {
         await using var fixture = await TestFixture.CreateAsync();
         fixture.ClickHouse.Inventory.AddRange([Table("sales", "orders", "MergeTree"), Table("audit", "events", "Log")]);
-        var backupId = await fixture.CreateManualBackupAsync(schemaOnly: true);
+        var policy = await fixture.SeedPolicyAsync("schema-policy");
+        policy.ContentMode = BackupContentMode.SchemaOnly;
+        policy.TargetId = null;
+        await fixture.Db.SaveChangesAsync();
+        var backup = await fixture.Services.GetRequiredService<BackupApplicationService>()
+            .ManualAsync(new ManualBackupRequest(Guid.Empty, null, PolicySelector.Empty, PolicyId: policy.Id));
+        var backupId = backup.Id;
         await fixture.RunBackupAsync(backupId);
 
         var service = fixture.Services.GetRequiredService<SchemaBrowserApplicationService>();
         var summaries = await service.ListBackupsAsync(DateTimeOffset.UtcNow.AddDays(-7), DateTimeOffset.UtcNow.AddDays(1));
-        Assert.Contains(summaries, x => x.Id == backupId && x.ContentMode == BackupContentMode.SchemaOnly && x.SourceClusterName == "source" && x.TableCount == 2);
+        Assert.Contains(summaries, x => x.Id == backupId && x.ContentMode == BackupContentMode.SchemaOnly && x.SourceClusterName == "source" && x.PolicyName == "schema-policy" && x.TableCount == 2);
         var schema = await service.GetBackupSchemaAsync(backupId);
         Assert.NotNull(schema);
         Assert.Equal(["audit", "sales"], schema!.Databases.Select(x => x.Database).ToList());
@@ -486,6 +510,28 @@ public sealed class BackupRestoreExecutionTests
         Assert.DoesNotContain(summaries, x => x.Id == oldBackupId);
     }
 
+    [Fact]
+    public async Task First_incremental_policy_backup_falls_back_to_full_and_prepares_queue_rows()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var policy = await fixture.SeedPolicyAsync();
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+        var service = fixture.Services.GetRequiredService<BackupApplicationService>();
+
+        var backup = await service.ManualAsync(new ManualBackupRequest(Guid.Empty, null, PolicySelector.Empty, BackupType.Incremental, PolicyId: policy.Id));
+
+        var table = await fixture.Db.BackupTables.Include(x => x.Shards).SingleAsync(x => x.BackupId == backup.Id);
+        Assert.Equal(BackupType.Full, table.EffectiveBackupType);
+        Assert.Null(table.ParentFullBackupId);
+        Assert.NotEmpty(table.Shards);
+        Assert.All(table.Shards, shard =>
+        {
+            Assert.Equal(BackupType.Full, shard.EffectiveBackupType);
+            Assert.Null(shard.ParentFullBackupId);
+        });
+        Assert.True(await fixture.Db.BackupRestoreQueueItems.AnyAsync(x => x.Kind == BackupRestoreQueueKind.Backup && x.OperationId == backup.Id));
+        Assert.Equal(BackupRunStatus.Queued, (await fixture.Db.Backups.SingleAsync(x => x.Id == backup.Id)).Status);
+    }
     [Fact]
     public async Task Incremental_backup_uses_parent_full_table_and_falls_back_to_full_for_new_table()
     {
@@ -530,6 +576,11 @@ public sealed class BackupRestoreExecutionTests
         Assert.Contains($"parent-full-{full.Id:N}", existingTable.S3Path);
         Assert.Equal(BackupType.Incremental, Assert.Single(existingTable.Shards).EffectiveBackupType);
         Assert.Contains(fixture.Db.BackupTableShards.Single(x => x.Id == existingTable.Shards[0].ParentFullBackupTableShardId).S3Path, fixture.ClickHouse.BackupBasePaths);
+
+        var detail = await fixture.Services.GetRequiredService<BackupApplicationService>().GetAsync(incremental.Id, includeTables: true);
+        var summary = await fixture.Services.GetRequiredService<BackupApplicationService>().GetAsync(incremental.Id, includeTables: false);
+        Assert.Equal([full.Id], detail!.RelatedFullBackupIds);
+        Assert.Equal([full.Id], summary!.RelatedFullBackupIds);
     }
 
     [Fact]
@@ -3235,6 +3286,7 @@ public sealed class BackupRestoreExecutionTests
                 .AddSingleton<ITestHookCoordinator, TestHookCoordinator>()
                 .AddScoped<DashboardApplicationService>()
                 .AddScoped<BackupApplicationService>()
+                .AddScoped<BackupPreparationService>()
                 .AddScoped<IClusterRepository, ClusterRepository>()
                 .AddScoped<ITargetRepository, TargetRepository>()
                 .AddScoped<IPolicyRepository, PolicyRepository>()
@@ -3575,6 +3627,13 @@ public sealed class BackupRestoreExecutionTests
                 backup.DeletionAttemptCount,
                 backup.Tables.Count,
                 backup.Tables.Any(table => table.BackupSizeBytes.HasValue) ? backup.Tables.Sum(table => table.BackupSizeBytes ?? 0) : null,
+                backup.Tables.Select(table => table.ParentFullBackupId)
+                    .Concat(backup.Tables.SelectMany(table => table.Shards).Select(shard => shard.ParentFullBackupId))
+                    .Where(id => id.HasValue)
+                    .Select(id => id!.Value)
+                    .Distinct()
+                    .OrderBy(id => id)
+                    .ToList(),
                 backup.Tables.Select(table => new BackupTableDto(
                     table.Id,
                     table.BackupId,

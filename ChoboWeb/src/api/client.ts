@@ -113,7 +113,7 @@ export class ChoboApiClient {
   disableSchedule(id: string) { return this.post<void>(`schedules/${id}/disable`, {}); }
   validateScheduleCron(request: ValidateScheduleCronRequest) { return this.post<ValidateScheduleCronResponse>("schedules/validate-cron", request); }
 
-  backups(filters: { policyId?: string; clusterName?: string; tableName?: string; status?: BackupRunStatus } = {}, options: { includeTables?: boolean } = {}) {
+  backups(filters: { policyId?: string; clusterName?: string; tableName?: string; status?: BackupRunStatus; from?: string; to?: string } = {}, options: { includeTables?: boolean } = {}) {
     return this.get<BackupDto[]>(`backups${query({ ...filters, includeTables: options.includeTables })}`);
   }
   backup(id: string, options: { includeTables?: boolean } = {}) { return this.get<BackupDto>(`backups/${id}${query({ includeTables: options.includeTables })}`); }
@@ -202,9 +202,3 @@ function query(values: Record<string, string | number | boolean | undefined | nu
   const text = params.toString();
   return text ? `?${text}` : "";
 }
-
-
-
-
-
-

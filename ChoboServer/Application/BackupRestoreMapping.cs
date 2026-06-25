@@ -5,7 +5,7 @@ namespace ChoboServer.Application;
 
 internal static class BackupRestoreMapping
 {
-    public static BackupDto ToDto(BackupEntity x, int? tableCount = null, long? backupSizeBytes = null, bool includeTables = true) =>
+    public static BackupDto ToDto(BackupEntity x, int? tableCount = null, long? backupSizeBytes = null, IReadOnlyList<Guid>? relatedFullBackupIds = null, bool includeTables = true) =>
         new(
             x.Id,
             x.TriggerType,
@@ -36,6 +36,7 @@ internal static class BackupRestoreMapping
             x.DeletionAttemptCount,
             tableCount ?? x.Tables.Count,
             backupSizeBytes ?? CalculateBackupSizeBytes(x.Tables),
+            relatedFullBackupIds ?? CalculateRelatedFullBackupIds(x.Tables),
             includeTables ? x.Tables.OrderBy(t => t.Database).ThenBy(t => t.Table).Select(ToDto).ToList() : []);
 
 
@@ -68,7 +69,8 @@ internal static class BackupRestoreMapping
         string? deletionError,
         int deletionAttemptCount,
         int tableCount,
-        long? backupSizeBytes) =>
+        long? backupSizeBytes,
+        IReadOnlyList<Guid> relatedFullBackupIds) =>
         new(
             id,
             triggerType,
@@ -99,7 +101,16 @@ internal static class BackupRestoreMapping
             deletionAttemptCount,
             tableCount,
             backupSizeBytes,
+            relatedFullBackupIds,
             []);
+    private static IReadOnlyList<Guid> CalculateRelatedFullBackupIds(IEnumerable<BackupTableEntity> tables) =>
+        tables.Select(x => x.ParentFullBackupId)
+            .Concat(tables.SelectMany(x => x.Shards).Select(x => x.ParentFullBackupId))
+            .Where(x => x.HasValue)
+            .Select(x => x!.Value)
+            .Distinct()
+            .OrderBy(x => x)
+            .ToList();
     private static long? CalculateBackupSizeBytes(IEnumerable<BackupTableEntity> tables)
     {
         var sizes = tables.Select(x => x.BackupSizeBytes).Where(x => x.HasValue).ToList();

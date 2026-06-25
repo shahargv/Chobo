@@ -1065,6 +1065,64 @@ public sealed class ChoboFoundationTests
         Assert.Equal(1000, detail.Tables.Count);
     }
     [Fact]
+    public async Task Backup_api_filters_by_created_time_window()
+    {
+        await using var factory = CreateFactory();
+        var client = AuthenticatedClient(factory);
+        var cluster = await Post<ClusterDto>(client, "/api/v1/clusters", new UpsertClusterRequest(
+            "prod",
+            ClusterMode.SingleInstance,
+            [new UpsertAccessNodeRequest("localhost")],
+            null,
+            null,
+            3));
+        var target = await Post<BackupTargetDto>(client, "/api/v1/targets/s3", new UpsertS3TargetRequest(
+            "minio",
+            "http://minio:9000",
+            "us-east-1",
+            "bucket",
+            null,
+            true,
+            "access",
+            "secret"));
+        var now = DateTimeOffset.UtcNow;
+        var recent = new BackupEntity
+        {
+            TriggerType = BackupTriggerType.Manual,
+            Status = BackupRunStatus.Succeeded,
+            BackupType = BackupType.Full,
+            SourceClusterId = cluster.Id,
+            TargetId = target.Id,
+            CreatedAt = now.AddDays(-3),
+            StartedAt = now.AddDays(-3).AddMinutes(1),
+            CompletedAt = now.AddDays(-3).AddMinutes(2)
+        };
+        var old = new BackupEntity
+        {
+            TriggerType = BackupTriggerType.Manual,
+            Status = BackupRunStatus.Succeeded,
+            BackupType = BackupType.Full,
+            SourceClusterId = cluster.Id,
+            TargetId = target.Id,
+            CreatedAt = now.AddDays(-30),
+            StartedAt = now.AddDays(-30).AddMinutes(1),
+            CompletedAt = now.AddDays(-30).AddMinutes(2)
+        };
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+            db.Backups.AddRange(recent, old);
+            await db.SaveChangesAsync();
+        }
+
+        var from = Uri.EscapeDataString(now.AddDays(-14).ToString("O"));
+        var to = Uri.EscapeDataString(now.ToString("O"));
+        var list = await client.GetFromJsonAsync<List<BackupDto>>($"/api/v1/backups?includeTables=false&from={from}&to={to}", JsonOptions);
+
+        Assert.Contains(list!, x => x.Id == recent.Id);
+        Assert.DoesNotContain(list!, x => x.Id == old.Id);
+    }
+    [Fact]
     public async Task Policy_schedule_logs_and_clear_paths_work()
     {
         await using var factory = CreateFactory();

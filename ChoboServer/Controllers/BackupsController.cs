@@ -23,9 +23,11 @@ public sealed class BackupsController(
         [FromQuery] string? clusterName,
         [FromQuery] string? tableName,
         [FromQuery] BackupRunStatus? status,
+        [FromQuery] DateTimeOffset? from,
+        [FromQuery] DateTimeOffset? to,
         [FromQuery] bool includeTables = true,
         CancellationToken cancellationToken = default) =>
-        backups.ListAsync(policyId, clusterName, tableName, status, includeTables, cancellationToken);
+        backups.ListAsync(policyId, clusterName, tableName, status, from, to, includeTables, cancellationToken);
 
     [HttpGet("backups/{id:guid}")]
     public async Task<ActionResult<BackupDto>> Get(Guid id, [FromQuery] bool includeTables = true, CancellationToken cancellationToken = default)

@@ -56,6 +56,7 @@ public sealed record BackupDto(
     int DeletionAttemptCount,
     int TableCount,
     long? BackupSizeBytes,
+    IReadOnlyList<Guid> RelatedFullBackupIds,
     IReadOnlyList<BackupTableDto> Tables);
 
 public sealed record BackupTableDto(
@@ -108,7 +109,7 @@ public sealed record ManualBackupRequest(
     Guid? PolicyId = null,
     bool SchemaOnly = false);
 
-public sealed record SchemaBackupSummaryDto(Guid Id, BackupRunStatus Status, BackupContentMode ContentMode, BackupType BackupType, Guid SourceClusterId, string SourceClusterName, Guid? PolicyId, DateTimeOffset CreatedAt, DateTimeOffset? EndedAt, int TableCount);
+public sealed record SchemaBackupSummaryDto(Guid Id, BackupRunStatus Status, BackupContentMode ContentMode, BackupType BackupType, Guid SourceClusterId, string SourceClusterName, Guid? PolicyId, string? PolicyName, DateTimeOffset CreatedAt, DateTimeOffset? EndedAt, int TableCount);
 
 public sealed record SchemaBackupDto(Guid BackupId, BackupRunStatus Status, BackupContentMode ContentMode, IReadOnlyList<SchemaDatabaseDto> Databases);
 
@@ -116,7 +117,7 @@ public sealed record SchemaDatabaseDto(string Database, IReadOnlyList<SchemaTabl
 
 public sealed record SchemaTableDto(Guid BackupTableId, string Database, string Table, string Engine, bool DataBackedUp, string CreateTableSql, string ColumnsJson);
 
-public sealed record BackupListRequest(Guid? PolicyId, string? ClusterName, string? TableName, BackupRunStatus? Status);
+public sealed record BackupListRequest(Guid? PolicyId, string? ClusterName, string? TableName, BackupRunStatus? Status, DateTimeOffset? From, DateTimeOffset? To);
 
 public sealed record BackupGarbageCollectorStatusDto(
     bool IsRunning,
@@ -261,6 +262,3 @@ public sealed record RestoreTableMappingRequest(
     bool? Append = null,
     bool? AllowSchemaMismatch = null,
     bool? SchemaOnly = null);
-
-
-

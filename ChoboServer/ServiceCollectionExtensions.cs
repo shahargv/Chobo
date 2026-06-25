@@ -133,6 +133,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<DashboardApplicationService>();
         services.AddScoped<SchemaBrowserApplicationService>();
         services.AddScoped<BackupApplicationService>();
+        services.AddScoped<BackupPreparationService>();
         services.AddScoped<IBackupStorageManifestService, BackupStorageManifestService>();
         services.AddScoped<RestoreApplicationService>();
         services.AddScoped<BackupRunnerService>();

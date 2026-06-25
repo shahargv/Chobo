@@ -26,7 +26,7 @@ public sealed class BackupsGarbageCollectorOptions
 
 public sealed class BackupStorageOperationOptions
 {
-    public TimeSpan S3RequestTimeout { get; set; } = TimeSpan.FromMinutes(10);
+    public TimeSpan S3RequestTimeout { get; set; } = TimeSpan.FromMinutes(1);
     public int S3MaxErrorRetry { get; set; } = 5;
     public int S3DeleteBatchSize { get; set; } = 1000;
 }

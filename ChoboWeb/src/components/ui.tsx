@@ -177,8 +177,8 @@ export function Detail({ label, value }: { label: string; value: ReactNode }) {
   return <div><span>{label}</span><strong>{value}</strong></div>;
 }
 
-export function Input({ label, value, onChange, type = "text" }: { label: string; value: string; onChange: (value: string) => void; type?: string }) {
-  return <label>{label}<input type={type} value={value} onChange={(event) => onChange(event.target.value)} /></label>;
+export function Input({ label, value, onChange, type = "text", placeholder }: { label: string; value: string; onChange: (value: string) => void; type?: string; placeholder?: string }) {
+  return <label>{label}<input type={type} value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} /></label>;
 }
 
 export function Select({ label, value, onChange, options }: { label: string; value: string; onChange: (value: string) => void; options: string[][] }) {

@@ -328,6 +328,7 @@ function baseBackup(overrides: Partial<BackupDto> = {}): BackupDto {
     deletionAttemptCount: overrides.deletionAttemptCount ?? 0,
     tableCount: overrides.tableCount ?? 1,
     backupSizeBytes: overrides.backupSizeBytes ?? 0,
+    relatedFullBackupIds: overrides.relatedFullBackupIds ?? [],
     tables: overrides.tables ?? []
   };
 }

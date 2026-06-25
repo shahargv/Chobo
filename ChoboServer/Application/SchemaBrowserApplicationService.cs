@@ -11,6 +11,7 @@ public sealed class SchemaBrowserApplicationService(ChoboDbContext db)
     {
         var query = db.Backups
             .Include(x => x.SourceCluster)
+            .Include(x => x.Policy)
             .Where(x => x.Status == BackupRunStatus.Succeeded || x.Status == BackupRunStatus.PartiallySucceeded)
             .Where(x => x.Tables.Any(t => t.SchemaDefinitionId != null));
 
@@ -25,7 +26,7 @@ public sealed class SchemaBrowserApplicationService(ChoboDbContext db)
 
         return await query
             .OrderByDescending(x => x.CompletedAt ?? x.CreatedAt)
-            .Select(x => new SchemaBackupSummaryDto(x.Id, x.Status, x.ContentMode, x.BackupType, x.SourceClusterId, x.SourceCluster == null ? x.SourceClusterId.ToString() : x.SourceCluster.Name, x.PolicyId, x.CreatedAt, x.CompletedAt, x.Tables.Count(t => t.SchemaDefinitionId != null)))
+            .Select(x => new SchemaBackupSummaryDto(x.Id, x.Status, x.ContentMode, x.BackupType, x.SourceClusterId, x.SourceCluster == null ? x.SourceClusterId.ToString() : x.SourceCluster.Name, x.PolicyId, x.Policy == null ? null : x.Policy.Name, x.CreatedAt, x.CompletedAt, x.Tables.Count(t => t.SchemaDefinitionId != null)))
             .Take(200)
             .ToListAsync(cancellationToken);
     }
