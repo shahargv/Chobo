@@ -4,7 +4,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { ArrowUpToLine, Ban, Play, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import type { BackupDto, BackupPolicyDto, BackupRunStatus, BackupTableDto, BackupTableShardDto, BackupType } from "../api/generated";
 import { useApi } from "../api-context";
-import { ConfirmDialog, DataTable, Detail, Drawer, Empty, Page, Select, Status } from "../components/ui";
+import { ConfirmDialog, DataTable, Detail, Drawer, Empty, Input, Page, Select, Status } from "../components/ui";
 import { formatBytes, formatCompletionTime, formatTime } from "../utils/format";
 import { isBackupStatusRestorable } from "./restores/restoreUtils";
 
@@ -16,7 +16,10 @@ export function Backups() {
   const [showManual, setShowManual] = useState(false);
   const [deleteTargets, setDeleteTargets] = useState<BackupDto[] | null>(null);
   const [selectedBackupIds, setSelectedBackupIds] = useState<string[]>([]);
-  const backups = useQuery({ queryKey: ["backups", "summary"], queryFn: () => api.backups({}, { includeTables: false }) });
+  const [from, setFrom] = useState(() => defaultBackupFromFilter());
+  const [to, setTo] = useState("");
+  const backupFilters = { from: toApiDateTime(from), to: toApiDateTime(to) };
+  const backups = useQuery({ queryKey: ["backups", "summary", backupFilters], queryFn: () => api.backups(backupFilters, { includeTables: false }) });
   const schedules = useQuery({ queryKey: ["schedules"], queryFn: () => api.schedules() });
   const policies = useQuery({ queryKey: ["policies"], queryFn: () => api.policies() });
   const backupRows = backups.data ?? [];
@@ -54,6 +57,18 @@ export function Backups() {
     <Page title="Backups" subtitle="Start manual backups, review backup history, and inspect table or shard results." action={<button className="primary" onClick={() => setShowManual(!showManual)}><Play size={16} /> Manual backup</button>}>
       {showManual && <ManualBackupPanel policies={policies.data ?? []} onQueued={() => { setShowManual(false); backups.refetch(); }} />}
       <section className="panel">
+        <div className="section-head backup-history-filter">
+          <div>
+            <h2>Backup history</h2>
+            <span className="hint">Showing backups created in the selected time window.</span>
+          </div>
+          <div className="time-filter-controls">
+            <Input label="From" type="datetime-local" value={from} onChange={setFrom} />
+            <Input label="To" type="datetime-local" value={to} onChange={setTo} />
+            <button className="ghost" onClick={() => { setFrom(defaultBackupFromFilter()); setTo(""); }}>Last 2 weeks</button>
+            <button className="ghost" onClick={() => { setFrom(""); setTo(""); }}>All time</button>
+          </div>
+        </div>
         <div className="bulk-actions">
           <span>{selectedBackups.length} selected</span>
           <button className="secondary" disabled={deletableBackups.length === 0 || selectedBackups.length === deletableBackups.length} onClick={() => setSelectedBackupIds(deletableBackups.map((backup) => backup.id))}>Select all</button>
@@ -84,12 +99,12 @@ export function Backups() {
         </DataTable>
       </section>
       {deleteTargets && <ConfirmDialog title={deleteTargets.length === 1 ? "Delete backup" : "Delete backups"} message={deleteBackupsMessage(deleteTargets)} confirmLabel={deleteTargets.some((backup) => backup.isPinned) ? (deleteTargets.length === 1 ? "Force delete backup" : "Force delete backups") : (deleteTargets.length === 1 ? "Delete backup" : "Delete backups")} busy={deleteMutation.isPending} onCancel={() => setDeleteTargets(null)} onConfirm={() => deleteMutation.mutate(deleteTargets)} />}
-      {selectedBackupId && <BackupDrawer backupId={selectedBackupId} onClose={() => { setSelectedBackupId(null); navigate("/backups"); }} />}
+      {selectedBackupId && <BackupDrawer backupId={selectedBackupId} onClose={() => { setSelectedBackupId(null); navigate("/backups"); }} onOpenBackup={(id) => { setSelectedBackupId(id); navigate(`/backups/${id}`); }} />}
     </Page>
   );
 }
 
-function BackupDrawer({ backupId, onClose }: { backupId: string; onClose: () => void }) {
+export function BackupDrawer({ backupId, onClose, onOpenBackup }: { backupId: string; onClose: () => void; onOpenBackup?: (backupId: string) => void }) {
   const { api, showToast } = useApi();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -158,6 +173,7 @@ function BackupDrawer({ backupId, onClose }: { backupId: string; onClose: () => 
           <Detail label="Initiated by" value={backupInitiator(current, scheduleById)} />
           <Detail label="Backup size" value={formatBytes(detailBackupSizeBytes)} />
           <Detail label="Shard completion" value={shardCompletion ? <ShardCompletionBadge completion={shardCompletion} /> : "Schema-only"} />
+          {current.backupType === "Incremental" && <Detail label="Related full backup" value={<RelatedFullBackupLinks backupIds={current.relatedFullBackupIds} onOpenBackup={onOpenBackup} />} />}
           <Detail label="Failure" value={current.failureReason ?? current.error ?? "none"} />
         </div>
         <section className="detail-section detail-section-tables">
@@ -274,6 +290,12 @@ function ShardCompletionBadge({ completion }: { completion: BackupShardCompletio
   return <span className={`backup-completion ${completion.tone}`}>{completion.percent}% ({completion.succeeded}/{completion.total} shards)</span>;
 }
 
+function RelatedFullBackupLinks({ backupIds, onOpenBackup }: { backupIds: string[]; onOpenBackup?: (backupId: string) => void }) {
+  if (backupIds.length === 0) return <>none yet</>;
+  return <span className="related-backup-links">
+    {backupIds.map((id, index) => <span key={id}>{index > 0 && <span>, </span>}{onOpenBackup ? <button className="link-button mono" onClick={() => onOpenBackup(id)}>{id}</button> : <Link className="mono" to={`/backups/${id}`}>{id}</Link>}</span>)}
+  </span>;
+}
 export function summarizeBackupShards(shards: BackupTableShardDto[]): BackupShardProgressSummary {
   const summary: BackupShardProgressSummary = { shardCount: shards.length, queued: 0, running: 0, completed: 0, succeeded: 0, failed: 0, skipped: 0 };
   for (const shard of shards) {
@@ -370,10 +392,17 @@ function formatTimeSeconds(value?: string | null) {
     second: "2-digit"
   });
 }
+function defaultBackupFromFilter() {
+  const value = new Date();
+  value.setDate(value.getDate() - 14);
+  return toDateTimeLocal(value);
+}
 
+function toDateTimeLocal(value: Date) {
+  const pad = (input: number) => input.toString().padStart(2, "0");
+  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}T${pad(value.getHours())}:${pad(value.getMinutes())}`;
+}
 
-
-
-
-
-
+function toApiDateTime(value: string) {
+  return value ? new Date(value).toISOString() : undefined;
+}

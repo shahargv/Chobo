@@ -61,7 +61,7 @@ Prerequisite: policy.
 
 Prerequisite: policy.
 
-1. Execute `ui-orders-policy` now.
+1. Use Run now for `ui-orders-policy`, review the full/regular backup dialog, and choose Regular backup.
 2. Open Backups and watch the run transition to Succeeded.
 3. Open backup details.
 4. Verify status, table list, shard/operation context, logs, and audit context are understandable.
@@ -107,4 +107,3 @@ Prerequisite: fresh `start-ui-env.ps1 -Scenario large-table` environment. This s
 4. Verify restored source/restored row-count/date/checksum summary outside the browser so the UI flow is tied to real data correctness.
 5. Request backup deletion from the UI, cancel once, confirm once, then use the Garbage Collector page to run the queued item and verify the cleanup status/log/audit experience.
 6. Do not check raw S3 object deletion in this GUI scenario; `TestingSuite/Tests/LargeOnTimeBackupGc` owns direct MinIO object-list assertions.
-

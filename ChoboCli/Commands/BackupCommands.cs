@@ -141,7 +141,7 @@ public sealed class BackupsCommands : CliSubject
     private static string FormatProgress(BackupDto backup)
     {
         var builder = new StringBuilder();
-        builder.AppendLine($"Backup {backup.Id} {backup.Status} tables={backup.TableCount} size={FormatBytes(backup.BackupSizeBytes ?? CalculateBackupSizeBytes(backup.Tables))}");
+        builder.AppendLine($"Backup {backup.Id} {backup.Status} tables={backup.TableCount} size={FormatBytes(backup.BackupSizeBytes ?? CalculateBackupSizeBytes(backup.Tables))}{FormatRelatedFullBackups(backup)}");
         if (backup.ContentMode == BackupContentMode.SchemaOnly)
         {
             builder.AppendLine($"  schema-only backup captured {backup.TableCount} table schema{(backup.TableCount == 1 ? "" : "s")}; shard data backup was skipped.");
@@ -166,6 +166,17 @@ public sealed class BackupsCommands : CliSubject
         return builder.ToString().TrimEnd();
     }
 
+    private static string FormatRelatedFullBackups(BackupDto backup)
+    {
+        if (backup.BackupType != BackupType.Incremental)
+        {
+            return "";
+        }
+
+        return backup.RelatedFullBackupIds.Count == 0
+            ? " relatedFullBackup=none"
+            : $" relatedFullBackup{(backup.RelatedFullBackupIds.Count == 1 ? "" : "s")}={string.Join(",", backup.RelatedFullBackupIds)}";
+    }
     private static long? CalculateBackupSizeBytes(IReadOnlyList<BackupTableDto> tables)
     {
         var sizes = tables.Select(x => x.BackupSizeBytes ?? CalculateTableSizeBytes(x)).Where(x => x.HasValue).ToList();
@@ -222,6 +233,8 @@ public sealed class BackupsCommands : CliSubject
         if (options.Optional("--cluster-name") is { } clusterName) query.Add($"clusterName={Uri.EscapeDataString(clusterName)}");
         if (options.Optional("--table-name") is { } tableName) query.Add($"tableName={Uri.EscapeDataString(tableName)}");
         if (options.Optional("--status") is { } status) query.Add($"status={Uri.EscapeDataString(status)}");
+        if (options.Optional("--from") is { } from) query.Add($"from={Uri.EscapeDataString(from)}");
+        if (options.Optional("--to") is { } to) query.Add($"to={Uri.EscapeDataString(to)}");
         return query.Count == 0 ? "" : "?" + string.Join("&", query);
     }
 
@@ -234,4 +247,3 @@ public sealed class BackupsCommands : CliSubject
             BackupRunStatus.FailedBackupDeletedByGarbageCollector or
             BackupRunStatus.BackupExpiredDeleted;
 }
-

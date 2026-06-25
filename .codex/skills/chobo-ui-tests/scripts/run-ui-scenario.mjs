@@ -389,7 +389,11 @@ async function main() {
     await go('/policies');
     const row = page.locator('tbody tr').filter({ hasText: data.policy.name }).first();
     await row.waitFor({ timeout: 30000 });
-    await row.getByRole('button', { name: /Execute now/i }).click();
+    await row.getByRole('button', { name: /Run now/i }).click();
+    const runDialog = page.getByRole('dialog', { name: /Run policy now/i });
+    await runDialog.waitFor({ timeout: 10000 });
+    await screenshot('backup-run-now-dialog', 'Run Now dialog explains full versus regular backup before queueing the policy run.');
+    await runDialog.getByRole('button', { name: /Regular backup/i }).click();
     await waitForItem('backups', () => true, 'a queued backup run', 30000);
     await go('/backups');
     await screenshot('backup-queued', 'Manual policy backup was queued from the UI and the backups screen is reachable.');
@@ -647,5 +651,3 @@ main().catch((error) => {
   console.error(error.stack ?? error.message);
   process.exitCode = 1;
 });
-
-

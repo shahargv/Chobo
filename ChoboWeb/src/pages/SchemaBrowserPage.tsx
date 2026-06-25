@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Database, Download, RefreshCw } from "lucide-react";
-import type { SchemaTableDto } from "../api/generated";
+import type { SchemaBackupSummaryDto, SchemaDatabaseDto, SchemaTableDto } from "../api/generated";
 import { useApi } from "../api-context";
-import { Empty, Page, Select, Status } from "../components/ui";
+import { Empty, Input, Page, Select, Status } from "../components/ui";
 import { formatTime } from "../utils/format";
 
 type RangePreset = "last24h" | "last7d" | "last30d" | "custom";
@@ -18,11 +18,13 @@ export function SchemaBrowserPage() {
   const [selectedBackupId, setSelectedBackupId] = useState("");
   const [selectedDatabase, setSelectedDatabase] = useState<string | null>(null);
   const [selectedTableId, setSelectedTableId] = useState<string | null>(null);
+  const [tableFilter, setTableFilter] = useState("");
 
   useEffect(() => {
     setSelectedBackupId("");
     setSelectedDatabase(null);
     setSelectedTableId(null);
+    setTableFilter("");
   }, [range.from, range.to]);
 
   const schema = useQuery({
@@ -31,11 +33,31 @@ export function SchemaBrowserPage() {
     enabled: selectedBackupId.length > 0
   });
   const databases = schema.data?.databases ?? [];
-  const currentDatabase = databases.find((item) => item.database === selectedDatabase) ?? databases[0];
+  const normalizedTableFilter = tableFilter.trim().toLowerCase();
+  const filteredDatabases = useMemo(
+    () => filterDatabases(databases, normalizedTableFilter),
+    [databases, normalizedTableFilter]
+  );
+  const currentDatabase = filteredDatabases.find((item) => item.database === selectedDatabase) ?? filteredDatabases[0] ?? null;
   const currentTable = useMemo(() => {
-    const tables = databases.flatMap((database) => database.tables);
+    const tables = filteredDatabases.flatMap((database) => database.tables);
     return tables.find((table) => table.backupTableId === selectedTableId) ?? currentDatabase?.tables[0] ?? null;
-  }, [currentDatabase, databases, selectedTableId]);
+  }, [currentDatabase, filteredDatabases, selectedTableId]);
+
+  useEffect(() => {
+    if (!currentDatabase) {
+      if (selectedDatabase !== null) setSelectedDatabase(null);
+      if (selectedTableId !== null) setSelectedTableId(null);
+      return;
+    }
+    if (selectedDatabase !== currentDatabase.database) {
+      setSelectedDatabase(currentDatabase.database);
+    }
+    if ((currentTable?.backupTableId ?? null) !== selectedTableId) {
+      setSelectedTableId(currentTable?.backupTableId ?? null);
+    }
+  }, [currentDatabase, currentTable, selectedDatabase, selectedTableId]);
+
   const selectedBackup = backups.data?.find((backup) => backup.id === selectedBackupId);
   const exportSchema = useMutation({
     mutationFn: ({ backupId, database }: { backupId: string; database?: string }) => api.exportBackupSchema(backupId, database),
@@ -54,10 +76,11 @@ export function SchemaBrowserPage() {
           <Select label="Backup range" value={rangePreset} onChange={(value) => setRangePreset(value as RangePreset)} options={[["last7d", "Last week"], ["last24h", "Last 24 hours"], ["last30d", "Last 30 days"], ["custom", "Custom range"]]} />
           {rangePreset === "custom" && <label>From<input type="date" value={customFrom} onChange={(event) => setCustomFrom(event.target.value)} /></label>}
           {rangePreset === "custom" && <label>To<input type="date" value={customTo} onChange={(event) => setCustomTo(event.target.value)} /></label>}
-          <Select label="Backup" value={selectedBackupId} onChange={(value) => { setSelectedBackupId(value); setSelectedDatabase(null); setSelectedTableId(null); }} options={(backups.data ?? []).map((backup) => [backup.id, `${formatTime(backup.createdAt)} - ${backup.sourceClusterName} - ${backup.contentMode === "SchemaOnly" ? "schema only" : "schema + data"} - ${backup.tableCount} table(s)`])} />
+          <Select label="Backup" value={selectedBackupId} onChange={(value) => { setSelectedBackupId(value); setSelectedDatabase(null); setSelectedTableId(null); setTableFilter(""); }} options={(backups.data ?? []).map((backup) => [backup.id, formatBackupOption(backup)])} />
           {selectedBackup && <div className="detail-list compact">
             <div><span>Status</span><strong><Status value={selectedBackup.status} /></strong></div>
             <div><span>Source cluster</span><strong>{selectedBackup.sourceClusterName}</strong></div>
+            <div><span>Policy</span><strong>{selectedBackup.policyName ?? "Manual"}</strong></div>
             <div><span>Mode</span><strong>{selectedBackup.contentMode === "SchemaOnly" ? "Schema only" : "Schema + data"}</strong></div>
             <div><span>Backup type</span><strong>{selectedBackup.backupType}</strong></div>
           </div>}
@@ -68,19 +91,23 @@ export function SchemaBrowserPage() {
       {selectedBackupId && <section className="panel schema-browser-grid">
         <div className="schema-tree">
           <div className="section-head"><h2>Objects</h2><Database size={18} /></div>
+          <Input label="Filter tables" value={tableFilter} onChange={setTableFilter} placeholder="Contains..." />
           {schema.isLoading && <Empty text="Loading schema metadata." />}
           {schema.error && <Empty text={String(schema.error)} />}
           {!schema.isLoading && !schema.error && databases.length === 0 && <Empty text="This backup has no retained schema metadata." />}
-          {databases.map((database) => (
-            <div className="schema-database" key={database.database}>
-              <button className={database.database === currentDatabase?.database ? "tree-node active" : "tree-node"} onClick={() => { setSelectedDatabase(database.database); setSelectedTableId(database.tables[0]?.backupTableId ?? null); }}>
-                {database.database}
-              </button>
-              {database.database === currentDatabase?.database && <div className="schema-table-list">
-                {database.tables.map((table) => <button key={table.backupTableId} className={table.backupTableId === currentTable?.backupTableId ? "tree-node table active" : "tree-node table"} onClick={() => setSelectedTableId(table.backupTableId)}>{table.table}</button>)}
-              </div>}
-            </div>
-          ))}
+          {!schema.isLoading && !schema.error && databases.length > 0 && filteredDatabases.length === 0 && <Empty text="No tables match this filter." />}
+          <div className="schema-object-list">
+            {filteredDatabases.map((database) => (
+              <div className="schema-database" key={database.database}>
+                <button className={database.database === currentDatabase?.database ? "tree-node active" : "tree-node"} onClick={() => { setSelectedDatabase(database.database); setSelectedTableId(database.tables[0]?.backupTableId ?? null); }}>
+                  {database.database}
+                </button>
+                {database.database === currentDatabase?.database && <div className="schema-table-list">
+                  {database.tables.map((table) => <button key={table.backupTableId} className={table.backupTableId === currentTable?.backupTableId ? "tree-node table active" : "tree-node table"} onClick={() => setSelectedTableId(table.backupTableId)}>{table.table}</button>)}
+                </div>}
+              </div>
+            ))}
+          </div>
         </div>
         <div className="schema-viewer">
           <div className="section-head">
@@ -113,6 +140,25 @@ function SchemaSql({ table }: { table: SchemaTableDto }) {
   }, [table.createTableSql]);
 
   return <pre className="schema-sql"><code>{formattedSql}</code></pre>;
+}
+
+function filterDatabases(databases: SchemaDatabaseDto[], tableFilter: string) {
+  if (!tableFilter) {
+    return databases;
+  }
+
+  return databases
+    .map((database) => ({
+      ...database,
+      tables: database.tables.filter((table) => table.table.toLowerCase().includes(tableFilter))
+    }))
+    .filter((database) => database.tables.length > 0);
+}
+
+function formatBackupOption(backup: SchemaBackupSummaryDto) {
+  const policy = backup.policyName ? ` - ${backup.policyName}` : " - Manual";
+  const mode = backup.contentMode === "SchemaOnly" ? "schema only" : "schema + data";
+  return `${formatTime(backup.createdAt)} - ${backup.sourceClusterName}${policy} - ${mode} - ${backup.tableCount} table(s)`;
 }
 
 async function formatSchemaSql(sql: string) {

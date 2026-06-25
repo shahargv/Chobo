@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import { CalendarClock, Copy, ListFilter, Play, Save, X } from "lucide-react";
-import type { BackupContentMode, BackupPolicyDto, FailedBackupRetentionMode, PolicyMatchKind, PolicySelector, PolicySelectorAction, PolicySelectorRule, UpsertPolicyRequest } from "../api/generated";
+import type { BackupContentMode, BackupPolicyDto, BackupType, FailedBackupRetentionMode, PolicyMatchKind, PolicySelector, PolicySelectorAction, PolicySelectorRule, UpsertPolicyRequest } from "../api/generated";
 import { useApi } from "../api-context";
 import { DataTable, Input, Page, Select } from "../components/ui";
 import { emptySelector } from "../policies";
@@ -18,6 +18,7 @@ export function Policies() {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<BackupPolicyDto | null>(null);
   const [createdPolicy, setCreatedPolicy] = useState<BackupPolicyDto | null>(null);
+  const [runPolicyTarget, setRunPolicyTarget] = useState<BackupPolicyDto | null>(null);
   const defaultPolicyDraft = (): UpsertPolicyRequest => ({ name: "", sourceClusterId: "", targetId: "", selector: emptySelector, contentMode: "SchemaAndData", retention: { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 }, failedBackupRetentionMode: "KeepAndExcludeFromMinBackupsToKeep" });
   const [draft, setDraft] = useState<UpsertPolicyRequest>(() => defaultPolicyDraft());
   const editPolicy = (policy: BackupPolicyDto) => {
@@ -56,18 +57,19 @@ export function Policies() {
     onError: (error) => showToast({ kind: "error", text: String(error) })
   });
   const executePolicy = useMutation({
-    mutationFn: (policy: BackupPolicyDto) => api.manualBackup({
+    mutationFn: ({ policy, mode }: { policy: BackupPolicyDto; mode: PolicyRunMode }) => api.manualBackup({
       clusterId: policy.sourceClusterId,
       targetId: policy.contentMode === "SchemaOnly" ? (null as unknown as string) : policy.targetId,
       selector: policy.selector,
-      backupType: "Full",
+      backupType: backupTypeForPolicyRun(policy, mode),
       policyId: policy.id,
       schemaOnly: policy.contentMode === "SchemaOnly"
     }),
     onSuccess: () => {
       showToast({ kind: "success", text: "Backup queued." });
       setCreatedPolicy(null);
-      navigate("/backups");
+      setRunPolicyTarget(null);
+      navigate("/queue");
     },
     onError: (error) => showToast({ kind: "error", text: String(error) })
   });
@@ -88,7 +90,7 @@ export function Policies() {
               <td>{policy.targetId ? nameOf(targets.data, policy.targetId) : "none"}</td>
               <td>{policy.selector.rules.length}</td>
               <td>{policy.retention ? `${policy.retention.minBackupsToKeep} backups` : "default"}</td>
-              <td className="actions"><button className="ghost" onClick={() => editPolicy(policy)}>Edit</button><button className="ghost" disabled={executePolicy.isPending} onClick={() => executePolicy.mutate(policy)}><Play size={14} /> Execute now</button></td>
+              <td className="actions"><button className="ghost" onClick={() => editPolicy(policy)}>Edit</button><button className="ghost" disabled={executePolicy.isPending} onClick={() => setRunPolicyTarget(policy)}><Play size={14} /> Run now</button></td>
             </tr>
           ))}
         </DataTable>
@@ -103,9 +105,10 @@ export function Policies() {
         </div>
         <div className="actions">
           <button className="primary" onClick={() => navigate("/schedules", { state: { policyId: createdPolicy.id } })}><CalendarClock size={16} /> Add schedule</button>
-          <button className="secondary" disabled={executePolicy.isPending} onClick={() => executePolicy.mutate(createdPolicy)}><Play size={16} /> Execute backup now</button>
+          <button className="secondary" disabled={executePolicy.isPending} onClick={() => setRunPolicyTarget(createdPolicy)}><Play size={16} /> Run backup now</button>
         </div>
       </section>}
+      {runPolicyTarget && <RunPolicyDialog policy={runPolicyTarget} busy={executePolicy.isPending} onCancel={() => setRunPolicyTarget(null)} onRun={(mode) => executePolicy.mutate({ policy: runPolicyTarget, mode })} />}
       {showForm && <section className="panel form-panel">
         <div className="section-head"><h2>{editing ? "Edit policy" : "Create policy"}</h2><button className="ghost" onClick={reset}>Cancel</button></div>
         <div className="form-grid">
@@ -124,6 +127,38 @@ export function Policies() {
       </section>}
     </Page>
   );
+}
+
+type PolicyRunMode = "full" | "regular";
+
+function RunPolicyDialog({ policy, busy, onRun, onCancel }: { policy: BackupPolicyDto; busy: boolean; onRun: (mode: PolicyRunMode) => void; onCancel: () => void }) {
+  const regularDisabled = policy.contentMode === "SchemaOnly";
+  const fullDescription = regularDisabled ? "Capture the selected schema as a new full schema snapshot." : "Capture all selected table data and schema as a new full base backup.";
+  return <div className="modal-backdrop" role="presentation" onClick={onCancel}>
+    <section className="confirm-dialog run-policy-dialog" role="dialog" aria-modal="true" aria-labelledby="run-policy-dialog-title" onClick={(event) => event.stopPropagation()}>
+      <div className="confirm-icon primary"><Play size={22} /></div>
+      <div className="confirm-content">
+        <h2 id="run-policy-dialog-title">Run policy now</h2>
+        <p>Choose how to run {policy.name}.</p>
+        <div className="run-policy-options">
+          <button className="secondary run-policy-option" disabled={busy} onClick={() => onRun("full")}>
+            <strong>Full backup</strong>
+            <span>{fullDescription}</span>
+          </button>
+          <button className="secondary run-policy-option" disabled={busy || regularDisabled} onClick={() => onRun("regular")}>
+            <strong>Regular backup</strong>
+            <span>Back up only changes since the latest usable full backup. If no suitable full backup is available, Chobo automatically creates a full backup for the affected data.</span>
+          </button>
+        </div>
+        {regularDisabled && <span className="hint">Schema-only policies always run as full schema captures.</span>}
+        <div className="confirm-actions"><button className="ghost" disabled={busy} onClick={onCancel}>Cancel</button></div>
+      </div>
+    </section>
+  </div>;
+}
+
+export function backupTypeForPolicyRun(policy: Pick<BackupPolicyDto, "contentMode">, mode: PolicyRunMode): BackupType {
+  return mode === "regular" && policy.contentMode !== "SchemaOnly" ? "Incremental" : "Full";
 }
 
 function SelectorBuilder({ selector, hasSource, inventory, selected, isLoading, error, onChange }: { selector: PolicySelector; hasSource: boolean; inventory: Array<{ database: string; table: string }>; selected: Array<{ database: string; table: string }>; isLoading: boolean; error: string | null; onChange: (selector: PolicySelector) => void }) {

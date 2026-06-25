@@ -1,7 +1,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
-import { copyRule, excludeTableRule, SelectedTablesPreview } from "./PoliciesPage";
+import { backupTypeForPolicyRun, copyRule, excludeTableRule, SelectedTablesPreview } from "./PoliciesPage";
 
 describe("SelectedTablesPreview", () => {
   it("caps 1,000 selected table chips by default and can show all", async () => {
@@ -76,5 +76,12 @@ describe("policy selector rules", () => {
     expect(copy).not.toBe(rule);
     expect(copy.database).not.toBe(rule.database);
     expect(copy.table).not.toBe(rule.table);
+  });
+});
+describe("policy run options", () => {
+  it("maps explicit run modes to the backup type sent to the API", () => {
+    expect(backupTypeForPolicyRun({ contentMode: "SchemaAndData" }, "regular")).toBe("Incremental");
+    expect(backupTypeForPolicyRun({ contentMode: "SchemaAndData" }, "full")).toBe("Full");
+    expect(backupTypeForPolicyRun({ contentMode: "SchemaOnly" }, "regular")).toBe("Full");
   });
 });

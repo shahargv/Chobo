@@ -204,12 +204,18 @@ public sealed class S3BackupStorageOperations(ICredentialProtector protector, IO
             return;
         }
 
-        await client.DeleteObjectsAsync(new DeleteObjectsRequest
+        try
         {
-            BucketName = bucket,
-            Objects = storagePaths.Select(path => new KeyVersion { Key = path }).ToList(),
-            Quiet = true
-        }, cancellationToken);
+            await client.DeleteObjectsAsync(new DeleteObjectsRequest
+            {
+                BucketName = bucket,
+                Objects = storagePaths.Select(path => new KeyVersion { Key = path }).ToList(),
+                Quiet = true
+            }, cancellationToken);
+        }
+        catch (AmazonS3Exception ex) when (IsMissingObjectDeleteFailure(ex))
+        {
+        }
     }
 
     private static async Task DeleteStoredObjectAsync(IAmazonS3 client, string bucket, string storagePath, CancellationToken cancellationToken)
@@ -225,6 +231,18 @@ public sealed class S3BackupStorageOperations(ICredentialProtector protector, IO
         catch (AmazonS3Exception ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
         {
         }
+    }
+
+    private static bool IsMissingObjectDeleteFailure(AmazonS3Exception ex)
+    {
+        if (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return true;
+        }
+
+        return string.Equals(ex.ErrorCode, "NoSuchKey", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(ex.ErrorCode, "NotFound", StringComparison.OrdinalIgnoreCase) ||
+               ex.Message.Contains("NoSuchKey", StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task<IAmazonS3> CreateClientAsync(BackupTargetEntity target, CancellationToken cancellationToken)
