@@ -119,6 +119,33 @@ describe("BackupTablesTable", () => {
     await act(async () => root.unmount());
     host.remove();
   });
+  it("opens exact shard failure details from the compact details icon", async () => {
+    const table = baseTable({
+      table: "failed_orders",
+      shards: [baseShard({ id: "failed-shard", status: "Failed", error: "Timeout while connecting to source-s1:9000" })]
+    });
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+
+    await act(async () => {
+      root.render(<BackupTablesTable tableRows={[table]} isLoading={false} />);
+    });
+
+    expect(host.textContent).not.toContain("Timeout while connecting");
+    const detailButton = host.querySelector('button[aria-label="Show failure details for sales.failed_orders Shard 1, replica 1"]') as HTMLButtonElement | null;
+    expect(detailButton).toBeTruthy();
+
+    await act(async () => {
+      detailButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(host.textContent).toContain("sales.failed_orders Shard 1, replica 1");
+    expect(host.textContent).toContain("Timeout while connecting to source-s1:9000");
+
+    await act(async () => root.unmount());
+    host.remove();
+  });
 });
 describe("Backups destructive delete flow", () => {
   it("shows confirmation and sends confirmDestructive for non-pinned backup deletes", async () => {

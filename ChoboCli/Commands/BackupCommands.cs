@@ -156,10 +156,10 @@ public sealed class BackupsCommands : CliSubject
 
         foreach (var table in backup.Tables.OrderBy(x => x.Database).ThenBy(x => x.Table))
         {
-            builder.AppendLine($"  {table.Database}.{table.Table}  {table.Status}  size={FormatBytes(table.BackupSizeBytes ?? CalculateTableSizeBytes(table))}  {FormatShardProgress(table.Shards)}");
+            builder.AppendLine($"  {table.Database}.{table.Table}  {table.Status}  size={FormatBytes(table.BackupSizeBytes ?? CalculateTableSizeBytes(table))}  {FormatShardProgress(table.Shards)}{FormatError(table.Error)}");
             foreach (var shard in table.Shards.OrderBy(x => x.SourceShardNumber).ThenBy(x => x.ReplicaNumber))
             {
-                builder.AppendLine($"    shard {shard.SourceShardNumber}{(string.IsNullOrWhiteSpace(shard.SourceShardName) ? "" : $" ({shard.SourceShardName})")} replica={shard.ReplicaNumber} node={shard.Host}:{shard.Port} status={shard.Status} size={FormatBytes(shard.BackupSizeBytes)}");
+                builder.AppendLine($"    shard {shard.SourceShardNumber}{(string.IsNullOrWhiteSpace(shard.SourceShardName) ? "" : $" ({shard.SourceShardName})")} replica={shard.ReplicaNumber} node={shard.Host}:{shard.Port} status={shard.Status} size={FormatBytes(shard.BackupSizeBytes)}{FormatError(shard.Error)}");
             }
         }
 
@@ -204,6 +204,9 @@ public sealed class BackupsCommands : CliSubject
 
         return unit == 0 || amount >= 10 ? $"{amount:0} {units[unit]}" : $"{amount:0.0} {units[unit]}";
     }
+
+    private static string FormatError(string? error) =>
+        string.IsNullOrWhiteSpace(error) ? "" : $" error={error.Trim()}";
 
     private static string FormatShardProgress(IReadOnlyList<BackupTableShardDto> shards)
     {

@@ -271,6 +271,57 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Backup_shard_retries_transient_failure_and_succeeds()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions
+        {
+            MaxDop = 1,
+            PollInterval = TimeSpan.FromMilliseconds(1),
+            TransientShardRetryDelay = TimeSpan.FromMilliseconds(1),
+            TransientShardMaxRetries = 3
+        });
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+        fixture.ClickHouse.FailNextBackupStartTransientCount = 1;
+
+        var backupId = await fixture.CreateManualBackupAsync();
+        await fixture.RunBackupAsync(backupId);
+
+        fixture.Db.ChangeTracker.Clear();
+        var backup = await fixture.Db.Backups.Include(x => x.Tables).ThenInclude(x => x.Shards).SingleAsync(x => x.Id == backupId);
+        var shard = Assert.Single(Assert.Single(backup.Tables).Shards);
+        Assert.Equal(BackupRunStatus.Succeeded, backup.Status);
+        Assert.Equal(BackupTableStatus.Succeeded, shard.Status);
+        Assert.Null(shard.Error);
+        Assert.Equal(2, fixture.ClickHouse.BackupStartTables.Count);
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "shard-retry-scheduled" && x.EntityId == shard.Id.ToString()));
+    }
+    [Fact]
+    public async Task Backup_shard_does_not_retry_s3_failures()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions
+        {
+            MaxDop = 1,
+            PollInterval = TimeSpan.FromMilliseconds(1),
+            TransientShardRetryDelay = TimeSpan.FromMilliseconds(1),
+            TransientShardMaxRetries = 3
+        });
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+        fixture.ClickHouse.NextBackupStatus = "BACKUP_FAILED";
+        fixture.ClickHouse.NextBackupError = "Code: 499. DB::Exception: Not found address of host: missing-minio. (DNS_ERROR). (S3_ERROR)";
+
+        var backupId = await fixture.CreateManualBackupAsync();
+        await fixture.RunBackupAsync(backupId);
+
+        fixture.Db.ChangeTracker.Clear();
+        var backup = await fixture.Db.Backups.Include(x => x.Tables).ThenInclude(x => x.Shards).SingleAsync(x => x.Id == backupId);
+        var shard = Assert.Single(Assert.Single(backup.Tables).Shards);
+        Assert.Equal(BackupRunStatus.Failed, backup.Status);
+        Assert.Equal(BackupTableStatus.Failed, shard.Status);
+        Assert.Contains("S3_ERROR", shard.Error);
+        Assert.Single(fixture.ClickHouse.BackupStartTables);
+        Assert.False(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "shard-retry-scheduled" && x.EntityId == shard.Id.ToString()));
+    }
+    [Fact]
     public async Task Backup_executor_prepares_second_data_backup_queue_while_first_backup_is_running()
     {
         await using var fixture = await TestFixture.CreateAsync(
@@ -2344,6 +2395,36 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Restore_shard_retries_transient_failure_and_succeeds()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions
+        {
+            MaxDop = 1,
+            PollInterval = TimeSpan.FromMilliseconds(1),
+            TransientShardRetryDelay = TimeSpan.FromMilliseconds(1),
+            TransientShardMaxRetries = 3
+        });
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Succeeded, "backup-op", true)
+        ]);
+        backup.Status = BackupRunStatus.Succeeded;
+        await fixture.Db.SaveChangesAsync();
+        var restore = await fixture.Services.GetRequiredService<RestoreApplicationService>().InitiateAsync(
+            new InitiateRestoreRequest(backup.Id, fixture.TargetClusterId, null, null, null, null, false, false));
+        fixture.ClickHouse.FailNextRestoreStartTransientCount = 1;
+
+        await fixture.RunRestoreAsync(restore.Id);
+
+        fixture.Db.ChangeTracker.Clear();
+        var completed = await fixture.Db.Restores.Include(x => x.Tables).ThenInclude(x => x.Shards).SingleAsync(x => x.Id == restore.Id);
+        var shard = Assert.Single(Assert.Single(completed.Tables).Shards);
+        Assert.Equal(RestoreRunStatus.Succeeded, completed.Status);
+        Assert.Equal(RestoreTableStatus.Succeeded, shard.Status);
+        Assert.Null(shard.Error);
+        Assert.Equal(2, fixture.ClickHouse.RestoreStartTables.Count);
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "shard-retry-scheduled" && x.EntityId == shard.Id.ToString()));
+    }
+    [Fact]
     public async Task Restore_with_schema_mismatch_allowed_requires_destructive_confirmation()
     {
         await using var fixture = await TestFixture.CreateAsync();
@@ -3079,8 +3160,10 @@ public sealed class BackupRestoreExecutionTests
         public Exception? ExecuteException { get; set; }
         public string NextBackupStatus { get; set; } = "BACKUP_CREATED";
         public string? NextBackupError { get; set; }
+        public int FailNextBackupStartTransientCount { get; set; }
         public string NextRestoreStatus { get; set; } = "RESTORED";
         public string? NextRestoreError { get; set; }
+        public int FailNextRestoreStartTransientCount { get; set; }
         public bool DropStartedBackupOperation { get; set; }
         public bool DropStartedRestoreOperation { get; set; }
         public HashSet<Guid> MissingParentFullShardIds { get; } = [];
@@ -3186,6 +3269,12 @@ public sealed class BackupRestoreExecutionTests
                 _activeBackupStarts--;
             }
 
+            if (FailNextBackupStartTransientCount > 0)
+            {
+                FailNextBackupStartTransientCount--;
+                throw new TimeoutException("simulated transient backup timeout");
+            }
+
             var operationId = $"backup-{table.Table}-s{shard.SourceShardNumber}-{Guid.NewGuid():N}";
             lock (_lock)
             {
@@ -3228,6 +3317,12 @@ public sealed class BackupRestoreExecutionTests
             lock (_lock)
             {
                 _activeRestoreStarts--;
+                if (FailNextRestoreStartTransientCount > 0)
+                {
+                    FailNextRestoreStartTransientCount--;
+                    throw new TimeoutException("simulated transient restore timeout");
+                }
+
                 operationId = $"restore-{backupTable.Table}-s{backupShard.SourceShardNumber}-{Guid.NewGuid():N}";
                 if (!DropStartedRestoreOperation)
                 {

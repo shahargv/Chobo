@@ -324,6 +324,12 @@ public sealed class BackupRunnerService(
 
     private sealed record BackupShardWorkItem(Guid TableId, Guid ShardId);
 
+    private enum BackupShardRunResult
+    {
+        Completed,
+        RetryLater
+    }
+
     private static bool IsCancellationTerminalStatus(BackupRunStatus status) =>
         status is BackupRunStatus.Canceled or
             BackupRunStatus.ManualDeleteRequested or
@@ -352,6 +358,8 @@ public sealed class BackupRunnerService(
         {
             var completedShardAttempts = 0;
             var checkpointInterval = options.Value.ManifestCheckpointShardInterval;
+            var retryCounts = new ConcurrentDictionary<Guid, int>();
+            var failedEndpoints = new ConcurrentDictionary<Guid, ConcurrentDictionary<string, byte>>();
             var forcedWorkCount = await CountForcedBackupWorkAsync(backupId, cancellationToken);
             var workerCount = Math.Min(workItems.Count, Math.Max(1, maxDop) + forcedWorkCount);
             var workers = Enumerable.Range(0, workerCount)
@@ -382,7 +390,13 @@ public sealed class BackupRunnerService(
                         }
 
                         var item = claim.WorkItem;
-                        await RunShardAsync(backupId, item.TableId, item.ShardId, item.IsForced, cancellationToken);                        var completed = Interlocked.Increment(ref completedShardAttempts);
+                        var result = await RunShardAsync(backupId, item.TableId, item.ShardId, item.IsForced, retryCounts, failedEndpoints, cancellationToken);
+                        if (result == BackupShardRunResult.RetryLater)
+                        {
+                            await Task.Delay(options.Value.PollInterval, cancellationToken);
+                            continue;
+                        }
+                        var completed = Interlocked.Increment(ref completedShardAttempts);
                         using (var statusScope = scopeFactory.CreateScope())
                         {
                             var statusDb = statusScope.ServiceProvider.GetRequiredService<ChoboDbContext>();
@@ -506,7 +520,7 @@ public sealed class BackupRunnerService(
         return false;
     }
 
-    private async Task RunShardAsync(Guid backupId, Guid tableId, Guid shardId, bool isForcedQueueItem, CancellationToken cancellationToken)
+    private async Task<BackupShardRunResult> RunShardAsync(Guid backupId, Guid tableId, Guid shardId, bool isForcedQueueItem, ConcurrentDictionary<Guid, int> retryCounts, ConcurrentDictionary<Guid, ConcurrentDictionary<string, byte>> failedEndpoints, CancellationToken cancellationToken)
     {
         using var scope = scopeFactory.CreateScope();
         var scopedDb = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
@@ -528,7 +542,7 @@ public sealed class BackupRunnerService(
         if (IsCancellationTerminalStatus(backup.Status) || IsShardTerminalStatus(shard.Status))
         {
             _logger.Information("Backup shard {BackupShardId} skipped because backup {BackupId} is {BackupStatus} and shard status is {ShardStatus}.", shard.Id, backup.Id, backup.Status, shard.Status);
-            return;
+            return BackupShardRunResult.Completed;
         }
 
         shard.Status = BackupTableStatus.Running;
@@ -536,14 +550,16 @@ public sealed class BackupRunnerService(
         await scopedDb.SaveChangesAsync(cancellationToken);
         await scopedAudit.RecordAsync("shard-started", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { table.Database, table.Table, sourceShard = shard.SourceShardNumber, sourceNode = $"{shard.Host}:{shard.Port}" });
 
+        var endpoint = new ClickHouseNodeEndpoint(shard.Host, shard.Port, shard.UseTls);
         try
         {
-            var endpoint = new ClickHouseNodeEndpoint(shard.Host, shard.Port, shard.UseTls);
             if (string.IsNullOrWhiteSpace(shard.ClickHouseOperationId) && IsReplicatedMergeTreeEngine(table.Engine))
             {
+                var failedEndpointKeys = failedEndpoints.TryGetValue(shard.Id, out var failed) ? failed.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase) : [];
                 var candidates = (await scopedClickHouse.GetTopologyAsync(backup.SourceCluster!, cancellationToken))
                     .Where(x => x.ShardNumber == shard.SourceShardNumber)
-                    .OrderBy(_ => Random.Shared.Next())
+                    .OrderBy(x => failedEndpointKeys.Contains(EndpointKey(x.Endpoint)))
+                    .ThenBy(_ => Random.Shared.Next())
                     .ToList();
                 var selectedCandidateIndex = -1;
                 for (var i = 0; i < candidates.Count; i++)
@@ -561,7 +577,7 @@ public sealed class BackupRunnerService(
                     shard.StartedAt = null;
                     await scopedDb.SaveChangesAsync(cancellationToken);
                     await scopedQueue.ReleaseStartedAsync(BackupRestoreQueueKind.Backup, shard.Id, cancellationToken);
-                    return;
+                    return BackupShardRunResult.RetryLater;
                 }
                 if (selectedCandidateIndex >= 0)
                 {
@@ -584,21 +600,22 @@ public sealed class BackupRunnerService(
                     var resumedFinalClickHouseStatus = await PollBackupShardAsync(scopedDb, scopedClickHouse, endpoint, backup.SourceCluster!, backup.Id, shard, status, scopedOptions.Value.PollInterval, cancellationToken);
                     if (resumedFinalClickHouseStatus is null || await ReloadShardAndStopIfCanceledAsync(scopedDb, backup, table, shard, cancellationToken))
                     {
-                        return;
+                        return BackupShardRunResult.Completed;
                     }
                     var resumedBackupSizeBytes = await MeasureBackupPathAsync(scopedStorage, backup.Target!, shard.S3Path, cancellationToken);
                     if (await ReloadShardAndStopIfCanceledAsync(scopedDb, backup, table, shard, cancellationToken))
                     {
-                        return;
+                        return BackupShardRunResult.Completed;
                     }
                     shard.Status = BackupTableStatus.Succeeded;
                     shard.ClickHouseStatus = resumedFinalClickHouseStatus;
+                    shard.Error = null;
                     shard.CompletedAt = DateTimeOffset.UtcNow;
                     shard.BackupSizeBytes = resumedBackupSizeBytes;
                     await scopedDb.SaveChangesAsync(cancellationToken);
                     await scopedAudit.RecordAsync("shard-succeeded", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { table.Database, table.Table, sourceShard = shard.SourceShardNumber, clickHouseOperationId = shard.ClickHouseOperationId, shard.ClickHouseStatus, shard.BackupSizeBytes });
                     await scopedQueue.MarkCompletedAsync(BackupRestoreQueueKind.Backup, shard.Id, cancellationToken);
-                    return;
+                    return BackupShardRunResult.Completed;
                 }
 
                 throw MissingOperationException(shard.ClickHouseOperationId);
@@ -616,26 +633,48 @@ public sealed class BackupRunnerService(
             var finalClickHouseStatus = await PollBackupShardAsync(scopedDb, scopedClickHouse, endpoint, backup.SourceCluster!, backup.Id, shard, new ClickHouseOperationStatus(true, operation.Status, null), scopedOptions.Value.PollInterval, cancellationToken);
             if (finalClickHouseStatus is null || await ReloadShardAndStopIfCanceledAsync(scopedDb, backup, table, shard, cancellationToken))
             {
-                return;
+                return BackupShardRunResult.Completed;
             }
             var backupSizeBytes = await MeasureBackupPathAsync(scopedStorage, backup.Target!, shard.S3Path, cancellationToken);
             if (await ReloadShardAndStopIfCanceledAsync(scopedDb, backup, table, shard, cancellationToken))
             {
-                return;
+                return BackupShardRunResult.Completed;
             }
             shard.Status = BackupTableStatus.Succeeded;
             shard.ClickHouseStatus = finalClickHouseStatus;
+            shard.Error = null;
             shard.CompletedAt = DateTimeOffset.UtcNow;
             shard.BackupSizeBytes = backupSizeBytes;
             await scopedDb.SaveChangesAsync(cancellationToken);
             await scopedAudit.RecordAsync("shard-succeeded", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { table.Database, table.Table, sourceShard = shard.SourceShardNumber, clickHouseOperationId = shard.ClickHouseOperationId, shard.ClickHouseStatus, shard.BackupSizeBytes });
             await scopedQueue.MarkCompletedAsync(BackupRestoreQueueKind.Backup, shard.Id, cancellationToken);
+            return BackupShardRunResult.Completed;
         }
         catch (Exception ex)
         {
             if (await ReloadShardAndStopIfCanceledAsync(scopedDb, backup, table, shard, CancellationToken.None))
             {
-                return;
+                return BackupShardRunResult.Completed;
+            }
+
+            var maxRetries = Math.Max(0, scopedOptions.Value.TransientShardMaxRetries);
+            var attempt = retryCounts.AddOrUpdate(shard.Id, 1, (_, current) => current + 1);
+            if (attempt <= maxRetries && IsTransientShardFailure(ex, cancellationToken))
+            {
+                var retryDelay = scopedOptions.Value.TransientShardRetryDelay <= TimeSpan.Zero ? TimeSpan.FromMinutes(1) : scopedOptions.Value.TransientShardRetryDelay;
+                failedEndpoints.GetOrAdd(shard.Id, _ => new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase)).TryAdd(EndpointKey(endpoint), 0);
+                _logger.Warning(ex, "Backup table {BackupTableId} {Database}.{Table} shard {ShardNumber} failed with a transient error; retry {RetryAttempt}/{MaxRetries} will be queued after {RetryDelay}.", table.Id, table.Database, table.Table, shard.SourceShardNumber, attempt, maxRetries, retryDelay);
+                shard.Status = BackupTableStatus.Queued;
+                shard.Error = ex.Message;
+                shard.ClickHouseOperationId = null;
+                shard.ClickHouseStatus = null;
+                shard.CompletedAt = null;
+                shard.StartedAt = null;
+                await scopedDb.SaveChangesAsync(CancellationToken.None);
+                await scopedAudit.RecordAsync("shard-retry-scheduled", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { error = ex.Message, sourceShard = shard.SourceShardNumber, retryAttempt = attempt, maxRetries, retryDelaySeconds = retryDelay.TotalSeconds });
+                await Task.Delay(retryDelay, CancellationToken.None);
+                await scopedQueue.ReleaseStartedAsync(BackupRestoreQueueKind.Backup, shard.Id, CancellationToken.None);
+                return BackupShardRunResult.RetryLater;
             }
 
             _logger.Error(ex, "Backup table {BackupTableId} {Database}.{Table} shard {ShardNumber} failed.", table.Id, table.Database, table.Table, shard.SourceShardNumber);
@@ -645,6 +684,7 @@ public sealed class BackupRunnerService(
             await scopedDb.SaveChangesAsync(CancellationToken.None);
             await scopedAudit.RecordAsync("shard-failed", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { error = ex.Message, sourceShard = shard.SourceShardNumber, clickHouseOperationId = shard.ClickHouseOperationId });
             await scopedQueue.MarkCompletedAsync(BackupRestoreQueueKind.Backup, shard.Id, CancellationToken.None);
+            return BackupShardRunResult.Completed;
         }
     }
 
@@ -856,5 +896,57 @@ public sealed class BackupRunnerService(
     private static string NormalizeFailure(string? failure) =>
         string.IsNullOrWhiteSpace(failure) ? "No detailed failure was reported." : failure.Trim();
 
+    private static string EndpointKey(ClickHouseNodeEndpoint endpoint) => $"{endpoint.Host}:{endpoint.Port}:{endpoint.UseTls}";
+
+    private static bool IsTransientShardFailure(Exception exception, CancellationToken cancellationToken)
+    {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return false;
+        }
+
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is TimeoutException || current is TaskCanceledException || current is System.Net.Http.HttpRequestException || current is System.Net.Sockets.SocketException)
+            {
+                return true;
+            }
+
+            var message = current.Message;
+            if (IsStorageOrCredentialFailure(message))
+            {
+                return false;
+            }
+
+            if (message.Contains("timeout", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("timed out", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("temporar", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("transient", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("unreachable", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("connection refused", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("connection reset", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("connection timed", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("no route to host", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("host not found", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("network is unreachable", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("actively refused", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsStorageOrCredentialFailure(string message) =>
+        message.Contains("S3_ERROR", StringComparison.OrdinalIgnoreCase) ||
+        message.Contains("Aws::S3", StringComparison.OrdinalIgnoreCase) ||
+        message.Contains("BackupWriterS3", StringComparison.OrdinalIgnoreCase) ||
+        message.Contains("S3Exception", StringComparison.OrdinalIgnoreCase) ||
+        message.Contains("Access Denied", StringComparison.OrdinalIgnoreCase) ||
+        message.Contains("InvalidAccessKeyId", StringComparison.OrdinalIgnoreCase) ||
+        message.Contains("SignatureDoesNotMatch", StringComparison.OrdinalIgnoreCase) ||
+        message.Contains("REQUIRED_PASSWORD", StringComparison.OrdinalIgnoreCase) ||
+        message.Contains("Authentication failed", StringComparison.OrdinalIgnoreCase);
 
 }
