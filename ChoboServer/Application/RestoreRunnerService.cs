@@ -257,6 +257,8 @@ public sealed class RestoreRunnerService(
 
         var forcedWorkCount = await db.BackupRestoreQueueItems.AsNoTracking()
             .CountAsync(x => x.Kind == BackupRestoreQueueKind.Restore && x.OperationId == restoreId && x.StartedAt == null && x.CompletedAt == null && x.IsForced, cancellationToken);
+        var retryCounts = new System.Collections.Concurrent.ConcurrentDictionary<Guid, int>();
+        var failedEndpoints = new System.Collections.Concurrent.ConcurrentDictionary<Guid, System.Collections.Concurrent.ConcurrentDictionary<string, byte>>();
         var workerCount = Math.Min(queuedWorkCount, Math.Max(1, maxDop) + forcedWorkCount);
         var workers = Enumerable.Range(0, workerCount)
             .Select(async _ =>
@@ -286,7 +288,7 @@ public sealed class RestoreRunnerService(
                     }
 
                     var item = claim.WorkItem;
-                    var result = await RunRestoreShardAsync(restoreId, item.TableId, item.ShardId, item.IsForced, cancellationToken);
+                    var result = await RunRestoreShardAsync(restoreId, item.TableId, item.ShardId, item.IsForced, retryCounts, failedEndpoints, cancellationToken);
                     if (result == RestoreShardRunResult.RetryLater)
                     {
                         await Task.Delay(options.Value.PollInterval, cancellationToken);
@@ -304,7 +306,7 @@ public sealed class RestoreRunnerService(
         return status == RestoreRunStatus.Canceled;
     }
 
-    private async Task<RestoreShardRunResult> RunRestoreShardAsync(Guid restoreId, Guid tableId, Guid shardId, bool isForcedQueueItem, CancellationToken cancellationToken)
+    private async Task<RestoreShardRunResult> RunRestoreShardAsync(Guid restoreId, Guid tableId, Guid shardId, bool isForcedQueueItem, System.Collections.Concurrent.ConcurrentDictionary<Guid, int> retryCounts, System.Collections.Concurrent.ConcurrentDictionary<Guid, System.Collections.Concurrent.ConcurrentDictionary<string, byte>> failedEndpoints, CancellationToken cancellationToken)
     {
         using var scope = scopeFactory.CreateScope();
         var scopedDb = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
@@ -333,9 +335,11 @@ public sealed class RestoreRunnerService(
 
         if (string.IsNullOrWhiteSpace(shard.ClickHouseOperationId) && IsReplicatedMergeTreeEngine(backupTable.Engine))
         {
+            var failedEndpointKeys = failedEndpoints.TryGetValue(shard.Id, out var failed) ? failed.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase) : [];
             var candidates = (await scopedClickHouse.GetTopologyAsync(restore.TargetCluster!, cancellationToken))
                 .Where(x => x.ShardNumber == (shard.TargetShardNumber ?? shard.SourceShardNumber))
-                .OrderBy(_ => Random.Shared.Next())
+                .OrderBy(x => failedEndpointKeys.Contains(EndpointKey(x.Endpoint)))
+                .ThenBy(_ => Random.Shared.Next())
                 .ToList();
             var selectedCandidateIndex = -1;
             for (var i = 0; i < candidates.Count; i++)
@@ -427,6 +431,7 @@ public sealed class RestoreRunnerService(
             }
 
             shard.Status = RestoreTableStatus.Succeeded;
+            shard.Error = null;
             shard.CompletedAt = DateTimeOffset.UtcNow;
             await scopedDb.SaveChangesAsync(cancellationToken);
             await scopedAudit.RecordAsync("shard-succeeded", AuditEntityType.RestoreTableShard, shard.Id.ToString(), new { sourceShard = shard.SourceShardNumber, targetShard = shard.TargetShardNumber, shard.ClickHouseStatus });
@@ -435,6 +440,26 @@ public sealed class RestoreRunnerService(
         }
         catch (Exception ex)
         {
+            var maxRetries = Math.Max(0, scopedOptions.Value.TransientShardMaxRetries);
+            var attempt = retryCounts.AddOrUpdate(shard.Id, 1, (_, current) => current + 1);
+            if (attempt <= maxRetries && IsTransientShardFailure(ex, cancellationToken))
+            {
+                var retryDelay = scopedOptions.Value.TransientShardRetryDelay <= TimeSpan.Zero ? TimeSpan.FromMinutes(1) : scopedOptions.Value.TransientShardRetryDelay;
+                failedEndpoints.GetOrAdd(shard.Id, _ => new System.Collections.Concurrent.ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase)).TryAdd(EndpointKey(endpoint), 0);
+                _logger.Warning(ex, "Restore table {RestoreTableId} {TargetDatabase}.{TargetTable} shard {SourceShardNumber}->{TargetShardNumber} failed with a transient error; retry {RetryAttempt}/{MaxRetries} will be queued after {RetryDelay}.", table.Id, table.TargetDatabase, table.TargetTable, shard.SourceShardNumber, shard.TargetShardNumber, attempt, maxRetries, retryDelay);
+                shard.Status = RestoreTableStatus.Queued;
+                shard.Error = ex.Message;
+                shard.ClickHouseOperationId = null;
+                shard.ClickHouseStatus = null;
+                shard.CompletedAt = null;
+                shard.StartedAt = null;
+                await scopedDb.SaveChangesAsync(CancellationToken.None);
+                await scopedAudit.RecordAsync("shard-retry-scheduled", AuditEntityType.RestoreTableShard, shard.Id.ToString(), new { error = ex.Message, sourceShard = shard.SourceShardNumber, targetShard = shard.TargetShardNumber, retryAttempt = attempt, maxRetries, retryDelaySeconds = retryDelay.TotalSeconds });
+                await Task.Delay(retryDelay, CancellationToken.None);
+                await scopedQueue.ReleaseStartedAsync(BackupRestoreQueueKind.Restore, shard.Id, CancellationToken.None);
+                return RestoreShardRunResult.RetryLater;
+            }
+
             shard.Status = RestoreTableStatus.Failed;
             shard.Error = ex.Message;
             shard.CompletedAt = DateTimeOffset.UtcNow;
@@ -653,6 +678,59 @@ public sealed class RestoreRunnerService(
     private static string NormalizeFailure(string? failure) =>
         string.IsNullOrWhiteSpace(failure) ? "No detailed failure was reported." : failure.Trim();
 
+    private static string EndpointKey(ClickHouseNodeEndpoint endpoint) => $"{endpoint.Host}:{endpoint.Port}:{endpoint.UseTls}";
+
+    private static bool IsTransientShardFailure(Exception exception, CancellationToken cancellationToken)
+    {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return false;
+        }
+
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is TimeoutException || current is TaskCanceledException || current is System.Net.Http.HttpRequestException || current is System.Net.Sockets.SocketException)
+            {
+                return true;
+            }
+
+            var message = current.Message;
+            if (IsStorageOrCredentialFailure(message))
+            {
+                return false;
+            }
+
+            if (message.Contains("timeout", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("timed out", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("temporar", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("transient", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("unreachable", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("connection refused", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("connection reset", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("connection timed", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("no route to host", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("host not found", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("network is unreachable", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("actively refused", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsStorageOrCredentialFailure(string message) =>
+        message.Contains("S3_ERROR", StringComparison.OrdinalIgnoreCase) ||
+        message.Contains("Aws::S3", StringComparison.OrdinalIgnoreCase) ||
+        message.Contains("BackupWriterS3", StringComparison.OrdinalIgnoreCase) ||
+        message.Contains("S3Exception", StringComparison.OrdinalIgnoreCase) ||
+        message.Contains("Access Denied", StringComparison.OrdinalIgnoreCase) ||
+        message.Contains("InvalidAccessKeyId", StringComparison.OrdinalIgnoreCase) ||
+        message.Contains("SignatureDoesNotMatch", StringComparison.OrdinalIgnoreCase) ||
+        message.Contains("REQUIRED_PASSWORD", StringComparison.OrdinalIgnoreCase) ||
+        message.Contains("Authentication failed", StringComparison.OrdinalIgnoreCase);
+
     private static InvalidOperationException MissingOperationException(string? operationId) =>
         new($"ClickHouse operation {operationId ?? "(unknown)"} is missing from system.backups; its outcome is unknown.");
 
@@ -688,18 +766,3 @@ public sealed class RestoreRunnerService(
         return RestoreTableStatus.Failed;
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

@@ -10,6 +10,8 @@ public sealed class ChoboBackupRestoreOptions
     public TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(2);
     public int ManifestCheckpointShardInterval { get; set; } = 20;
     public TimeSpan ManifestWriteTimeout { get; set; } = TimeSpan.FromSeconds(5);
+    public int TransientShardMaxRetries { get; set; } = 3;
+    public TimeSpan TransientShardRetryDelay { get; set; } = TimeSpan.FromMinutes(1);
 }
 
 public sealed class RetentionManagementOptions

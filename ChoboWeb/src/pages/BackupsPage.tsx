@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ArrowUpToLine, Ban, Play, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
+import { ArrowUpToLine, Ban, Info, Play, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import type { BackupDto, BackupPolicyDto, BackupRunStatus, BackupTableDto, BackupTableShardDto, BackupType } from "../api/generated";
 import { useApi } from "../api-context";
 import { ConfirmDialog, DataTable, Detail, Drawer, Empty, Input, Page, Select, Status } from "../components/ui";
@@ -214,7 +214,9 @@ export function BackupDrawer({ backupId, onClose, onOpenBackup }: { backupId: st
 }
 
 export function BackupTablesTable({ tableRows, isLoading }: { tableRows: BackupTableDto[]; isLoading: boolean }) {
-  return <DataTable headers={["Table", "Engine", "Shard", "Status", "Source node", "Size", "S3 path"]} isLoading={isLoading}>
+  const [errorDetail, setErrorDetail] = useState<{ title: string; error: string } | null>(null);
+  return <>
+  <DataTable headers={["Table", "Engine", "Shard", "Status", "Source node", "Size", "S3 path", "Details"]} isLoading={isLoading}>
     {tableRows.flatMap((table) => {
       if (table.shards.length === 0) {
         return [
@@ -226,6 +228,7 @@ export function BackupTablesTable({ tableRows, isLoading }: { tableRows: BackupT
             <td>none</td>
             <td>{formatBytes(calculateTableSizeBytes(table))}</td>
             <td className="mono wide-cell">{table.s3Path}</td>
+            <td>{table.error ? <ErrorDetailButton label={`${table.database}.${table.table}`} error={table.error} onOpen={setErrorDetail} /> : ""}</td>
           </tr>
         ];
       }
@@ -242,10 +245,26 @@ export function BackupTablesTable({ tableRows, isLoading }: { tableRows: BackupT
             <td>{formatShardEndpoint(shard)}</td>
             <td>{formatBytes(shard.backupSizeBytes)}</td>
             <td className="mono wide-cell">{shard.s3Path}</td>
+            <td>{shard.error ? <ErrorDetailButton label={`${table.database}.${table.table} ${formatShardLabel(shard)}`} error={shard.error} onOpen={setErrorDetail} /> : ""}</td>
           </tr>
         ));
     })}
-  </DataTable>;
+  </DataTable>
+  {errorDetail && <ErrorDetailDialog title={errorDetail.title} error={errorDetail.error} onClose={() => setErrorDetail(null)} />}
+  </>;
+}
+
+function ErrorDetailButton({ label, error, onOpen }: { label: string; error: string; onOpen: (detail: { title: string; error: string }) => void }) {
+  return <button type="button" className="ghost icon-button" title="Show failure details" aria-label={`Show failure details for ${label}`} onClick={() => onOpen({ title: label, error })}><Info size={16} /></button>;
+}
+
+function ErrorDetailDialog({ title, error, onClose }: { title: string; error: string; onClose: () => void }) {
+  return <div className="modal-backdrop" role="presentation" onClick={onClose}>
+    <section className="error-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="error-detail-title" onClick={(event) => event.stopPropagation()}>
+      <div className="section-head"><h2 id="error-detail-title">{title}</h2><button className="ghost" onClick={onClose}>Close</button></div>
+      <pre>{error}</pre>
+    </section>
+  </div>;
 }
 
 export function calculateTableSizeBytes(table: BackupTableDto) {
