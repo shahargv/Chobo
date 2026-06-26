@@ -372,6 +372,7 @@ public sealed class RestoreRunnerService(
         var shard = table.Shards.Single(x => x.Id == shardId);
         if (restore.Status == RestoreRunStatus.Canceled || shard.Status is RestoreTableStatus.Succeeded or RestoreTableStatus.Failed or RestoreTableStatus.PartiallySucceeded or RestoreTableStatus.Skipped)
         {
+            await scopedQueue.ReleaseStartedAsync(BackupRestoreQueueKind.Restore, shard.Id, cancellationToken);
             return RestoreShardRunResult.Completed;
         }
 
@@ -379,6 +380,7 @@ public sealed class RestoreRunnerService(
         var backupShard = backupTable.Shards.Single(x => x.Id == shard.BackupTableShardId);
         var usesTemporaryShardTables = table.Shards.Any(x => !string.Equals(x.RestoreTableName, table.TargetTable, StringComparison.Ordinal));
         var endpoint = new ClickHouseNodeEndpoint(shard.TargetHost, shard.TargetPort, shard.TargetUseTls);
+        var nodeReserved = false;
 
         if (string.IsNullOrWhiteSpace(shard.ClickHouseOperationId) && IsReplicatedMergeTreeEngine(backupTable.Engine))
         {
@@ -396,6 +398,7 @@ public sealed class RestoreRunnerService(
                     continue;
                 }
                 selectedCandidateIndex = i;
+                nodeReserved = true;
                 break;
             }
             if (selectedCandidateIndex < 0 && candidates.Count > 0)
@@ -414,11 +417,12 @@ public sealed class RestoreRunnerService(
                 shard.TargetUseTls = selected.UseTls;
                 await scopedDb.SaveChangesAsync(cancellationToken);
             }
-            else if (!await scopedQueue.TryReserveStartedNodeAsync(BackupRestoreQueueKind.Restore, shard.Id, restore.TargetClusterId, endpoint, isForcedQueueItem, cancellationToken))
-            {
-                await ReleaseRestoreShardForRetryAsync(scopedDb, scopedQueue, shard, cancellationToken);
-                return RestoreShardRunResult.RetryLater;
-            }
+        }
+
+        if (!nodeReserved && !await scopedQueue.TryReserveStartedNodeAsync(BackupRestoreQueueKind.Restore, shard.Id, restore.TargetClusterId, endpoint, isForcedQueueItem, cancellationToken))
+        {
+            await ReleaseRestoreShardForRetryAsync(scopedDb, scopedQueue, shard, cancellationToken);
+            return RestoreShardRunResult.RetryLater;
         }
 
         try
@@ -442,6 +446,7 @@ public sealed class RestoreRunnerService(
                 {
                     if (!await PollRestoreShardAsync(scopedDb, restore.Id, scopedClickHouse, endpoint, restore.TargetCluster!, shard, status, scopedOptions.Value.PollInterval, cancellationToken))
                     {
+                        await scopedQueue.ReleaseStartedAsync(BackupRestoreQueueKind.Restore, shard.Id, cancellationToken);
                         return RestoreShardRunResult.Completed;
                     }
                 }
@@ -464,6 +469,7 @@ public sealed class RestoreRunnerService(
                 await scopedTestHooks.MaybeDelayRestoreBeforePollAsync(cancellationToken);
                 if (!await PollRestoreShardAsync(scopedDb, restore.Id, scopedClickHouse, endpoint, restore.TargetCluster!, shard, new ClickHouseOperationStatus(true, operation.Status, null), scopedOptions.Value.PollInterval, cancellationToken))
                 {
+                    await scopedQueue.ReleaseStartedAsync(BackupRestoreQueueKind.Restore, shard.Id, cancellationToken);
                     return RestoreShardRunResult.Completed;
                 }
             }
@@ -497,8 +503,6 @@ public sealed class RestoreRunnerService(
                 _logger.Warning(ex, "Restore table {RestoreTableId} {TargetDatabase}.{TargetTable} shard {SourceShardNumber}->{TargetShardNumber} failed with a transient error; retry {RetryAttempt}/{MaxRetries} will be queued after {RetryDelay}.", table.Id, table.TargetDatabase, table.TargetTable, shard.SourceShardNumber, shard.TargetShardNumber, attempt, maxRetries, retryDelay);
                 shard.Status = RestoreTableStatus.Queued;
                 shard.Error = ex.Message;
-                shard.ClickHouseOperationId = null;
-                shard.ClickHouseStatus = null;
                 shard.CompletedAt = null;
                 shard.StartedAt = null;
                 await scopedDb.SaveChangesAsync(CancellationToken.None);

@@ -560,7 +560,7 @@
             Args = @('dashboard', '--next-hours', '1')
             ExpectTextContains = @(
                 'Schedules'
-                'Future schedule runs'
+                'Upcoming backups'
                 'scheduled-orders'
             )
         }
@@ -594,4 +594,3 @@
 
     Cleanup = @()
 }
-
