@@ -1,13 +1,15 @@
 import { NavLink } from "react-router-dom";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Activity, CheckCircle2, Circle, ShieldCheck } from "lucide-react";
 import { useApi } from "../api-context";
 import { DataTable, Empty, Page, Stat, Status } from "../components/ui";
-import { formatCompletionTime, formatDurationSeconds, formatTime } from "../utils/format";
+import { formatCompletionTime, formatTime } from "../utils/format";
 
 export function Dashboard() {
   const { api } = useApi();
-  const dashboard = useQuery({ queryKey: ["dashboard"], queryFn: () => api.dashboard(12) });
+  const [futureWindowHours, setFutureWindowHours] = useState(6);
+  const dashboard = useQuery({ queryKey: ["dashboard", futureWindowHours], queryFn: () => api.dashboard(futureWindowHours) });
   const clusters = useQuery({ queryKey: ["clusters"], queryFn: () => api.clusters() });
   const targets = useQuery({ queryKey: ["targets"], queryFn: () => api.targets() });
   const policies = useQuery({ queryKey: ["policies"], queryFn: () => api.policies() });
@@ -15,13 +17,13 @@ export function Dashboard() {
   const backups = useQuery({ queryKey: ["backups", "summary"], queryFn: () => api.backups({}, { includeTables: false }) });
   const restores = useQuery({ queryKey: ["restores"], queryFn: () => api.restores() });
   const running = dashboard.data?.runningBackups ?? [];
-  const queue = dashboard.data?.queue;
   const schedules = dashboard.data?.schedules ?? [];
   const failures = schedules.filter((schedule) => schedule.lastRunFailureReason);
   const latestBackups = [...(backups.data ?? [])]
     .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
     .slice(0, 8);
-  const onboarding = buildOnboardingSteps({
+  const onboardingIsLoading = [clusters, targets, policies, allSchedules, backups, restores].some((query) => query.isLoading);
+  const onboarding = onboardingIsLoading ? [] : buildOnboardingSteps({
     clusterCount: clusters.data?.filter((x) => !x.isDeleted).length ?? 0,
     targetCount: targets.data?.filter((x) => !x.isDeleted).length ?? 0,
     policyCount: policies.data?.filter((x) => !x.isDeleted && !x.isSystemDefault).length ?? 0,
@@ -32,7 +34,7 @@ export function Dashboard() {
   const missingOnboarding = onboarding.filter((step) => !step.done);
   return (
     <Page title="Dashboard" subtitle="See upcoming schedules, running backups, and recent operational health at a glance." action={<button className="secondary" onClick={() => { dashboard.refetch(); backups.refetch(); }}><Activity size={16} /> Refresh</button>}>
-      {missingOnboarding.length > 0 ? <OnboardingPanel steps={onboarding} /> : <OnboardingComplete />}
+      {onboardingIsLoading ? <OnboardingLoading /> : missingOnboarding.length > 0 ? <OnboardingPanel steps={onboarding} /> : <OnboardingComplete />}
       <div className="stat-grid">
         <Stat label="Running backups" value={running.length} tone={running.length ? "warn" : "ok"} />
         <Stat label="Enabled schedules" value={schedules.filter((x) => x.isEnabled).length} />
@@ -40,15 +42,40 @@ export function Dashboard() {
         <Stat label="Latest backups" value={latestBackups.length} />
       </div>
       <section className="panel">
+        <div className="section-head">
+          <div>
+            <h2>Upcoming backups</h2>
+            <p>Backup runs planned for the next {dashboard.data?.futureWindowHours ?? futureWindowHours} hour(s).</p>
+          </div>
+          <div className="segmented" aria-label="Upcoming backup window">
+            {[6, 12, 24, 48].map((hours) => (
+              <button key={hours} className={futureWindowHours === hours ? "selected" : "ghost"} onClick={() => setFutureWindowHours(hours)}>{hours}h</button>
+            ))}
+          </div>
+        </div>
+        <DataTable headers={["Planned run", "Policy", "Policy id", "Schedule", "Schedule id", "Type"]} isLoading={dashboard.isLoading}>
+          {(dashboard.data?.futureSchedules ?? []).map((planned) => (
+            <tr key={`${planned.scheduleId}-${planned.plannedRunAt}`}>
+              <td>{formatTime(planned.plannedRunAt)}</td>
+              <td><NavLink to={`/policies/${planned.policyId}`}>{planned.policyName ?? planned.policyId}</NavLink></td>
+              <td className="mono">{planned.policyId}</td>
+              <td><NavLink to={`/schedules/${planned.scheduleId}`}>{planned.scheduleName}</NavLink></td>
+              <td className="mono">{planned.scheduleId}</td>
+              <td>{planned.backupType}</td>
+            </tr>
+          ))}
+        </DataTable>
+      </section>
+      <section className="panel">
         <h2>Running backups</h2>
-        <DataTable headers={["Status", "Policy", "Started", "Tables", "Shards", "Failure"]} isLoading={dashboard.isLoading}>
+        <DataTable headers={["Status", "Policy", "Started", "Tables", "Table-shards", "Failure"]} isLoading={dashboard.isLoading}>
           {running.map((backup) => (
             <tr key={backup.backupId}>
               <td><Status value={backup.status} /></td>
               <td>{backup.policyName ?? backup.policyId ?? "manual"}</td>
               <td>{formatTime(backup.startedAt)}</td>
               <td>{backup.tableCount}</td>
-              <td>{backup.succeededShardCount}/{backup.shardCount} ok · {backup.runningShardCount} running</td>
+              <td>{backup.succeededShardCount}/{backup.shardCount} ok · {backup.failedShardCount} failed · {backup.runningShardCount} running</td>
               <td>{backup.failureReason ?? ""}</td>
             </tr>
           ))}
@@ -86,6 +113,19 @@ export function Dashboard() {
   );
 }
 
+function OnboardingLoading() {
+  return (
+    <section className="panel onboarding-panel">
+      <div className="summary-row">
+        <Circle size={20} />
+        <div>
+          <strong>Checking onboarding status</strong>
+          <span>Loading setup progress...</span>
+        </div>
+      </div>
+    </section>
+  );
+}
 interface OnboardingInput {
   clusterCount: number;
   targetCount: number;
@@ -198,5 +238,4 @@ function OnboardingComplete() {
     </section>
   );
 }
-
 

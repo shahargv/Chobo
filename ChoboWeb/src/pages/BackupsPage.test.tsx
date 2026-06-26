@@ -300,7 +300,7 @@ describe("Backups destructive delete flow", () => {
     const tableCallsBeforeRefresh = backupApi.mock.calls.filter(([, options]) => options?.includeTables).length;
     expect(tableCallsBeforeRefresh).toBeGreaterThan(0);
     const completionBadge = host.querySelector(".backup-completion");
-    expect(completionBadge?.textContent).toBe("0% (0/1 shards)");
+    expect(completionBadge?.textContent).toBe("0% (0/1 table-shards)");
     expect(completionBadge?.classList.contains("warn")).toBe(true);
     const refreshButton = Array.from(host.querySelectorAll("button")).find((button) => button.textContent?.includes("Refresh")) as HTMLButtonElement | undefined;
     expect(refreshButton).toBeTruthy();
@@ -359,3 +359,4 @@ function baseBackup(overrides: Partial<BackupDto> = {}): BackupDto {
     tables: overrides.tables ?? []
   };
 }
+

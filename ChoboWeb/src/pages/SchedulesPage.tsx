@@ -66,10 +66,11 @@ export function Schedules() {
   return (
     <Page title="Schedules" subtitle="Create and update automated backup schedules for existing policies." action={<button className="primary" onClick={() => { reset(); setShowForm(true); }}><Save size={16} /> Add schedule</button>}>
       <section className="panel">
-        <DataTable headers={["Name", "Policy", "Type", "Cron", "Timezone", "Enabled", "Actions"]} isLoading={schedules.isLoading}>
+        <DataTable headers={["Name", "Schedule id", "Policy", "Type", "Cron", "Timezone", "Enabled", "Actions"]} isLoading={schedules.isLoading}>
           {(schedules.data ?? []).map((schedule) => (
             <tr key={schedule.id}>
               <td>{schedule.name}</td>
+              <td className="mono">{schedule.id}</td>
               <td>{nameOf(policies.data, schedule.policyId)}</td>
               <td>{schedule.backupType}</td>
               <td className="mono">{schedule.cronExpression}</td>
@@ -135,5 +136,4 @@ function ScheduleEditor({ draft, timezone, onChange }: { draft: ScheduleDraft; t
     </div>
   );
 }
-
 

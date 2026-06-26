@@ -157,7 +157,7 @@ ChoboCli dashboard show --next-hours 12
 ChoboCli metrics show
 ```
 
-The dashboard shows active backup runs, every schedule with last-run status and last successful completion time, and projected schedule runs for the next window. Active sharded backups include table and shard counts, including succeeded, failed, and running shard totals. The default future window is 6 hours.
+The dashboard shows active backup runs, every schedule with last-run status and last successful completion time, and upcoming backup runs for the next window. Use `--next-hours <hours>` to choose that window. Active sharded backups include table and table-shard counts, including succeeded, failed, and running table-shard totals. The default future window is 6 hours.
 
 The same server surface also exposes flat general metrics at `/api/v1/metrics`, available through `ChoboCli metrics show`. Metrics include seconds since the last successful backup completed for each policy, for example `Policies.TimeSecondsSinceLastPolicyBackup.nightly`, plus partial and failed backup counters per policy.
 
@@ -244,5 +244,4 @@ ChoboCli config import --file .\chobo-config.json
 ```
 
 `data` exports all restorable Chobo metadata except audit entries and application logs. `config` is configuration-only and does not preserve backup/restore history.
-
 

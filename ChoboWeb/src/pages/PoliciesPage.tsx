@@ -81,10 +81,11 @@ export function Policies() {
       setShowForm(true);
     }}><Save size={16} /> Add policy</button>}>
       <section className="panel">
-        <DataTable headers={["Name", "Mode", "Source", "Backup Storage", "Rules", "Retention", "Actions"]} isLoading={policies.isLoading}>
+        <DataTable headers={["Name", "Policy id", "Mode", "Source", "Backup Storage", "Rules", "Retention", "Actions"]} isLoading={policies.isLoading}>
           {(policies.data ?? []).map((policy) => (
             <tr key={policy.id}>
               <td>{policy.name}{policy.isSystemDefault && <span className="chip">system</span>}</td>
+              <td className="mono">{policy.id}</td>
               <td>{policy.contentMode === "SchemaOnly" ? "Schema only" : "Schema + data"}</td>
               <td>{nameOf(clusters.data, policy.sourceClusterId)}</td>
               <td>{policy.targetId ? nameOf(targets.data, policy.targetId) : "none"}</td>
@@ -272,3 +273,4 @@ function validatePolicyDraft(draft: UpsertPolicyRequest) {
   if (draft.selector.rules.length === 0) errors.push("Add at least one selector rule.");
   return errors;
 }
+

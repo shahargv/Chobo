@@ -40,7 +40,7 @@ public sealed class DashboardCommands : CliSubject
                 var trigger = backup.TriggerType == BackupTriggerType.Scheduled
                     ? backup.ScheduleName ?? backup.ScheduleId?.ToString() ?? "scheduled"
                     : "manual";
-                builder.AppendLine($"  {backup.BackupId}  {backup.Status,-32}  pinned={backup.IsPinned}  policy={DisplayName(backup.PolicyName, backup.PolicyId)}  trigger={trigger}  started={FormatOptionalTime(backup.StartedAt)}  deleteRequested={FormatOptionalTime(backup.DeletionRequestedAt)}  tables={backup.TableCount}  shards={backup.SucceededShardCount}/{backup.ShardCount} ok failed={backup.FailedShardCount} running={backup.RunningShardCount}{FormatFailure(backup.FailureReason)}");
+                builder.AppendLine($"  {backup.BackupId}  {backup.Status,-32}  pinned={backup.IsPinned}  policy={DisplayName(backup.PolicyName, backup.PolicyId)}  trigger={trigger}  started={FormatOptionalTime(backup.StartedAt)}  deleteRequested={FormatOptionalTime(backup.DeletionRequestedAt)}  tables={backup.TableCount}  table-shards={backup.SucceededShardCount}/{backup.ShardCount} ok failed={backup.FailedShardCount} running={backup.RunningShardCount}{FormatFailure(backup.FailureReason)}");
             }
         }
 
@@ -59,7 +59,7 @@ public sealed class DashboardCommands : CliSubject
         }
 
         builder.AppendLine();
-        builder.AppendLine($"Future schedule runs, next {dashboard.FutureWindowHours} hour(s)");
+        builder.AppendLine($"Upcoming backups, next {dashboard.FutureWindowHours} hour(s)");
         if (dashboard.FutureSchedules.Count == 0)
         {
             builder.AppendLine("  none");
@@ -68,7 +68,7 @@ public sealed class DashboardCommands : CliSubject
         {
             foreach (var planned in dashboard.FutureSchedules)
             {
-                builder.AppendLine($"  {FormatTime(planned.PlannedRunAt)}  {planned.ScheduleName}  policy={DisplayName(planned.PolicyName, planned.PolicyId)}  type={planned.BackupType}");
+                builder.AppendLine($"  {FormatTime(planned.PlannedRunAt)}  schedule={DisplayNameAndId(planned.ScheduleName, planned.ScheduleId)}  policy={DisplayNameAndId(planned.PolicyName, planned.PolicyId)}  type={planned.BackupType}");
             }
         }
 
@@ -77,6 +77,9 @@ public sealed class DashboardCommands : CliSubject
 
     private static string DisplayName(string? name, Guid? id) =>
         !string.IsNullOrWhiteSpace(name) ? name : id?.ToString() ?? "none";
+
+    private static string DisplayNameAndId(string? name, Guid id) =>
+        !string.IsNullOrWhiteSpace(name) ? $"{name} ({id})" : id.ToString();
 
     private static string FormatOptionalTime(DateTimeOffset? value) =>
         value is null ? "never" : FormatTime(value.Value);
@@ -87,3 +90,4 @@ public sealed class DashboardCommands : CliSubject
     private static string FormatFailure(string? failureReason) =>
         string.IsNullOrWhiteSpace(failureReason) ? "" : $"  failure={failureReason}";
 }
+

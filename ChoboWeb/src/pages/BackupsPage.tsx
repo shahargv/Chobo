@@ -54,7 +54,7 @@ export function Backups() {
     onError: (error) => showToast({ kind: "error", text: String(error) })
   });
   return (
-    <Page title="Backups" subtitle="Start manual backups, review backup history, and inspect table or shard results." action={<button className="primary" onClick={() => setShowManual(!showManual)}><Play size={16} /> Manual backup</button>}>
+    <Page title="Backups" subtitle="Start manual backups, review backup history, and inspect table or table-shard results." action={<button className="primary" onClick={() => setShowManual(!showManual)}><Play size={16} /> Manual backup</button>}>
       {showManual && <ManualBackupPanel policies={policies.data ?? []} onQueued={() => { setShowManual(false); backups.refetch(); }} />}
       <section className="panel">
         <div className="section-head backup-history-filter">
@@ -172,8 +172,8 @@ export function BackupDrawer({ backupId, onClose, onOpenBackup }: { backupId: st
           <Detail label="Completion Time" value={formatCompletionTime(current.endedAt ?? current.deletedAt, current.startedAt, current.createdAt)} />
           <Detail label="Initiated by" value={backupInitiator(current, scheduleById)} />
           <Detail label="Backup size" value={formatBytes(detailBackupSizeBytes)} />
-          <Detail label="Shard completion" value={shardCompletion ? <ShardCompletionBadge completion={shardCompletion} /> : "Schema-only"} />
-          {current.backupType === "Incremental" && <Detail label="Related full backup" value={<RelatedFullBackupLinks backupIds={current.relatedFullBackupIds} onOpenBackup={onOpenBackup} />} />}
+          <Detail label="Table-shard completion" value={shardCompletion ? <ShardCompletionBadge completion={shardCompletion} /> : "Schema-only"} />
+          <Detail label="Related full backup" value={current.backupType === "Full" ? "-" : <RelatedFullBackupLinks backupIds={current.relatedFullBackupIds} onOpenBackup={onOpenBackup} />} />
           <Detail label="Failure" value={current.failureReason ?? current.error ?? "none"} />
         </div>
         <section className="detail-section detail-section-tables">
@@ -306,11 +306,11 @@ export function calculateBackupShardCompletion(tables: BackupTableDto[]): Backup
 }
 
 function ShardCompletionBadge({ completion }: { completion: BackupShardCompletion }) {
-  return <span className={`backup-completion ${completion.tone}`}>{completion.percent}% ({completion.succeeded}/{completion.total} shards)</span>;
+  return <span className={`backup-completion ${completion.tone}`}>{completion.percent}% ({completion.succeeded}/{completion.total} table-shards)</span>;
 }
 
 function RelatedFullBackupLinks({ backupIds, onOpenBackup }: { backupIds: string[]; onOpenBackup?: (backupId: string) => void }) {
-  if (backupIds.length === 0) return <>none yet</>;
+  if (backupIds.length === 0) return <>-</>;
   return <span className="related-backup-links">
     {backupIds.map((id, index) => <span key={id}>{index > 0 && <span>, </span>}{onOpenBackup ? <button className="link-button mono" onClick={() => onOpenBackup(id)}>{id}</button> : <Link className="mono" to={`/backups/${id}`}>{id}</Link>}</span>)}
   </span>;
@@ -425,3 +425,4 @@ function toDateTimeLocal(value: Date) {
 function toApiDateTime(value: string) {
   return value ? new Date(value).toISOString() : undefined;
 }
+

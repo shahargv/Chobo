@@ -462,14 +462,15 @@ pre, .token-box {
 
 .toast {
   position: fixed;
-  right: 20px;
-  top: 70px;
+  right: 24px;
+  bottom: 24px;
   z-index: 30;
   padding: 12px 14px;
   border-radius: 8px;
   color: #fff;
   background: var(--accent);
   box-shadow: var(--shadow);
+  max-width: calc(100vw - 48px);
 }
 .toast.error { background: var(--bad); }
 .toast.success { background: var(--ok); }
@@ -959,3 +960,4 @@ pre, .token-box {
   overflow-wrap: anywhere;
   color: var(--bad);
 }
+
