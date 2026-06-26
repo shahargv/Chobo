@@ -296,6 +296,31 @@ public sealed class BackupRestoreExecutionTests
         Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "shard-retry-scheduled" && x.EntityId == shard.Id.ToString()));
     }
     [Fact]
+    public async Task Backup_shard_retry_resumes_submitted_operation_after_transient_poll_failure()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions
+        {
+            MaxDop = 1,
+            PollInterval = TimeSpan.FromMilliseconds(1),
+            TransientShardRetryDelay = TimeSpan.FromMilliseconds(1),
+            TransientShardMaxRetries = 3
+        });
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+        fixture.ClickHouse.FailNextOperationStatusTransientCount = 1;
+
+        var backupId = await fixture.CreateManualBackupAsync();
+        await fixture.RunBackupAsync(backupId);
+
+        fixture.Db.ChangeTracker.Clear();
+        var backup = await fixture.Db.Backups.Include(x => x.Tables).ThenInclude(x => x.Shards).SingleAsync(x => x.Id == backupId);
+        var shard = Assert.Single(Assert.Single(backup.Tables).Shards);
+        Assert.Equal(BackupRunStatus.Succeeded, backup.Status);
+        Assert.Equal(BackupTableStatus.Succeeded, shard.Status);
+        Assert.NotNull(shard.ClickHouseOperationId);
+        Assert.Single(fixture.ClickHouse.BackupStartTables);
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "shard-retry-scheduled" && x.EntityId == shard.Id.ToString()));
+    }
+    [Fact]
     public async Task Backup_shard_does_not_retry_s3_failures()
     {
         await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions
@@ -915,6 +940,55 @@ public sealed class BackupRestoreExecutionTests
         Assert.True(forcedFixture.ClickHouse.MaxConcurrentBackupStarts > 1);
     }
 
+    [Fact]
+    public async Task Backup_queue_does_not_claim_duplicate_destination_concurrently()
+    {
+        await using var fixture = await TestFixture.CreateAsync(clusterMaxDop: 8, options: new ChoboBackupRestoreOptions { MaxDop = 8, PollInterval = TimeSpan.FromMilliseconds(1) });
+        var cluster = await fixture.Db.ClickHouseClusters.SingleAsync(x => x.Id == fixture.SourceClusterId);
+        cluster.ShardMaxDopDefault = 8;
+        cluster.NodeMaxDopDefault = 8;
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "duplicate_destination_a", BackupTableStatus.Queued, null, true),
+            new SeedBackupTable("sales", "duplicate_destination_b", BackupTableStatus.Queued, null, true)
+        ]);
+        var tableIds = backup.Tables.Select(x => x.Id).ToList();
+        var shards = await fixture.Db.BackupTableShards
+            .Where(x => tableIds.Contains(x.BackupTableId))
+            .OrderBy(x => x.Id)
+            .ToListAsync();
+        shards[1].S3Path = shards[0].S3Path;
+        await fixture.Db.SaveChangesAsync();
+
+        using (var scope = fixture.Services.CreateScope())
+        {
+            await scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>().EnsureBackupQueueItemsAsync(backup.Id);
+        }
+
+        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var claims = Enumerable.Range(0, 8)
+            .Select(async _ =>
+            {
+                await start.Task;
+                using var scope = fixture.Services.CreateScope();
+                return await scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>().TryTakeNextBackupWorkAsync(backup.Id);
+            })
+            .ToArray();
+        start.SetResult();
+        var results = await Task.WhenAll(claims);
+
+        var claimedWork = Assert.Single(results, x => x.WorkItem is not null).WorkItem!;
+        Assert.True(results.Where(x => x.WorkItem is null).All(x => x.HasQueuedWork));
+
+        using (var scope = fixture.Services.CreateScope())
+        {
+            var queue = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
+            await queue.MarkCompletedAsync(BackupRestoreQueueKind.Backup, claimedWork.ShardId);
+            var next = await queue.TryTakeNextBackupWorkAsync(backup.Id);
+            var nextWork = next.WorkItem;
+            Assert.NotNull(nextWork);
+            Assert.NotEqual(claimedWork.ShardId, nextWork.ShardId);
+        }
+    }
     [Fact]
     public async Task Node_maxdop_selects_different_replica_when_one_replica_is_busy()
     {
@@ -2454,6 +2528,36 @@ public sealed class BackupRestoreExecutionTests
         Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "shard-retry-scheduled" && x.EntityId == shard.Id.ToString()));
     }
     [Fact]
+    public async Task Restore_shard_retry_resumes_submitted_operation_after_transient_poll_failure()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions
+        {
+            MaxDop = 1,
+            PollInterval = TimeSpan.FromMilliseconds(1),
+            TransientShardRetryDelay = TimeSpan.FromMilliseconds(1),
+            TransientShardMaxRetries = 3
+        });
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Succeeded, "backup-op", true)
+        ]);
+        backup.Status = BackupRunStatus.Succeeded;
+        await fixture.Db.SaveChangesAsync();
+        var restore = await fixture.Services.GetRequiredService<RestoreApplicationService>().InitiateAsync(
+            new InitiateRestoreRequest(backup.Id, fixture.TargetClusterId, null, null, null, null, false, false));
+        fixture.ClickHouse.FailNextOperationStatusTransientCount = 1;
+
+        await fixture.RunRestoreAsync(restore.Id);
+
+        fixture.Db.ChangeTracker.Clear();
+        var completed = await fixture.Db.Restores.Include(x => x.Tables).ThenInclude(x => x.Shards).SingleAsync(x => x.Id == restore.Id);
+        var shard = Assert.Single(Assert.Single(completed.Tables).Shards);
+        Assert.Equal(RestoreRunStatus.Succeeded, completed.Status);
+        Assert.Equal(RestoreTableStatus.Succeeded, shard.Status);
+        Assert.NotNull(shard.ClickHouseOperationId);
+        Assert.Single(fixture.ClickHouse.RestoreStartTables);
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "shard-retry-scheduled" && x.EntityId == shard.Id.ToString()));
+    }
+    [Fact]
     public async Task Restore_with_schema_mismatch_allowed_requires_destructive_confirmation()
     {
         await using var fixture = await TestFixture.CreateAsync();
@@ -3284,6 +3388,7 @@ public sealed class BackupRestoreExecutionTests
         public string NextRestoreStatus { get; set; } = "RESTORED";
         public string? NextRestoreError { get; set; }
         public int FailNextRestoreStartTransientCount { get; set; }
+        public int FailNextOperationStatusTransientCount { get; set; }
         public bool DropStartedBackupOperation { get; set; }
         public bool DropStartedRestoreOperation { get; set; }
         public HashSet<Guid> MissingParentFullShardIds { get; } = [];
@@ -3495,6 +3600,12 @@ public sealed class BackupRestoreExecutionTests
                 await _releaseStatus.Task.WaitAsync(cancellationToken);
             }
 
+            if (FailNextOperationStatusTransientCount > 0)
+            {
+                FailNextOperationStatusTransientCount--;
+                throw new TimeoutException("simulated transient operation status timeout");
+            }
+
             lock (_lock)
             {
                 return KnownOperations.TryGetValue(operationId, out var status)
@@ -3646,6 +3757,7 @@ public sealed class BackupRestoreExecutionTests
                 .AddScoped<IBackupStorageManifestService, BackupStorageManifestService>()
                 .AddScoped<RestoreApplicationService>()
                 .AddScoped<BackupRestoreQueueApplicationService>()
+                .AddSingleton<IBackupRestoreConcurrencyCoordinator, BackupRestoreConcurrencyCoordinator>()
                 .AddScoped<BackupRunnerService>()
                 .AddScoped<RestoreRunnerService>()
                 .AddScoped<BackupCleanupService>()
