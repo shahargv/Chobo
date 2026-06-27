@@ -6475,8 +6475,15 @@
           "hasOverlayValue": {
             "type": "boolean"
           },
+          "isClientOverrideEffective": {
+            "type": "boolean"
+          },
           "isExternallyOverridden": {
             "type": "boolean"
+          },
+          "overrideStatus": {
+            "type": "string",
+            "nullable": true
           },
           "effectiveValue": {
             "type": "string",

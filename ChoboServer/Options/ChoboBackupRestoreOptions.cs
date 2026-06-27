@@ -7,9 +7,9 @@ public sealed class ChoboBackupRestoreOptions
     public int MaxActiveQueueItems { get; set; } = 1000;
     public TimeSpan SchedulerInterval { get; set; } = TimeSpan.FromMinutes(1);
     public TimeSpan SchedulerMissedRunGracePeriod { get; set; } = TimeSpan.FromMinutes(5);
-    public TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(2);
+    public TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(6);
     public int ManifestCheckpointShardInterval { get; set; } = 20;
-    public TimeSpan ManifestWriteTimeout { get; set; } = TimeSpan.FromSeconds(5);
+    public TimeSpan ManifestWriteTimeout { get; set; } = TimeSpan.FromSeconds(90);
     public int TransientShardMaxRetries { get; set; } = 3;
     public TimeSpan TransientShardRetryDelay { get; set; } = TimeSpan.FromMinutes(1);
 }
