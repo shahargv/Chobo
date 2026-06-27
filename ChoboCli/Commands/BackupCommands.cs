@@ -174,8 +174,8 @@ public sealed class BackupsCommands : CliSubject
         }
 
         return backup.RelatedFullBackupIds.Count == 0
-            ? " relatedFullBackup=none"
-            : $" relatedFullBackup{(backup.RelatedFullBackupIds.Count == 1 ? "" : "s")}={string.Join(",", backup.RelatedFullBackupIds)}";
+            ? " relatedFullBackups=none"
+            : $" relatedFullBackups={string.Join(",", backup.RelatedFullBackupIds)}";
     }
     private static long? CalculateBackupSizeBytes(IReadOnlyList<BackupTableDto> tables)
     {

@@ -16,9 +16,9 @@ ChoboCli policies add --name nightly-prod --source-cluster-id <cluster-id> --tar
 
 `--min-backups-to-keep` keeps the newest successful backups for the policy even if they are older than the retention threshold.
 
-`--min-full-backups-to-keep` keeps the newest full backups for the policy so incremental backups retain usable parents.
+`--min-full-backups-to-keep` keeps the newest full backup runs for the policy. Chobo also protects any full table or shard base that a retained incremental still needs, including fallback full work created inside an incremental run.
 
-Full backups with dependent incrementals are not deleted until those incrementals are deleted. Pinned incrementals block non-force deletion of their parent full backup.
+Full backup runs, full table backups, and full shard backups with dependent incrementals are not deleted by retention until those incrementals are deleted. Pinned incrementals block non-force deletion of a parent full backup.
 
 Only `Succeeded` backups are expired by policy retention. Failed and partially succeeded backups are handled separately by failed-backup retention mode.
 

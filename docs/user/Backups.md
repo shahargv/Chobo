@@ -130,7 +130,7 @@ Every six hours:
 ChoboCli schedules add --name six-hour-prod --policy-id <policy-id> --backup-type Full --cron "0 0 */6 * * ?" --timezone UTC
 ```
 
-Use `--backup-type Full` for periodic base backups and `--backup-type Incremental` for cumulative incrementals based on the latest successful full backup for the policy. Schema-only policies do not support incremental schedules; they always run as full schema captures.
+Use `--backup-type Full` for periodic base backups and `--backup-type Incremental` for cumulative incrementals. Incremental backups use the latest usable full base for each selected table shard. Schema-only policies do not support incremental schedules; they always run as full schema captures.
 
 Manage schedules:
 
@@ -402,16 +402,23 @@ ChoboCli backups cancel --id <backup-id>
 ```
 
 Cancellation is best used when the request is clearly wrong, such as the wrong selector or target. If ClickHouse has already started async backup work, inspect the backup details, logs, and S3 prefixes afterward. A canceled or partially completed run may still have storage objects that need normal cleanup or investigation.
+
 ## Incremental Backups
 
-Incremental backups are tied to the latest successful full backup for the policy. Use them when your ClickHouse backup strategy and retention policy are designed around full-plus-incremental chains.
+A full backup stores a complete base for the selected table data. An incremental backup stores changes relative to an existing full base. Chobo tracks that base per table shard, so one incremental run can depend on more than one full backup run.
 
 Operational rules:
 
 - run and verify a full backup before scheduling incrementals;
-- keep enough full backups so incrementals have a usable parent;
-- do not delete or force-delete parent full backups unless you understand which incrementals depend on them;
-- pin important full backups before a risky maintenance window;
+- keep enough full backups so retained incrementals have usable parents;
+- review **Related full backups** on backup details before deleting base backups;
+- do not force-delete parent full backups unless you also intend to delete dependent incrementals;
 - prefer full backups for simple environments where storage and backup duration are acceptable.
 
-Restores still start from a backup run. Chobo records parent relationships so lifecycle cleanup avoids deleting full backups that are still needed by retained incrementals.
+Edge cases are handled explicitly:
+
+- If the first incremental has no full base for a selected table, Chobo takes a full backup for that table inside the incremental run.
+- If a sharded table is missing a full base for one shard, Chobo takes a full backup for that shard and incremental backups for shards that do have a base.
+- Later incrementals can use those fallback full table or shard backups as their base, even though the run that created them was marked `Incremental`.
+
+Restores still start from a backup run. Chobo records parent relationships so retention does not delete full bases that are still needed by retained incrementals. Manual deletion of a parent full backup marks dependent incrementals for deletion as part of the same destructive request.

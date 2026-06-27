@@ -212,14 +212,16 @@ Example output excerpt:
 
 ## Incremental Backup Guidance
 
-Incremental backups depend on the latest successful full backup for the policy. They can reduce backup time and storage use, but they make retention planning more important.
+Incremental backups use existing full bases for the selected table shards. They can reduce backup time and storage use, but they make retention planning more important because one incremental can depend on multiple full backup runs.
 
 Use incrementals when:
 
-- a successful full backup already exists;
+- a successful full backup already exists for the selected data;
 - your restore runbook accounts for full-plus-incremental chains;
-- retention keeps enough full backups for the incrementals you retain;
-- operators know not to force-delete parent full backups during incidents.
+- retention keeps enough full bases for the incrementals you retain;
+- operators know to check **Related full backups** before deleting base backups.
+
+If an incremental finds a selected table or shard with no full base, Chobo backs up that table or shard as full inside the incremental run. Later incrementals can use that fallback full table or shard as their base.
 
 Avoid incrementals for the first rollout, small datasets, or environments where a simple recurring full backup meets the recovery point objective.
 

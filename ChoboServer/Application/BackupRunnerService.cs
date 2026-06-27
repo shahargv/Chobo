@@ -558,8 +558,11 @@ public sealed class BackupRunnerService(
             if (string.IsNullOrWhiteSpace(shard.ClickHouseOperationId) && IsReplicatedMergeTreeEngine(table.Engine))
             {
                 var failedEndpointKeys = failedEndpoints.TryGetValue(shard.Id, out var failed) ? failed.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase) : [];
-                var candidates = (await scopedClickHouse.GetTopologyAsync(backup.SourceCluster!, cancellationToken))
+                var shardReplicas = (await scopedClickHouse.GetTopologyAsync(backup.SourceCluster!, cancellationToken))
                     .Where(x => x.ShardNumber == shard.SourceShardNumber)
+                    .ToList();
+                var availableReplicas = await GetAvailableBackupReplicaCandidatesAsync(scopedClickHouse, backup.SourceCluster!, shardReplicas, cancellationToken);
+                var candidates = availableReplicas
                     .OrderBy(x => failedEndpointKeys.Contains(EndpointKey(x.Endpoint)))
                     .ThenBy(_ => Random.Shared.Next())
                     .ToList();
@@ -837,6 +840,35 @@ public sealed class BackupRunnerService(
         engine.Contains("Replicated", StringComparison.OrdinalIgnoreCase) && engine.Contains("MergeTree", StringComparison.OrdinalIgnoreCase);
 
 
+    private async Task<IReadOnlyList<ClickHouseShardReplicaInfo>> GetAvailableBackupReplicaCandidatesAsync(IClickHouseAdapter adapter, ClickHouseClusterEntity cluster, IReadOnlyList<ClickHouseShardReplicaInfo> shardReplicas, CancellationToken cancellationToken)
+    {
+        if (shardReplicas.Count <= 1)
+        {
+            return shardReplicas;
+        }
+
+        var availableReplicas = new List<ClickHouseShardReplicaInfo>(shardReplicas.Count);
+        foreach (var replica in shardReplicas)
+        {
+            try
+            {
+                await adapter.ExecuteAsync(replica.Endpoint, cluster, "SELECT version()", cancellationToken);
+                availableReplicas.Add(replica);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.Warning(ex, "ClickHouse replica {Host}:{Port} for cluster {ClusterId} shard {ShardNumber} is unavailable during backup candidate selection.", replica.Host, replica.Port, cluster.Id, replica.ShardNumber);
+            }
+        }
+
+        return availableReplicas.Count == 0
+            ? shardReplicas
+            : availableReplicas;
+    }
 
     private async Task<string?> GetParentTablePathAsync(Guid? parentFullBackupTableId, CancellationToken cancellationToken) =>
         parentFullBackupTableId is null

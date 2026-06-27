@@ -173,7 +173,7 @@ export function BackupDrawer({ backupId, onClose, onOpenBackup }: { backupId: st
           <Detail label="Initiated by" value={backupInitiator(current, scheduleById)} />
           <Detail label="Backup size" value={formatBytes(detailBackupSizeBytes)} />
           <Detail label="Table-shard completion" value={shardCompletion ? <ShardCompletionBadge completion={shardCompletion} /> : "Schema-only"} />
-          <Detail label="Related full backup" value={current.backupType === "Full" ? "-" : <RelatedFullBackupLinks backupIds={current.relatedFullBackupIds} onOpenBackup={onOpenBackup} />} />
+          <Detail label="Related full backups" value={current.backupType === "Full" ? "-" : <RelatedFullBackupLinks backupIds={current.relatedFullBackupIds} onOpenBackup={onOpenBackup} />} />
           <Detail label="Failure" value={current.failureReason ?? current.error ?? "none"} />
         </div>
         <section className="detail-section detail-section-tables">
