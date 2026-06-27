@@ -169,12 +169,42 @@ export function ConfirmDialog({ title, message, confirmLabel, cancelLabel = "Can
     </section>
   </div>;
 }
+export function ExpandableErrorText({ text, title = "Failure details", previewLines = 3, previewCharacters = 480 }: { text?: string | null; title?: string; previewLines?: number; previewCharacters?: number }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const normalized = text?.trim();
+  if (!normalized) return null;
+
+  const preview = previewText(normalized, previewLines, previewCharacters);
+  const hasMore = preview !== normalized;
+  return <>
+    <span className="error-preview">{preview}</span>
+    {hasMore && <button type="button" className="link-button error-expand-button" onClick={() => setIsExpanded(true)}>Expand</button>}
+    {isExpanded && <ErrorDetailDialog title={title} error={normalized} onClose={() => setIsExpanded(false)} />}
+  </>;
+}
+
+export function ErrorDetailDialog({ title, error, onClose }: { title: string; error: string; onClose: () => void }) {
+  return <div className="modal-backdrop" role="presentation" onClick={onClose}>
+    <section className="error-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="error-detail-title" onClick={(event) => event.stopPropagation()}>
+      <div className="section-head"><h2 id="error-detail-title">{title}</h2><button className="ghost" onClick={onClose}>Close</button></div>
+      <pre>{error}</pre>
+    </section>
+  </div>;
+}
+
+function previewText(text: string, maxLines: number, maxCharacters: number) {
+  const lines = text.split(/\r?\n/);
+  const linePreview = lines.length > maxLines ? lines.slice(0, maxLines).join("\n") : text;
+  if (linePreview.length > maxCharacters) return `${linePreview.slice(0, maxCharacters).trimEnd()}...`;
+  return linePreview === text ? text : `${linePreview}\n...`;
+}
+
 export function Empty({ text }: { text: string }) {
   return <div className="empty">{text}</div>;
 }
 
-export function Detail({ label, value }: { label: string; value: ReactNode }) {
-  return <div><span>{label}</span><strong>{value}</strong></div>;
+export function Detail({ label, value, className }: { label: string; value: ReactNode; className?: string }) {
+  return <div className={className}><span>{label}</span><strong>{value}</strong></div>;
 }
 
 export function Input({ label, value, onChange, type = "text", placeholder }: { label: string; value: string; onChange: (value: string) => void; type?: string; placeholder?: string }) {

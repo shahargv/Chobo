@@ -4,7 +4,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { ArrowUpToLine, Ban, Info, Play, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import type { BackupDto, BackupPolicyDto, BackupRunStatus, BackupTableDto, BackupTableShardDto, BackupType } from "../api/generated";
 import { useApi } from "../api-context";
-import { ConfirmDialog, DataTable, Detail, Drawer, Empty, Input, Page, Select, Status } from "../components/ui";
+import { ConfirmDialog, DataTable, Detail, Drawer, Empty, ErrorDetailDialog, ExpandableErrorText, Input, Page, Select, Status } from "../components/ui";
 import { ClickHouseAdvancedSettingsEditor, type ClickHouseSettings } from "../components/ClickHouseAdvancedSettingsEditor";
 import { formatBytes, formatCompletionTime, formatTime } from "../utils/format";
 import { isBackupStatusRestorable } from "./restores/restoreUtils";
@@ -151,6 +151,7 @@ export function BackupDrawer({ backupId, onClose, onOpenBackup }: { backupId: st
     onSuccess: () => { showToast({ kind: "success", text: "Backup queue items moved to top." }); queryClient.invalidateQueries({ queryKey: ["queue"] }); },
     onError: (error) => showToast({ kind: "error", text: String(error) })
   });
+  const canShowFooterActions = isActive || (current ? isBackupStatusRestorable(current.status) : false);
   useEffect(() => {
     if (!current) return;
     queryClient.setQueryData<BackupDto[]>(["backups"], (items) => items?.map((item) => item.id === current.id ? current : item));
@@ -175,7 +176,7 @@ export function BackupDrawer({ backupId, onClose, onOpenBackup }: { backupId: st
           <Detail label="Backup size" value={formatBytes(detailBackupSizeBytes)} />
           <Detail label="Table-shard completion" value={shardCompletion ? <ShardCompletionBadge completion={shardCompletion} /> : "Schema-only"} />
           <Detail label="Related full backups" value={current.backupType === "Full" ? "-" : <RelatedFullBackupLinks backupIds={current.relatedFullBackupIds} onOpenBackup={onOpenBackup} />} />
-          <Detail label="Failure" value={current.failureReason ?? current.error ?? "none"} />
+          <Detail className="detail-wide" label="Failure" value={current.failureReason || current.error ? <ExpandableErrorText text={current.failureReason ?? current.error} title={`Backup ${current.id} failure`} /> : "none"} />
         </div>
         <section className="detail-section detail-section-tables">
           <h3>Tables and shards</h3>
@@ -208,7 +209,7 @@ export function BackupDrawer({ backupId, onClose, onOpenBackup }: { backupId: st
             ))}
           </DataTable>
         </section>
-        <div className="drawer-footer">{isActive && <button className="danger" disabled={cancelBackup.isPending} onClick={() => cancelBackup.mutate()}><Ban size={16} /> Cancel</button>}{isBackupStatusRestorable(current.status) && <button className="primary" onClick={() => navigate("/restores/start", { state: { backupId: current.id } })}><RotateCcw size={16} /> Start restore</button>}</div>
+        {canShowFooterActions && <div className="drawer-footer">{isActive && <button className="danger" disabled={cancelBackup.isPending} onClick={() => cancelBackup.mutate()}><Ban size={16} /> Cancel</button>}{isBackupStatusRestorable(current.status) && <button className="primary" onClick={() => navigate("/restores/start", { state: { backupId: current.id } })}><RotateCcw size={16} /> Start restore</button>}</div>}
       </>}
     </Drawer>
   );
@@ -257,15 +258,6 @@ export function BackupTablesTable({ tableRows, isLoading }: { tableRows: BackupT
 
 function ErrorDetailButton({ label, error, onOpen }: { label: string; error: string; onOpen: (detail: { title: string; error: string }) => void }) {
   return <button type="button" className="ghost icon-button" title="Show failure details" aria-label={`Show failure details for ${label}`} onClick={() => onOpen({ title: label, error })}><Info size={16} /></button>;
-}
-
-function ErrorDetailDialog({ title, error, onClose }: { title: string; error: string; onClose: () => void }) {
-  return <div className="modal-backdrop" role="presentation" onClick={onClose}>
-    <section className="error-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="error-detail-title" onClick={(event) => event.stopPropagation()}>
-      <div className="section-head"><h2 id="error-detail-title">{title}</h2><button className="ghost" onClick={onClose}>Close</button></div>
-      <pre>{error}</pre>
-    </section>
-  </div>;
 }
 
 export function calculateTableSizeBytes(table: BackupTableDto) {

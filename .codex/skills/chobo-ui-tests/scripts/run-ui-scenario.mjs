@@ -584,8 +584,33 @@ async function main() {
     await page.getByRole('row', { name: /ui-bad-minio/ }).getByRole('button', { name: /Test/i }).click();
     await page.waitForTimeout(1500);
     await screenshot('failure-bad-storage-feedback', 'Bad MinIO endpoint remains recoverable and should surface useful error feedback.', 'warn');
-  }
 
+    const seeded = await api('POST', 'test-hooks/seed-dashboard-failed-backup', {});
+    const firstFailureLine = 'Chobo.UiTests.IntentionalDashboardFailureException: first line for dashboard failure preview';
+    const expandedOnlyLine = 'InnerException: this extra diagnostic line should only appear after expanding the failure details.';
+    await go('/');
+    await expectText('ui-dashboard-failure-schedule', 30000);
+    const failureRow = page.locator('.failure-summary-row').filter({ hasText: 'ui-dashboard-failure-schedule' }).first();
+    await failureRow.waitFor({ timeout: 30000 });
+    const rowText = await failureRow.textContent();
+    if (rowText.includes(firstFailureLine) || rowText.includes(expandedOnlyLine)) {
+      throw new Error(`Dashboard recent failures row showed raw failure text instead of only timing/status context: ${rowText}`);
+    }
+    await screenshot('failure-dashboard-recent-failure-time-only', 'Dashboard recent failures row shows failure timing and an info button without dumping the exception text.');
+
+    await failureRow.getByRole('button', { name: /Open backup details/i }).click();
+    await expectText(/Backup detail|Run status/i, 30000);
+    await expectText(firstFailureLine, 30000);
+    const previewBodyText = await page.locator('body').textContent();
+    if (previewBodyText.includes(expandedOnlyLine)) {
+      throw new Error('Backup detail failure preview showed text that should only appear after expanding the modal.');
+    }
+    await screenshot('failure-dashboard-info-opens-backup-detail', 'Recent failure info button opens the failed backup detail drawer with a shortened failure preview.');
+
+    await page.locator('.backup-detail-drawer').getByRole('button', { name: /^Expand$/i }).click();
+    await expectText(expandedOnlyLine, 30000);
+    await screenshot('failure-backup-detail-expanded-error', `Backup detail Expand opens the full failure text for seeded failed backup ${seeded.backupId}.`);
+  }
   try {
     for (const step of plans[scenario]) {
       if (step === 'bootstrap') await runBootstrap();
