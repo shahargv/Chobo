@@ -1015,6 +1015,65 @@ public sealed class BackupRestoreExecutionTests
 
         Assert.Equal(2, fixture.ClickHouse.BackupStartEndpoints.Select(x => x.Host).Distinct().Count());
     }
+
+    [Fact]
+    public async Task Backup_replica_selection_uses_available_replica_when_another_replica_is_unavailable()
+    {
+        await using var fixture = await TestFixture.CreateAsync(clusterMaxDop: 1, options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        fixture.ClickHouse.Topology.Clear();
+        fixture.ClickHouse.Topology.AddRange([
+            new ClickHouseShardReplicaInfo(1, "single", 1, "replica-a", 9000, false, 0),
+            new ClickHouseShardReplicaInfo(1, "single", 2, "replica-b", 9000, false, 0)
+        ]);
+        fixture.ClickHouse.UnavailableVersionEndpoints.Add("replica-a:9000:False");
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "available_replica_choice", BackupTableStatus.Queued, null, true)
+        ]);
+        MarkBackupAsReplicated(backup);
+        await fixture.Db.SaveChangesAsync();
+
+        await fixture.RunBackupAsync(backup.Id);
+
+        Assert.Equal("replica-b", Assert.Single(fixture.ClickHouse.BackupStartEndpoints).Host);
+        var probedHosts = fixture.ClickHouse.EndpointExecuteSql
+            .Where(x => string.Equals(x.Sql, "SELECT version()", StringComparison.OrdinalIgnoreCase))
+            .Select(x => x.Endpoint.Host)
+            .Order(StringComparer.Ordinal)
+            .ToList();
+        Assert.Equal(["replica-a", "replica-b"], probedHosts);
+    }
+
+    [Fact]
+    public async Task Backup_replica_selection_falls_back_to_all_replicas_when_none_are_available()
+    {
+        await using var fixture = await TestFixture.CreateAsync(clusterMaxDop: 1, options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        fixture.ClickHouse.Topology.Clear();
+        fixture.ClickHouse.Topology.AddRange([
+            new ClickHouseShardReplicaInfo(1, "single", 1, "replica-a", 9000, false, 0),
+            new ClickHouseShardReplicaInfo(1, "single", 2, "replica-b", 9000, false, 0)
+        ]);
+        fixture.ClickHouse.UnavailableVersionEndpoints.Add("replica-a:9000:False");
+        fixture.ClickHouse.UnavailableVersionEndpoints.Add("replica-b:9000:False");
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "all_unavailable_replica_choice", BackupTableStatus.Queued, null, true)
+        ]);
+        MarkBackupAsReplicated(backup);
+        await fixture.Db.SaveChangesAsync();
+
+        await fixture.RunBackupAsync(backup.Id);
+
+        var selected = Assert.Single(fixture.ClickHouse.BackupStartEndpoints);
+        Assert.Contains(selected.Host, new[] { "replica-a", "replica-b" });
+        fixture.Db.ChangeTracker.Clear();
+        var completed = await fixture.Db.Backups.Include(x => x.Tables).ThenInclude(x => x.Shards).SingleAsync(x => x.Id == backup.Id);
+        Assert.Equal(BackupRunStatus.Succeeded, completed.Status);
+        Assert.Equal(["replica-a", "replica-b"], fixture.ClickHouse.EndpointExecuteSql
+            .Where(x => string.Equals(x.Sql, "SELECT version()", StringComparison.OrdinalIgnoreCase))
+            .Select(x => x.Endpoint.Host)
+            .Order(StringComparer.Ordinal)
+            .ToList());
+    }
+
     [Fact]
     public async Task Backup_random_replica_selection_does_not_always_pick_first_replica()
     {
@@ -3373,6 +3432,7 @@ public sealed class BackupRestoreExecutionTests
         public List<string> KilledQueries { get; } = [];
         public List<ClickHouseNodeEndpoint> ExecuteEndpoints { get; } = [];
         public List<(ClickHouseNodeEndpoint Endpoint, string Sql)> EndpointExecuteSql { get; } = [];
+        public HashSet<string> UnavailableVersionEndpoints { get; } = new(StringComparer.OrdinalIgnoreCase);
         public int MaxConcurrentBackupStarts { get; private set; }
         public int MaxConcurrentRestoreStarts { get; private set; }
         public TimeSpan StartDelay { get; set; }
@@ -3454,6 +3514,11 @@ public sealed class BackupRestoreExecutionTests
             ExecuteSql.Add(sql);
             ExecuteEndpoints.Add(endpoint);
             EndpointExecuteSql.Add((endpoint, sql));
+            if (string.Equals(sql, "SELECT version()", StringComparison.OrdinalIgnoreCase) && UnavailableVersionEndpoints.Contains(EndpointKey(endpoint)))
+            {
+                throw new TimeoutException($"simulated unavailable ClickHouse endpoint {endpoint.Host}:{endpoint.Port}");
+            }
+
             return Task.CompletedTask;
         }
 
