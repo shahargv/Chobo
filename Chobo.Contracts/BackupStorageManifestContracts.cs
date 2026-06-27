@@ -11,6 +11,7 @@ public sealed record BackupStorageManifestV1(
     BackupStorageManifestClusterV1 SourceCluster,
     BackupStorageManifestPolicyV1? Policy,
     BackupStorageManifestScheduleV1? Schedule,
+    IReadOnlyList<string> RequiredStoragePaths,
     IReadOnlyList<BackupStorageManifestSchemaV1> Schemas,
     IReadOnlyList<BackupStorageManifestTableV1> Tables);
 
@@ -174,5 +175,3 @@ public sealed record BackupMetadataRecoveryItem(
     string Message);
 
 public sealed record UpdateClusterCredentialsRequest(string? UserName, string? Password);
-
-

@@ -4,6 +4,7 @@ These guides are for people developing, testing, or releasing Chobo.
 
 - [Local debugging instructions](DebuggingInstructions.md)
 - [System test suite](SystemTestSuite.md)
+- [Backup storage manifests](BackupStorageManifests.md)
 - [Releasing](Releasing.md)
 - [Codex development notes](CodexDevelopment.md)
 

@@ -184,7 +184,7 @@ ChoboCli backups list --cluster-name source --table-name orders
 ChoboCli backups show --id <backup-id>
 ChoboCli backups wait --id <backup-id> --timeout-seconds 300 --poll-seconds 2
 ChoboCli backups recover --target-id <target-id> --scan-root backups
-ChoboCli backups recover --target-id <target-id> --backup-path backups/full/policy-.../db/table/.../<backup-id>
+ChoboCli backups recover --target-id <target-id> --backup-path backups/policy-<policy-id>/_chobo/<backup-id>.json
 ChoboCli schema backups
 ChoboCli schema show --backup-id <backup-id> --database sales --table orders
 ChoboCli schema export --backup-id <backup-id> --database sales
@@ -212,7 +212,7 @@ ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-i
 Advanced settings options are `--clickhouse-backup-setting name=value`, `--clickhouse-backup-settings-json`, `--clickhouse-backup-settings-file`, `--remove-clickhouse-backup-setting`, and the matching `restore` variants. Values must be strings, numbers, or booleans. Chobo rejects settings it manages internally, including `base_backup` and `allow_non_empty_tables`. ClickHouse documents supported backup/restore setting names at <https://clickhouse.com/docs/operations/backup/overview#settings>.
 Backup and restore commands return run records immediately. `wait` is a client-side polling helper. Run JSON includes `startedAt` and `endedAt`; `endedAt` is when the actual run process reached a terminal outcome, including success, partial success, failure, or cancellation, not the last metadata update time.
 
-`backups recover` rebuilds SQLite backup metadata from storage-side manifests after local database loss. Use `--scan-root` to scan a bucket/root for manifests, or `--backup-path` for one known backup/table/shard path. The supplied target provides S3 credentials; recovered ClickHouse clusters still need `clusters update-credentials` because manifests do not store ClickHouse credentials.
+`backups recover` rebuilds SQLite backup metadata from storage-side manifests after local database loss. Use `--scan-root` to scan a bucket/root for manifests, or `--backup-path` for one known manifest path. The supplied target provides S3 credentials; recovered ClickHouse clusters still need `clusters update-credentials` because manifests do not store ClickHouse credentials. If a manifest declares S3 data paths that are already missing, recovery imports the backup as `PartiallySucceeded` so remaining data can still be managed.
 
 Schema+data backups submit ClickHouse `BACKUP TABLE` only for `*MergeTree` engines. Other selected engines are captured as schema metadata only. Schema-only backups do not write S3 objects or manifests.
 

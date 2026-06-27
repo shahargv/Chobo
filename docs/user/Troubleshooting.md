@@ -86,7 +86,7 @@ Check:
 | TLS or certificate error | Endpoint requires HTTPS or uses an untrusted certificate | Verify ClickHouse `--tls`, reverse proxy certificates, and S3 endpoint trust from both ChoboServer and ClickHouse. |
 | Run is stuck running | ClickHouse async operation is still running, cannot be polled, or queue workers are blocked | Inspect `backups show`, `restores show`, logs, and ClickHouse `system.backups` using the recorded operation id. |
 | One shard failed | Source or target shard node is down, unreachable, or has a local ClickHouse error | Inspect shard-level `host`, `port`, `sourceShardNumber`, `targetShardNumber`, and `error`; repair the node before retrying. |
-| Manifest recovery finds fewer backups than expected | Manifests were deleted, path prefix is wrong, or scan root is too narrow | Confirm the S3 prefix and try `backups recover --backup-path` for a known backup path. |
+| Manifest recovery finds fewer backups than expected | Manifests were deleted, path prefix is wrong, or scan root is too narrow | Confirm the S3 prefix and try `backups recover --backup-path` for a known manifest path. |
 | Retention or garbage collection keeps failing | ChoboServer cannot delete S3 objects or credentials are invalid | Run `ChoboCli gc status`, inspect `deletionError`, update S3 credentials, then run `ChoboCli gc run`. |
 | Connection tests fail after moving Chobo | Encryption key changed or credentials were not imported | Restore the original `CHOBO_ENCRYPTION_KEY_BASE64` or re-enter ClickHouse and S3 credentials. |
 | CLI reports version or compatibility errors | CLI and server images do not match | Use the CLI image released with the server image and check `/api/v1/server/version`. |
@@ -127,13 +127,13 @@ ChoboCli backups recover --target-id <new-target-id> --scan-root backups
 ChoboCli clusters update-credentials --id <recovered-cluster-id> --username <clickhouse-user> --password <clickhouse-password>
 ```
 
-For one known backup path:
+For one known manifest path:
 
 ```powershell
-ChoboCli backups recover --target-id <new-target-id> --backup-path backups/full/policy-.../sales/orders/.../<backup-id>
+ChoboCli backups recover --target-id <new-target-id> --backup-path backups/policy-<policy-id>/_chobo/<backup-id>.json
 ```
 
-Storage manifests do not contain ClickHouse passwords or S3 secret keys.
+Storage manifests do not contain ClickHouse passwords or S3 secret keys. If recovery finds that some declared S3 data paths are already missing, it imports that backup as `PartiallySucceeded` so remaining data can still be managed.
 
 ## CLI Version Or Authentication Fails
 
