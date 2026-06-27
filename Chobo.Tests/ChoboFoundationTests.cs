@@ -1247,7 +1247,7 @@ public sealed class ChoboFoundationTests
 
         var service = new DataRetentionBackgroundService(
             factory.Services,
-            Options.Create(new ChoboDataRetentionOptions
+            TestOptionsMonitor.Create(new ChoboDataRetentionOptions
             {
                 LogsBefore = cutoff,
                 AuditsBefore = cutoff
@@ -1275,7 +1275,7 @@ public sealed class ChoboFoundationTests
         var time = new MutableTimeProvider(DateTimeOffset.Parse("2026-05-15T10:11:12.123+00:00"));
         var service = new SqliteSelfBackupBackgroundService(
             factory.Services,
-            Options.Create(new ChoboSqliteSelfBackupOptions
+            TestOptionsMonitor.Create(new ChoboSqliteSelfBackupOptions
             {
                 Enabled = true,
                 Directory = backupDir,
@@ -1313,7 +1313,7 @@ public sealed class ChoboFoundationTests
         await File.WriteAllTextAsync(invalidBackupDirectory, "this blocks directory creation");
         var service = new SqliteSelfBackupBackgroundService(
             factory.Services,
-            Options.Create(new ChoboSqliteSelfBackupOptions
+            TestOptionsMonitor.Create(new ChoboSqliteSelfBackupOptions
             {
                 Enabled = true,
                 Directory = invalidBackupDirectory,
@@ -1362,6 +1362,96 @@ public sealed class ChoboFoundationTests
         Assert.DoesNotContain("\\u002B", rawAuditJson);
     }
 
+
+    [Fact]
+    public async Task Runtime_settings_api_lists_non_hidden_settings_and_persists_overlay_edits()
+    {
+        var dataDir = NewTestDataDirectory();
+        await using var factory = CreateFactory(dataDir);
+        var client = AuthenticatedClient(factory);
+
+        var list = await client.GetFromJsonAsync<RuntimeSettingsListDto>("/api/v1/settings", JsonOptions);
+        Assert.Contains(list!.Items, x => x.Key == "Chobo:BackupRestore:PollInterval" && x.ValueType == RuntimeSettingValueType.TimeSpan && x.ApplyMode == RuntimeSettingApplyMode.Live);
+        Assert.DoesNotContain(list.Items, x => x.Key == "Chobo:EncryptionKeyBase64");
+        Assert.DoesNotContain(list.Items, x => x.Key == "Chobo:Init:AccessToken");
+        Assert.DoesNotContain(list.Items, x => x.Key == "Chobo:Settings:HiddenKeys");
+
+        var response = await client.PutAsJsonAsync("/api/v1/settings/Chobo:BackupRestore:PollInterval", new UpdateRuntimeSettingRequest("00:00:07"), JsonOptions);
+        var text = await response.Content.ReadAsStringAsync();
+        Assert.True(response.IsSuccessStatusCode, text);
+        var result = JsonSerializer.Deserialize<RuntimeSettingUpdateResult>(text, JsonOptions)!;
+        Assert.Equal("00:00:07", result.Setting.EffectiveValue);
+        Assert.True(result.Setting.HasOverlayValue);
+        Assert.False(result.Setting.IsExternallyOverridden);
+
+        var overlay = await File.ReadAllTextAsync(Path.Combine(dataDir, ChoboConfiguration.RuntimeSettingsFileName));
+        Assert.Contains("PollInterval", overlay);
+        Assert.Contains("00:00:07", overlay);
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+        Assert.True(await db.AuditEntries.AnyAsync(x => x.Action == "set" && x.EntityType == "runtime-setting" && x.EntityId == "Chobo:BackupRestore:PollInterval"));
+    }
+
+    [Fact]
+    public async Task Runtime_settings_api_rejects_hidden_invalid_and_environment_overridden_values()
+    {
+        var dataDir = NewTestDataDirectory();
+        await using var factory = CreateFactory(dataDir, extraConfiguration: new Dictionary<string, string?>
+        {
+            ["Chobo:BackupRestore:PollInterval"] = "00:00:09"
+        });
+        var client = AuthenticatedClient(factory);
+
+        var hidden = await client.GetAsync("/api/v1/settings/Chobo:Init:AccessToken");
+        Assert.Equal(HttpStatusCode.NotFound, hidden.StatusCode);
+
+        var invalid = await client.PutAsJsonAsync("/api/v1/settings/Chobo:BackupRestore:PollInterval", new UpdateRuntimeSettingRequest("not-a-timespan"), JsonOptions);
+        Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+
+        var update = await client.PutAsJsonAsync("/api/v1/settings/Chobo:BackupRestore:PollInterval", new UpdateRuntimeSettingRequest("00:00:05"), JsonOptions);
+        var text = await update.Content.ReadAsStringAsync();
+        Assert.True(update.IsSuccessStatusCode, text);
+        var result = JsonSerializer.Deserialize<RuntimeSettingUpdateResult>(text, JsonOptions)!;
+        Assert.Equal("00:00:09", result.Setting.EffectiveValue);
+        Assert.Equal("00:00:05", result.Setting.OverlayValue);
+        Assert.True(result.Setting.IsExternallyOverridden);
+        Assert.True(result.EffectiveValueUnchanged);
+
+        var unset = await client.DeleteAsync("/api/v1/settings/Chobo:BackupRestore:PollInterval");
+        Assert.True(unset.IsSuccessStatusCode, await unset.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task Audit_details_and_log_properties_store_enum_values_as_text()
+    {
+        await using var factory = CreateFactory();
+        _ = AuthenticatedClient(factory);
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var audit = scope.ServiceProvider.GetRequiredService<IAuditService>();
+            await audit.RecordAsync("enum-regression", AuditEntityType.Backup, "backup-id", new
+            {
+                deletionStatus = BackupRunStatus.ManualDeleted,
+                statuses = new[] { BackupRunStatus.FailedBackupDeletedByGarbageCollector }
+            });
+
+            var logger = scope.ServiceProvider.GetRequiredService<Serilog.ILogger>().ForContext<ChoboFoundationTests>();
+            logger.Information("Enum property regression log. deletionStatus={DeletionStatus}", BackupRunStatus.ManualDeleteRequested);
+        }
+
+        using var verifyScope = factory.Services.CreateScope();
+        var db = verifyScope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+        var auditEntry = await db.AuditEntries.SingleAsync(x => x.Action == "enum-regression");
+        var logEntry = await db.ApplicationLogEntries.SingleAsync(x => x.RenderedMessage.Contains("Enum property regression log"));
+
+        Assert.Contains("\"deletionStatus\":\"ManualDeleted\"", auditEntry.Details);
+        Assert.Contains("\"FailedBackupDeletedByGarbageCollector\"", auditEntry.Details);
+        Assert.DoesNotContain("\"deletionStatus\":7", auditEntry.Details);
+        Assert.Contains("\"DeletionStatus\":\"ManualDeleteRequested\"", logEntry.Properties);
+        Assert.DoesNotContain("\"DeletionStatus\":6", logEntry.Properties);
+    }
 
     [Fact]
     public async Task Logs_and_audits_can_be_filtered_by_operation_id_column()
@@ -1656,6 +1746,7 @@ public sealed class ChoboFoundationTests
                     ["Chobo:Init:AdminUser"] = adminUser,
                     ["Chobo:Init:AccessToken"] = accessToken
                 };
+                config.AddJsonFile(Path.Combine(dataDir, ChoboConfiguration.RuntimeSettingsFileName), optional: true, reloadOnChange: true);
                 if (extraConfiguration is not null)
                 {
                     foreach (var entry in extraConfiguration)
@@ -1752,6 +1843,19 @@ public sealed class ChoboFoundationTests
         return Convert.ToInt32(await command.ExecuteScalarAsync());
     }
 
+    private static class TestOptionsMonitor
+    {
+        public static IOptionsMonitor<T> Create<T>(T value) => new TestOptionsMonitorValue<T>(value);
+    }
+
+    private sealed class TestOptionsMonitorValue<T>(T value) : IOptionsMonitor<T>
+    {
+        public T CurrentValue => value;
+        public T Get(string? name) => value;
+        public IDisposable? OnChange(Action<T, string?> listener) => null;
+
+        public static IOptionsMonitor<T> Create(T value) => new TestOptionsMonitorValue<T>(value);
+    }
     private sealed class MutableTimeProvider(DateTimeOffset utcNow) : TimeProvider
     {
         public DateTimeOffset UtcNow { get; set; } = utcNow;

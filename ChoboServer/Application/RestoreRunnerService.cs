@@ -12,7 +12,7 @@ namespace ChoboServer.Application;
 public sealed class RestoreRunnerService(
     IServiceScopeFactory scopeFactory,
     ChoboDbContext db,
-    IOptions<ChoboBackupRestoreOptions> options,
+    IOptionsMonitor<ChoboBackupRestoreOptions> options,
     BackupRestoreQueueApplicationService queue,
     IAuditService audit,
     Serilog.ILogger logger)
@@ -330,7 +330,7 @@ public sealed class RestoreRunnerService(
                         {
                             return;
                         }
-                        await Task.Delay(options.Value.PollInterval, cancellationToken);
+                        await Task.Delay(options.CurrentValue.PollInterval, cancellationToken);
                         continue;
                     }
 
@@ -338,7 +338,7 @@ public sealed class RestoreRunnerService(
                     var result = await RunRestoreShardAsync(restoreId, item.TableId, item.ShardId, item.IsForced, retryCounts, failedEndpoints, cancellationToken);
                     if (result == RestoreShardRunResult.RetryLater)
                     {
-                        await Task.Delay(options.Value.PollInterval, cancellationToken);
+                        await Task.Delay(options.CurrentValue.PollInterval, cancellationToken);
                     }
                 }
             })
@@ -359,7 +359,7 @@ public sealed class RestoreRunnerService(
         var scopedDb = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
         var scopedClickHouse = scope.ServiceProvider.GetRequiredService<IClickHouseAdapter>();
         var scopedAudit = scope.ServiceProvider.GetRequiredService<IAuditService>();
-        var scopedOptions = scope.ServiceProvider.GetRequiredService<IOptions<ChoboBackupRestoreOptions>>();
+        var scopedOptions = scope.ServiceProvider.GetRequiredService<IOptionsMonitor<ChoboBackupRestoreOptions>>();
         var scopedQueue = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
         var scopedTestHooks = scope.ServiceProvider.GetRequiredService<ITestHookCoordinator>();
 
@@ -444,7 +444,7 @@ public sealed class RestoreRunnerService(
                 var status = await scopedClickHouse.GetOperationStatusAsync(endpoint, restore.TargetCluster!, shard.ClickHouseOperationId, cancellationToken);
                 if (status.Exists)
                 {
-                    if (!await PollRestoreShardAsync(scopedDb, restore.Id, scopedClickHouse, endpoint, restore.TargetCluster!, shard, status, scopedOptions.Value.PollInterval, cancellationToken))
+                    if (!await PollRestoreShardAsync(scopedDb, restore.Id, scopedClickHouse, endpoint, restore.TargetCluster!, shard, status, scopedOptions.CurrentValue.PollInterval, cancellationToken))
                     {
                         await scopedQueue.ReleaseStartedAsync(BackupRestoreQueueKind.Restore, shard.Id, cancellationToken);
                         return RestoreShardRunResult.Completed;
@@ -467,7 +467,7 @@ public sealed class RestoreRunnerService(
                 await scopedDb.SaveChangesAsync(cancellationToken);
                 await scopedAudit.RecordAsync("clickhouse-operation-submitted", AuditEntityType.RestoreTableShard, shard.Id.ToString(), new { operation.OperationId, operation.Status, sourceShard = shard.SourceShardNumber, targetShard = shard.TargetShardNumber });
                 await scopedTestHooks.MaybeDelayRestoreBeforePollAsync(cancellationToken);
-                if (!await PollRestoreShardAsync(scopedDb, restore.Id, scopedClickHouse, endpoint, restore.TargetCluster!, shard, new ClickHouseOperationStatus(true, operation.Status, null), scopedOptions.Value.PollInterval, cancellationToken))
+                if (!await PollRestoreShardAsync(scopedDb, restore.Id, scopedClickHouse, endpoint, restore.TargetCluster!, shard, new ClickHouseOperationStatus(true, operation.Status, null), scopedOptions.CurrentValue.PollInterval, cancellationToken))
                 {
                     await scopedQueue.ReleaseStartedAsync(BackupRestoreQueueKind.Restore, shard.Id, cancellationToken);
                     return RestoreShardRunResult.Completed;
@@ -494,11 +494,11 @@ public sealed class RestoreRunnerService(
         }
         catch (Exception ex)
         {
-            var maxRetries = Math.Max(0, scopedOptions.Value.TransientShardMaxRetries);
+            var maxRetries = Math.Max(0, scopedOptions.CurrentValue.TransientShardMaxRetries);
             var attempt = retryCounts.AddOrUpdate(shard.Id, 1, (_, current) => current + 1);
             if (attempt <= maxRetries && IsTransientShardFailure(ex, cancellationToken))
             {
-                var retryDelay = scopedOptions.Value.TransientShardRetryDelay <= TimeSpan.Zero ? TimeSpan.FromMinutes(1) : scopedOptions.Value.TransientShardRetryDelay;
+                var retryDelay = scopedOptions.CurrentValue.TransientShardRetryDelay <= TimeSpan.Zero ? TimeSpan.FromMinutes(1) : scopedOptions.CurrentValue.TransientShardRetryDelay;
                 failedEndpoints.GetOrAdd(shard.Id, _ => new System.Collections.Concurrent.ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase)).TryAdd(EndpointKey(endpoint), 0);
                 _logger.Warning(ex, "Restore table {RestoreTableId} {TargetDatabase}.{TargetTable} shard {SourceShardNumber}->{TargetShardNumber} failed with a transient error; retry {RetryAttempt}/{MaxRetries} will be queued after {RetryDelay}.", table.Id, table.TargetDatabase, table.TargetTable, shard.SourceShardNumber, shard.TargetShardNumber, attempt, maxRetries, retryDelay);
                 shard.Status = RestoreTableStatus.Queued;
@@ -657,7 +657,7 @@ public sealed class RestoreRunnerService(
     private static bool IsReplicatedMergeTreeEngine(string engine) =>
         engine.Contains("Replicated", StringComparison.OrdinalIgnoreCase) && engine.Contains("MergeTree", StringComparison.OrdinalIgnoreCase);
     private int EffectiveMaxDop(ClickHouseClusterEntity cluster) =>
-        Math.Max(1, cluster.BackupRestoreMaxDop > 0 ? cluster.BackupRestoreMaxDop : options.Value.MaxDop <= 0 ? 3 : options.Value.MaxDop);
+        Math.Max(1, cluster.BackupRestoreMaxDop > 0 ? cluster.BackupRestoreMaxDop : options.CurrentValue.MaxDop <= 0 ? 3 : options.CurrentValue.MaxDop);
 
     private async Task<string> GetRestoreFailureReasonAsync(Guid restoreId, CancellationToken cancellationToken)
     {

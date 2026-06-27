@@ -13,7 +13,7 @@ public sealed class BackupRunnerService(
     IServiceScopeFactory scopeFactory,
     ChoboDbContext db,
     IClickHouseAdapter clickHouse,
-    IOptions<ChoboBackupRestoreOptions> options,
+    IOptionsMonitor<ChoboBackupRestoreOptions> options,
     BackupRestoreQueueApplicationService queue,
     BackupPreparationService preparation,
     IBackupStorageManifestService manifests,
@@ -232,9 +232,9 @@ public sealed class BackupRunnerService(
     private async Task TryWriteManifestAsync(Guid backupId, string purpose, string? successAction, string failureAction, string failureMessageTemplate, object? successDetails, object?[] failureMessageArgs, CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        if (options.Value.ManifestWriteTimeout > TimeSpan.Zero)
+        if (options.CurrentValue.ManifestWriteTimeout > TimeSpan.Zero)
         {
-            timeout.CancelAfter(options.Value.ManifestWriteTimeout);
+            timeout.CancelAfter(options.CurrentValue.ManifestWriteTimeout);
         }
 
         try
@@ -289,7 +289,7 @@ public sealed class BackupRunnerService(
                 if (status.Exists)
                 {
                     _logger.Information("Backup table {BackupTableId} resuming ClickHouse operation {OperationId}.", table.Id, table.ClickHouseOperationId);
-                    await PollBackupAsync(clickHouse, backup.SourceCluster!, table, status, options.Value.PollInterval, cancellationToken);
+                    await PollBackupAsync(clickHouse, backup.SourceCluster!, table, status, options.CurrentValue.PollInterval, cancellationToken);
                     await db.SaveChangesAsync(cancellationToken);
                     _logger.Information("Backup table {BackupTableId} {Database}.{Table} completed with ClickHouse status {Status}.", table.Id, table.Database, table.Table, table.ClickHouseStatus);
                     await audit.RecordAsync("table-succeeded", AuditEntityType.BackupTable, table.Id.ToString(), new { table.Database, table.Table, clickHouseOperationId = table.ClickHouseOperationId, table.ClickHouseStatus });
@@ -306,7 +306,7 @@ public sealed class BackupRunnerService(
             await db.SaveChangesAsync(cancellationToken);
             _logger.Information("Backup table {BackupTableId} submitted ClickHouse operation {OperationId} status {Status}.", table.Id, operation.OperationId, operation.Status);
             await audit.RecordAsync("clickhouse-operation-submitted", AuditEntityType.BackupTable, table.Id.ToString(), new { clickHouseOperationId = operation.OperationId, operation.Status });
-            await PollBackupAsync(clickHouse, backup.SourceCluster!, table, new ClickHouseOperationStatus(true, operation.Status, null), options.Value.PollInterval, cancellationToken);
+            await PollBackupAsync(clickHouse, backup.SourceCluster!, table, new ClickHouseOperationStatus(true, operation.Status, null), options.CurrentValue.PollInterval, cancellationToken);
             await db.SaveChangesAsync(cancellationToken);
             _logger.Information("Backup table {BackupTableId} {Database}.{Table} completed with ClickHouse status {Status}.", table.Id, table.Database, table.Table, table.ClickHouseStatus);
             await audit.RecordAsync("table-succeeded", AuditEntityType.BackupTable, table.Id.ToString(), new { table.Database, table.Table, clickHouseOperationId = table.ClickHouseOperationId, table.ClickHouseStatus });
@@ -357,7 +357,7 @@ public sealed class BackupRunnerService(
         if (workItems.Count > 0)
         {
             var completedShardAttempts = 0;
-            var checkpointInterval = options.Value.ManifestCheckpointShardInterval;
+            var checkpointInterval = options.CurrentValue.ManifestCheckpointShardInterval;
             var retryCounts = new ConcurrentDictionary<Guid, int>();
             var failedEndpoints = new ConcurrentDictionary<Guid, ConcurrentDictionary<string, byte>>();
             var forcedWorkCount = await CountForcedBackupWorkAsync(backupId, cancellationToken);
@@ -385,7 +385,7 @@ public sealed class BackupRunnerService(
                             {
                                 return;
                             }
-                            await Task.Delay(options.Value.PollInterval, cancellationToken);
+                            await Task.Delay(options.CurrentValue.PollInterval, cancellationToken);
                             continue;
                         }
 
@@ -393,7 +393,7 @@ public sealed class BackupRunnerService(
                         var result = await RunShardAsync(backupId, item.TableId, item.ShardId, item.IsForced, retryCounts, failedEndpoints, cancellationToken);
                         if (result == BackupShardRunResult.RetryLater)
                         {
-                            await Task.Delay(options.Value.PollInterval, cancellationToken);
+                            await Task.Delay(options.CurrentValue.PollInterval, cancellationToken);
                             continue;
                         }
                         var completed = Interlocked.Increment(ref completedShardAttempts);
@@ -526,7 +526,7 @@ public sealed class BackupRunnerService(
         var scopedDb = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
         var scopedClickHouse = scope.ServiceProvider.GetRequiredService<IClickHouseAdapter>();
         var scopedAudit = scope.ServiceProvider.GetRequiredService<IAuditService>();
-        var scopedOptions = scope.ServiceProvider.GetRequiredService<IOptions<ChoboBackupRestoreOptions>>();
+        var scopedOptions = scope.ServiceProvider.GetRequiredService<IOptionsMonitor<ChoboBackupRestoreOptions>>();
         var scopedQueue = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
         var scopedTestHooks = scope.ServiceProvider.GetRequiredService<ITestHookCoordinator>();
         var scopedStorage = scope.ServiceProvider.GetRequiredService<IBackupStorageOperations>();
@@ -611,7 +611,7 @@ public sealed class BackupRunnerService(
                 var status = await scopedClickHouse.GetOperationStatusAsync(endpoint, backup.SourceCluster!, shard.ClickHouseOperationId, cancellationToken);
                 if (status.Exists)
                 {
-                    var resumedFinalClickHouseStatus = await PollBackupShardAsync(scopedDb, scopedClickHouse, endpoint, backup.SourceCluster!, backup.Id, shard, status, scopedOptions.Value.PollInterval, cancellationToken);
+                    var resumedFinalClickHouseStatus = await PollBackupShardAsync(scopedDb, scopedClickHouse, endpoint, backup.SourceCluster!, backup.Id, shard, status, scopedOptions.CurrentValue.PollInterval, cancellationToken);
                     if (resumedFinalClickHouseStatus is null || await ReloadShardAndStopIfCanceledAsync(scopedDb, backup, table, shard, cancellationToken))
                     {
                         await scopedQueue.ReleaseStartedAsync(BackupRestoreQueueKind.Backup, shard.Id, cancellationToken);
@@ -646,7 +646,7 @@ public sealed class BackupRunnerService(
             await scopedDb.SaveChangesAsync(cancellationToken);
             await scopedAudit.RecordAsync("clickhouse-operation-submitted", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { clickHouseOperationId = operation.OperationId, operation.Status, sourceShard = shard.SourceShardNumber });
             await scopedTestHooks.MaybeDelayBackupBeforePollAsync(cancellationToken);
-            var finalClickHouseStatus = await PollBackupShardAsync(scopedDb, scopedClickHouse, endpoint, backup.SourceCluster!, backup.Id, shard, new ClickHouseOperationStatus(true, operation.Status, null), scopedOptions.Value.PollInterval, cancellationToken);
+            var finalClickHouseStatus = await PollBackupShardAsync(scopedDb, scopedClickHouse, endpoint, backup.SourceCluster!, backup.Id, shard, new ClickHouseOperationStatus(true, operation.Status, null), scopedOptions.CurrentValue.PollInterval, cancellationToken);
             if (finalClickHouseStatus is null || await ReloadShardAndStopIfCanceledAsync(scopedDb, backup, table, shard, cancellationToken))
             {
                 await scopedQueue.ReleaseStartedAsync(BackupRestoreQueueKind.Backup, shard.Id, cancellationToken);
@@ -676,11 +676,11 @@ public sealed class BackupRunnerService(
                 return BackupShardRunResult.Completed;
             }
 
-            var maxRetries = Math.Max(0, scopedOptions.Value.TransientShardMaxRetries);
+            var maxRetries = Math.Max(0, scopedOptions.CurrentValue.TransientShardMaxRetries);
             var attempt = retryCounts.AddOrUpdate(shard.Id, 1, (_, current) => current + 1);
             if (attempt <= maxRetries && IsTransientShardFailure(ex, cancellationToken))
             {
-                var retryDelay = scopedOptions.Value.TransientShardRetryDelay <= TimeSpan.Zero ? TimeSpan.FromMinutes(1) : scopedOptions.Value.TransientShardRetryDelay;
+                var retryDelay = scopedOptions.CurrentValue.TransientShardRetryDelay <= TimeSpan.Zero ? TimeSpan.FromMinutes(1) : scopedOptions.CurrentValue.TransientShardRetryDelay;
                 failedEndpoints.GetOrAdd(shard.Id, _ => new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase)).TryAdd(EndpointKey(endpoint), 0);
                 _logger.Warning(ex, "Backup table {BackupTableId} {Database}.{Table} shard {ShardNumber} failed with a transient error; retry {RetryAttempt}/{MaxRetries} will be queued after {RetryDelay}.", table.Id, table.Database, table.Table, shard.SourceShardNumber, attempt, maxRetries, retryDelay);
                 shard.Status = BackupTableStatus.Queued;
@@ -833,7 +833,7 @@ public sealed class BackupRunnerService(
     }
 
     private int EffectiveMaxDop(ClickHouseClusterEntity cluster) =>
-        Math.Max(1, cluster.BackupRestoreMaxDop > 0 ? cluster.BackupRestoreMaxDop : options.Value.MaxDop <= 0 ? 3 : options.Value.MaxDop);
+        Math.Max(1, cluster.BackupRestoreMaxDop > 0 ? cluster.BackupRestoreMaxDop : options.CurrentValue.MaxDop <= 0 ? 3 : options.CurrentValue.MaxDop);
 
 
     private static bool IsReplicatedMergeTreeEngine(string engine) =>

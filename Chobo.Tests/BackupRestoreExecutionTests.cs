@@ -359,7 +359,7 @@ public sealed class BackupRestoreExecutionTests
         var executor = new BackupExecutorBackgroundService(
             fixture.Services,
             queues,
-            fixture.Services.GetRequiredService<IOptions<ChoboBackupRestoreOptions>>(),
+            fixture.Services.GetRequiredService<IOptionsMonitor<ChoboBackupRestoreOptions>>(),
             Serilog.Core.Logger.None);
 
         var first = await service.ManualAsync(new ManualBackupRequest(fixture.SourceClusterId, fixture.TargetId, PolicySelector.Empty));
@@ -1942,6 +1942,50 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Dashboard_future_schedules_do_not_duplicate_fixed_second_and_minute_occurrences()
+    {
+        var now = new DateTimeOffset(2026, 5, 11, 13, 59, 59, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now));
+        var schedule = await fixture.SeedPolicyAndScheduleAsync();
+        schedule.CronExpression = "0 0 14 * * ?";
+        schedule.CreatedAt = now.AddDays(-1);
+        await fixture.Db.SaveChangesAsync();
+
+        var dashboard = await fixture.Services.GetRequiredService<DashboardApplicationService>().GetDashboardAsync(nextHours: 1);
+
+        var plannedRuns = dashboard.FutureSchedules.Where(x => x.ScheduleId == schedule.Id).Select(x => x.PlannedRunAt).ToList();
+        Assert.Equal([new DateTimeOffset(2026, 5, 11, 14, 0, 0, TimeSpan.Zero)], plannedRuns);
+    }
+
+    [Fact]
+    public async Task Scheduler_uses_exact_fixed_second_and_minute_occurrence_for_due_cron()
+    {
+        var now = new DateTimeOffset(2026, 5, 11, 14, 1, 1, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(
+            options: new ChoboBackupRestoreOptions
+            {
+                MaxDop = 3,
+                PollInterval = TimeSpan.FromMilliseconds(1),
+                SchedulerInterval = TimeSpan.FromMinutes(1),
+                SchedulerMissedRunGracePeriod = TimeSpan.FromMinutes(5)
+            },
+            timeProvider: new FixedTimeProvider(now));
+        var schedule = await fixture.SeedPolicyAndScheduleAsync();
+        schedule.CronExpression = "0 0 14 * * ?";
+        schedule.CreatedAt = now.AddDays(-1);
+        await fixture.Db.SaveChangesAsync();
+
+        var scheduler = fixture.Services.GetRequiredService<BackupSchedulerDispatcherBackgroundService>();
+        await scheduler.DispatchOnceAsync();
+        await scheduler.DispatchOnceAsync();
+
+        Assert.Equal(1, await fixture.Db.Backups.CountAsync(x => x.ScheduleId == schedule.Id));
+        var audit = await fixture.Db.AuditEntries.SingleAsync(x => x.Action == "scheduled-backup-enqueued" && x.EntityId == schedule.Id.ToString());
+        Assert.Contains("2026-05-11T14:00:00", audit.Details);
+        Assert.DoesNotContain("2026-05-11T14:01:01", audit.Details);
+    }
+
+    [Fact]
     public async Task Dashboard_reports_active_runs_schedule_history_future_runs_and_policy_freshness()
     {
         await using var fixture = await TestFixture.CreateAsync();
@@ -2205,6 +2249,37 @@ public sealed class BackupRestoreExecutionTests
         Assert.Equal(BackupRunStatus.Succeeded, (await fixture.Db.Backups.SingleAsync(x => x.Id == protectedFull.Id)).Status);
         Assert.Equal(BackupRunStatus.BackupExpiredDeleted, (await fixture.Db.Backups.SingleAsync(x => x.Id == oldIncremental.Id)).Status);
         Assert.Equal(BackupRunStatus.Succeeded, (await fixture.Db.Backups.SingleAsync(x => x.Id == protectedNewest.Id)).Status);
+    }
+
+    [Fact]
+    public async Task Retention_min_full_backups_counts_only_full_backup_runs()
+    {
+        var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now));
+        var policy = await fixture.SeedPolicyAsync(retentionMinutes: null);
+        policy.FullRetentionMinutes = 1;
+        policy.IncrementalRetentionMinutes = 1;
+        policy.MinBackupsToKeep = 0;
+        policy.MinFullBackupsToKeep = 1;
+        await fixture.Db.SaveChangesAsync();
+
+        var protectedFull = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, now.AddHours(-3), backupType: BackupType.Full, tableName: "orders");
+        var fallbackIncremental = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, now.AddHours(-2), backupType: BackupType.Incremental, tableName: "new_orders");
+        foreach (var table in fallbackIncremental.Tables)
+        {
+            table.EffectiveBackupType = BackupType.Full;
+            foreach (var shard in table.Shards)
+            {
+                shard.EffectiveBackupType = BackupType.Full;
+            }
+        }
+        await fixture.Db.SaveChangesAsync();
+
+        await fixture.Services.GetRequiredService<RetentionManagementBackgroundService>().RunOnceAsync();
+
+        fixture.Db.ChangeTracker.Clear();
+        Assert.Equal(BackupRunStatus.Succeeded, (await fixture.Db.Backups.SingleAsync(x => x.Id == protectedFull.Id)).Status);
+        Assert.Equal(BackupRunStatus.BackupExpiredDeleted, (await fixture.Db.Backups.SingleAsync(x => x.Id == fallbackIncremental.Id)).Status);
     }
 
     [Fact]
@@ -3797,6 +3872,19 @@ public sealed class BackupRestoreExecutionTests
         public Guid TargetClusterId { get; }
         public Guid TargetId { get; }
 
+        private static class TestOptionsMonitor
+        {
+            public static IOptionsMonitor<T> Create<T>(T value) => new TestOptionsMonitorValue<T>(value);
+        }
+
+        private sealed class TestOptionsMonitorValue<T>(T value) : IOptionsMonitor<T>
+        {
+            public T CurrentValue => value;
+            public T Get(string? name) => value;
+            public IDisposable? OnChange(Action<T, string?> listener) => null;
+
+            public static IOptionsMonitor<T> Create(T value) => new TestOptionsMonitorValue<T>(value);
+        }
         private TestFixture(string dataDirectory, IServiceProvider services, ChoboDbContext db, FakeClickHouseAdapter clickHouse, FakeBackupStorageOperations storageDeletion, Guid sourceClusterId, Guid targetClusterId, Guid targetId)
         {
             _dataDirectory = dataDirectory;
@@ -3855,9 +3943,9 @@ public sealed class BackupRestoreExecutionTests
                 .AddScoped<RestoreRunnerService>()
                 .AddScoped<BackupCleanupService>()
                 .AddSingleton<IBackupRestoreQueues, BackupRestoreQueues>()
-                .AddSingleton(Options.Create(options ?? new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1), SchedulerInterval = TimeSpan.FromSeconds(1) }))
-                .AddSingleton(Options.Create(new RetentionManagementOptions { Interval = TimeSpan.FromSeconds(1), MaxDop = 2 }))
-                .AddSingleton(Options.Create(new BackupsGarbageCollectorOptions { Interval = TimeSpan.FromSeconds(1), MaxDop = 2 }))
+                .AddSingleton(TestOptionsMonitor.Create(options ?? new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1), SchedulerInterval = TimeSpan.FromSeconds(1) }))
+                .AddSingleton(TestOptionsMonitor.Create(new RetentionManagementOptions { Interval = TimeSpan.FromSeconds(1), MaxDop = 2 }))
+                .AddSingleton(TestOptionsMonitor.Create(new BackupsGarbageCollectorOptions { Interval = TimeSpan.FromSeconds(1), MaxDop = 2 }))
                 .AddSingleton(timeProvider ?? TimeProvider.System)
                 .AddSingleton<BackupSchedulerDispatcherBackgroundService>()
                 .AddSingleton<RetentionManagementBackgroundService>()

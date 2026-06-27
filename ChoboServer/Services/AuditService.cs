@@ -47,6 +47,7 @@ public enum AuditEntityType
     Restore,
     RestoreTable,
     RestoreTableShard,
+    RuntimeSetting,
     Server,
     SqliteSelfBackup,
     User
@@ -74,6 +75,7 @@ public static class AuditEntityTypes
             AuditEntityType.Restore => "restore",
             AuditEntityType.RestoreTable => "restore-table",
             AuditEntityType.RestoreTableShard => "restore-table-shard",
+            AuditEntityType.RuntimeSetting => "runtime-setting",
             AuditEntityType.Server => "server",
             AuditEntityType.SqliteSelfBackup => "sqlite-self-backup",
             AuditEntityType.User => "user",

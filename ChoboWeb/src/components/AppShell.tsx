@@ -15,6 +15,7 @@ import {
   RotateCcw,
   Server,
   Settings2,
+  SlidersHorizontal,
   Trash2,
   ListOrdered,
   Users
@@ -36,7 +37,8 @@ const navItems = [
   { to: "/audit", label: "Audit", icon: History },
   { to: "/gc", label: "Garbage Collector", icon: Trash2 },
   { to: "/import-export", label: "Import/Export", icon: Download },
-  { to: "/monitoring", label: "Monitoring", icon: Activity }
+  { to: "/monitoring", label: "Monitoring", icon: Activity },
+  { to: "/settings", label: "Settings", icon: SlidersHorizontal }
 ];
 
 export function AppShell({ toast, onLogout, children }: { toast: Toast; onLogout: () => void; children: ReactNode }) {
