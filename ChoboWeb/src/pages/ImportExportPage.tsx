@@ -7,7 +7,8 @@ import { Input, Page, Select } from "../components/ui";
 export function ImportExport() {
   const { api, showToast } = useApi();
   const queryClient = useQueryClient();
-  const [text, setText] = useState("");
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importFileInputKey, setImportFileInputKey] = useState(0);
   const [recoveryOpen, setRecoveryOpen] = useState(false);
   const [recoveryMode, setRecoveryMode] = useState<"scan" | "path">("scan");
   const [recoveryPath, setRecoveryPath] = useState("");
@@ -32,7 +33,8 @@ export function ImportExport() {
 
   const upload = useMutation({
     mutationFn: async (kind: "data" | "config") => {
-      const envelope = JSON.parse(text);
+      if (!importFile) throw new Error("Choose a Chobo JSON export file first.");
+      const envelope = JSON.parse(await importFile.text());
       if (kind === "data") await api.importData(envelope);
       else await api.importConfig(envelope);
       return kind;
@@ -40,7 +42,10 @@ export function ImportExport() {
     onSuccess: (kind) => {
       queryClient.clear();
       showToast({ kind: "success", text: `${kind} imported. Re-enter imported credentials before running backups.` });
-    }
+      setImportFile(null);
+      setImportFileInputKey((key) => key + 1);
+    },
+    onError: (error) => showToast({ kind: "error", text: String(error) })
   });
 
   const recover = useMutation({
@@ -65,9 +70,18 @@ export function ImportExport() {
         {exportingKind && <span className="hint">Preparing {exportingKind} export...</span>}
       </section>
       <section className="panel">
-        <h2>Import JSON</h2>
-        <textarea value={text} onChange={(event) => setText(event.target.value)} placeholder="Paste exported Chobo JSON here" />
-        <div className="actions"><button className="primary" disabled={upload.isPending} onClick={() => upload.mutate("config")}><Upload size={16} /> Import config</button><button className="danger" disabled={upload.isPending} onClick={() => upload.mutate("data")}><Upload size={16} /> Import data</button></div>
+        <h2>Import file</h2>
+        <label className="import-file-field">
+          Chobo JSON export
+          <input
+            key={importFileInputKey}
+            type="file"
+            accept="application/json,.json"
+            onChange={(event) => setImportFile(event.target.files?.[0] ?? null)}
+          />
+          <span className="hint">{importFile ? importFile.name : "Choose a .json file exported from Chobo."}</span>
+        </label>
+        <div className="actions"><button className="primary" disabled={upload.isPending || !importFile} onClick={() => upload.mutate("config")}><Upload size={16} /> Import config</button><button className="danger" disabled={upload.isPending || !importFile} onClick={() => upload.mutate("data")}><Upload size={16} /> Import data</button></div>
       </section>
       {recoveryOpen && <section className="panel form-panel">
         <div className="section-head"><h2>Recover backup metadata</h2><button className="ghost" onClick={() => setRecoveryOpen(false)}>Cancel</button></div>
