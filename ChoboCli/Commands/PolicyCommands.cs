@@ -58,7 +58,9 @@ public sealed class PolicyCommands : CliSubject
             Retention(options),
             options.Optional("--failed-backup-retention-mode") is { } mode
                 ? Enum.Parse<FailedBackupRetentionMode>(mode, ignoreCase: true)
-                : FailedBackupRetentionMode.KeepAndExcludeFromMinBackupsToKeep);
+                : FailedBackupRetentionMode.KeepAndExcludeFromMinBackupsToKeep,
+            CommandHelpers.ClickHouseSettingsFromOptions(options, "backup"),
+            CommandHelpers.ClickHouseSettingsFromOptions(options, "restore"));
     }
 
     private static BackupRetentionDto? Retention(OptionBag options)
@@ -77,7 +79,3 @@ public sealed class PolicyCommands : CliSubject
             options.Optional("--min-full-backups-to-keep") is { } minFullBackupsToKeep ? int.Parse(minFullBackupsToKeep) : 0);
     }
 }
-
-
-
-

@@ -85,6 +85,8 @@ public sealed class Baseline : Migration
                 ShardMaxDopDefault INTEGER NOT NULL DEFAULT 1,
                 ShardMaxDopOverridesJson TEXT NOT NULL DEFAULT '[]',
                 ClickHouseClusterName TEXT NULL,
+                ClickHouseBackupSettingsJson TEXT NOT NULL DEFAULT '{}',
+                ClickHouseRestoreSettingsJson TEXT NOT NULL DEFAULT '{}',
                 IsDeleted INTEGER NOT NULL,
                 CreatedAt INTEGER NOT NULL,
                 UpdatedAt INTEGER NULL,
@@ -132,6 +134,8 @@ public sealed class Baseline : Migration
                 MinBackupsToKeep INTEGER NOT NULL,
                 MinFullBackupsToKeep INTEGER NOT NULL,
                 FailedBackupRetentionMode INTEGER NOT NULL,
+                ClickHouseBackupSettingsJson TEXT NOT NULL DEFAULT '{}',
+                ClickHouseRestoreSettingsJson TEXT NOT NULL DEFAULT '{}',
                 IsSystemDefault INTEGER NOT NULL DEFAULT 0,
                 IsDeleted INTEGER NOT NULL,
                 CreatedAt INTEGER NOT NULL,
@@ -181,6 +185,7 @@ public sealed class Baseline : Migration
                 PolicyId TEXT NULL,
                 ScheduleId TEXT NULL,
                 ManualRequestJson TEXT NULL,
+                ClickHouseBackupSettingsJson TEXT NOT NULL DEFAULT '{}',
                 RequestedByUserId TEXT NULL,
                 RequestedByName TEXT NOT NULL,
                 CreatedAt INTEGER NOT NULL,
@@ -286,6 +291,7 @@ public sealed class Baseline : Migration
                 SourceShard INTEGER NULL,
                 TargetShard INTEGER NULL,
                 RequestJson TEXT NOT NULL,
+                ClickHouseRestoreSettingsJson TEXT NOT NULL DEFAULT '{}',
                 RequestedByUserId TEXT NULL,
                 RequestedByName TEXT NOT NULL,
                 CreatedAt INTEGER NOT NULL,
@@ -440,7 +446,3 @@ public sealed class Baseline : Migration
             """);
     }
 }
-
-
-
-

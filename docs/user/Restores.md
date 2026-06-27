@@ -110,6 +110,21 @@ ChoboCli restores show --id <restore-id>
 ChoboCli restores list
 ```
 
+## Advanced ClickHouse Restore Settings
+
+Restore settings are evaluated when the restore is started, using the current target cluster and current policy defaults. They are not stored in backup metadata.
+
+Chobo merges settings in this order: target cluster restore defaults, the backup policy's default restore settings if the backup has a policy, then the manual restore values. In the GUI, the restore review step shows the inherited settings and lets you edit or remove them before launch.
+
+CLI examples:
+
+```powershell
+ChoboCli clusters update --id <target-cluster-id> --clickhouse-restore-setting restore_threads=4
+ChoboCli policies update --id <policy-id> --clickhouse-restore-setting max_backup_bandwidth=104857600
+ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-id> --clickhouse-restore-setting restore_threads=2 --remove-clickhouse-restore-setting max_backup_bandwidth
+```
+
+Use ClickHouse `RESTORE ... SETTINGS` names and scalar JSON values only. See the ClickHouse backup/restore settings reference: <https://clickhouse.com/docs/operations/backup/overview#settings>. Chobo-owned settings, including `allow_non_empty_tables`, cannot be overridden.
 In the GUI, restore history shows the current status. A successful run appears as a normal completed operation, not an error state.
 
 ![Restore history showing a succeeded restore](assets/restores/restore-succeeded-list.png)

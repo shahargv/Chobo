@@ -5,6 +5,7 @@ import { ArrowLeft, ArrowRight, RotateCcw } from "lucide-react";
 import type { InitiateRestoreRequest } from "../../api/generated";
 import { useApi } from "../../api-context";
 import { ConfirmDialog, Page } from "../../components/ui";
+import { ClickHouseAdvancedSettingsEditor, type ClickHouseSettings } from "../../components/ClickHouseAdvancedSettingsEditor";
 import type { RestoreMappingDraft, RestoreStep } from "./restoreTypes";
 import { BackupChoiceStep, DestinationStep, ImpactSummary, RestoreStepper, ReviewStep, ScopeStep } from "./RestoreWizardSteps";
 import { getMissingPreserveTargetShards, getRequestedBackupId, getSourceShardOptions, getTargetShardOptions, isBackupRestorable, restoreTargetTableName, validateRestoreRequest, validateStep } from "./restoreUtils";
@@ -18,13 +19,21 @@ export function RestoreWizard() {
   const clusters = useQuery({ queryKey: ["clusters"], queryFn: () => api.clusters() });
   const policies = useQuery({ queryKey: ["policies"], queryFn: () => api.policies() });
   const [step, setStep] = useState<RestoreStep>(0);
-  const [request, setRequest] = useState<InitiateRestoreRequest>({ backupId: "", targetClusterId: "", append: false, allowSchemaMismatch: false, layout: "Preserve", schemaOnly: false, confirmDestructive: false });
+  const [request, setRequest] = useState<InitiateRestoreRequest>({ backupId: "", targetClusterId: "", append: false, allowSchemaMismatch: false, layout: "Preserve", schemaOnly: false, confirmDestructive: false, clickHouseRestoreSettings: {} });
   const [mappings, setMappings] = useState<RestoreMappingDraft[]>([]);
   const [selectedSourceShards, setSelectedSourceShards] = useState<number[]>([]);
   const [selectedTargetShards, setSelectedTargetShards] = useState<number[]>([]);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [clickHouseSettings, setClickHouseSettings] = useState<ClickHouseSettings>({});
+  const [settingsValid, setSettingsValid] = useState(true);
   const requestedBackupId = getRequestedBackupId(location.state);
   const isRedistribute = (request.layout ?? "Preserve") === "Redistribute";
+  const settingsPreview = useQuery({
+    queryKey: ["restore-settings-preview", request.backupId, request.targetClusterId],
+    queryFn: () => api.restoreSettingsPreview({ backupId: request.backupId, targetClusterId: request.targetClusterId }),
+    enabled: Boolean(request.backupId && request.targetClusterId),
+    retry: false
+  });
   const targetTopology = useQuery({
     queryKey: ["cluster-topology", request.targetClusterId],
     queryFn: () => api.clusterTopology(request.targetClusterId),
@@ -46,12 +55,15 @@ export function RestoreWizard() {
   const selectedMappings = mappings.filter((mapping) => mapping.selected);
   const restoreErrors = validateRestoreRequest(request, mappings, selectedSourceShards, sourceShardOptions.length, selectedTargetShards, targetShardOptions.length, preserveLayoutError);
   const stepErrors = validateStep(step, request, mappings, selectedSourceShards, sourceShardOptions.length, selectedTargetShards, targetShardOptions.length, preserveLayoutError);
+  const settingsPreviewBlocked = step === 3 && (settingsPreview.isLoading || settingsPreview.isError);
 
   useEffect(() => {
     if (!requestedBackupId || request.backupId || !restorableBackups.some((backup) => backup.id === requestedBackupId)) return;
     setRequest((current) => ({ ...current, backupId: requestedBackupId }));
     setStep(1);
   }, [request.backupId, requestedBackupId, restorableBackups]);
+
+  useEffect(() => { setClickHouseSettings((settingsPreview.data?.settings ?? {}) as ClickHouseSettings); }, [settingsPreview.data, request.backupId, request.targetClusterId]);
 
   useEffect(() => {
     if (!selectedBackup) {
@@ -103,6 +115,7 @@ export function RestoreWizard() {
     targetShard: null,
     sourceShards: selectedSourceShards.length === 0 || selectedSourceShards.length === sourceShardOptions.length ? null : selectedSourceShards,
     targetShards: isRedistribute && targetShardOptions.length > 0 && selectedTargetShards.length > 0 && selectedTargetShards.length < targetShardOptions.length ? selectedTargetShards : null,
+    clickHouseRestoreSettings: clickHouseSettings,
     tables: selectedMappings.map(({ selected: _, ...mapping }) => ({
       ...mapping,
       targetDatabase: mapping.targetDatabase || null,
@@ -124,6 +137,7 @@ export function RestoreWizard() {
     onError: (error) => showToast({ kind: "error", text: String(error) })
   });
 
+  const canQueueRestore = restoreErrors.length === 0 && settingsValid && !settingsPreviewBlocked && !mutation.isPending;
   const queueRestore = () => setShowConfirm(true);
   const confirmRestore = () => {
     setShowConfirm(false);
@@ -139,13 +153,17 @@ export function RestoreWizard() {
             {step === 0 && <BackupChoiceStep isLoading={backups.isLoading || policies.isLoading} backups={restorableBackups} selectedBackupId={request.backupId} onSelect={(backupId) => setRequest({ ...request, backupId })} clusterName={(clusterId) => clusterById.get(clusterId)?.name ?? clusterId} policyName={(policyId) => policyId ? policyById.get(policyId)?.name ?? policyId : "Manual"} />}
             {step === 1 && <DestinationStep request={request} onChange={setRequest} clusters={clusters.data ?? []} targetShardOptions={targetShardOptions} selectedTargetShards={selectedTargetShards} onTargetShardsChange={setSelectedTargetShards} targetShardsLoading={targetTopology.isFetching} preserveLayoutDisabled={preserveLayoutDisabled} preserveLayoutReason={preserveLayoutReason} />}
             {step === 2 && <ScopeStep backup={selectedBackup} mappings={mappings} onMappingsChange={setMappings} sourceShardOptions={sourceShardOptions} selectedSourceShards={selectedSourceShards} onSourceShardsChange={setSelectedSourceShards} />}
-            {step === 3 && <ReviewStep backup={selectedBackup} targetClusterName={clusterById.get(request.targetClusterId)?.name ?? request.targetClusterId} request={request} mappings={selectedMappings} sourceShardOptions={sourceShardOptions} selectedSourceShards={selectedSourceShards} targetShardOptions={targetShardOptions} selectedTargetShards={selectedTargetShards} errors={restoreErrors} />}
+            {step === 3 && <>
+              <ReviewStep backup={selectedBackup} targetClusterName={clusterById.get(request.targetClusterId)?.name ?? request.targetClusterId} request={request} mappings={selectedMappings} sourceShardOptions={sourceShardOptions} selectedSourceShards={selectedSourceShards} targetShardOptions={targetShardOptions} selectedTargetShards={selectedTargetShards} errors={restoreErrors} />
+              <ClickHouseAdvancedSettingsEditor title="ClickHouse restore settings for this run" value={clickHouseSettings} sources={(settingsPreview.data?.sources ?? []) as any} onChange={setClickHouseSettings} onValidityChange={setSettingsValid} />
+              {settingsPreview.isError && <span className="field-error">{String(settingsPreview.error)}</span>}
+            </>}
           </div>
           <div className="restore-wizard-actions">
             <button className="ghost" disabled={step === 0} onClick={() => setStep((current) => Math.max(0, current - 1) as RestoreStep)}><ArrowLeft size={16} /> Back</button>
             {step < 3
               ? <button className="primary" disabled={stepErrors.length > 0} onClick={() => setStep((current) => Math.min(3, current + 1) as RestoreStep)}>Continue <ArrowRight size={16} /></button>
-              : <button className="primary" disabled={restoreErrors.length > 0 || mutation.isPending} onClick={queueRestore}><RotateCcw size={16} /> Queue restore</button>}
+              : <button className="primary" disabled={!canQueueRestore} onClick={queueRestore}><RotateCcw size={16} /> Queue restore</button>}
           </div>
         </div>
         <ImpactSummary backup={selectedBackup} targetClusterName={clusterById.get(request.targetClusterId)?.name ?? "Not selected"} request={request} mappings={selectedMappings} sourceShardOptions={sourceShardOptions} selectedSourceShards={selectedSourceShards} targetShardOptions={targetShardOptions} selectedTargetShards={selectedTargetShards} errors={restoreErrors} />
@@ -154,5 +172,3 @@ export function RestoreWizard() {
     </Page>
   );
 }
-
-

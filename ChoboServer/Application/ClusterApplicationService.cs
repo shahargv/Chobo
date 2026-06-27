@@ -62,6 +62,8 @@ public sealed class ClusterApplicationService(
             ShardMaxDopDefault = NormalizeRequiredMaxDop(request.ShardMaxDopDefault),
             ShardMaxDopOverridesJson = SerializeShardOverrides(request.ShardMaxDopOverrides),
             ClickHouseClusterName = NormalizeClusterName(request.ClickHouseClusterName),
+            ClickHouseBackupSettingsJson = ClickHouseAdvancedSettings.Serialize(request.ClickHouseBackupSettings, ClickHouseAdvancedSettingsKind.Backup),
+            ClickHouseRestoreSettingsJson = ClickHouseAdvancedSettings.Serialize(request.ClickHouseRestoreSettings, ClickHouseAdvancedSettingsKind.Restore),
             EncryptedUserName = userName?.Ciphertext,
             EncryptedUserNameKeyId = userName?.KeyId,
             EncryptedPassword = password?.Ciphertext,
@@ -96,6 +98,14 @@ public sealed class ClusterApplicationService(
         cluster.ShardMaxDopDefault = NormalizeRequiredMaxDop(request.ShardMaxDopDefault);
         cluster.ShardMaxDopOverridesJson = SerializeShardOverrides(request.ShardMaxDopOverrides);
         cluster.ClickHouseClusterName = NormalizeClusterName(request.ClickHouseClusterName);
+        if (request.ClickHouseBackupSettings is not null)
+        {
+            cluster.ClickHouseBackupSettingsJson = ClickHouseAdvancedSettings.Serialize(request.ClickHouseBackupSettings, ClickHouseAdvancedSettingsKind.Backup);
+        }
+        if (request.ClickHouseRestoreSettings is not null)
+        {
+            cluster.ClickHouseRestoreSettingsJson = ClickHouseAdvancedSettings.Serialize(request.ClickHouseRestoreSettings, ClickHouseAdvancedSettingsKind.Restore);
+        }
         cluster.UpdatedAt = DateTimeOffset.UtcNow;
         if (request.UserName is not null)
         {
@@ -230,6 +240,8 @@ public sealed class ClusterApplicationService(
         {
             throw new ArgumentException("Shard MaxDop overrides require positive shard number and MaxDop.");
         }
+        ClickHouseAdvancedSettings.Normalize(request.ClickHouseBackupSettings, ClickHouseAdvancedSettingsKind.Backup);
+        ClickHouseAdvancedSettings.Normalize(request.ClickHouseRestoreSettings, ClickHouseAdvancedSettingsKind.Restore);
     }
 
     private static ClickHouseAccessNodeEntity ToEntity(UpsertAccessNodeRequest request) =>
@@ -247,6 +259,8 @@ public sealed class ClusterApplicationService(
             x.ShardMaxDopDefault,
             DeserializeShardOverrides(x.ShardMaxDopOverridesJson),
             x.ClickHouseClusterName,
+            ClickHouseAdvancedSettings.Deserialize(x.ClickHouseBackupSettingsJson, ClickHouseAdvancedSettingsKind.Backup),
+            ClickHouseAdvancedSettings.Deserialize(x.ClickHouseRestoreSettingsJson, ClickHouseAdvancedSettingsKind.Restore),
             x.IsDeleted,
             x.CreatedAt,
             x.UpdatedAt);
@@ -269,6 +283,3 @@ public sealed class ClusterApplicationService(
     private static string? NormalizeClusterName(string? clusterName) =>
         string.IsNullOrWhiteSpace(clusterName) ? null : clusterName.Trim();
 }
-
-
-

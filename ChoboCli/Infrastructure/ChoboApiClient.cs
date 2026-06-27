@@ -92,6 +92,20 @@ public sealed class ChoboApiClient : IDisposable
     public Task<object?> PostAsync(string relativePath, object body) =>
         ReadResponseAsync(_client.PostAsJsonAsync(Api(relativePath), body, JsonOutputWriter.JsonOptions));
 
+    public async Task<T?> PostAsync<T>(string relativePath, object body)
+    {
+        using var response = await _client.PostAsJsonAsync(Api(relativePath), body, JsonOutputWriter.JsonOptions);
+        var text = await response.Content.ReadAsStringAsync();
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException(string.IsNullOrWhiteSpace(text) ? response.ReasonPhrase : text);
+        }
+
+        return string.IsNullOrWhiteSpace(text)
+            ? default
+            : JsonSerializer.Deserialize<T>(text, JsonOutputWriter.JsonOptions);
+    }
+
     public Task<object?> PutAsync(string relativePath, object body) =>
         ReadResponseAsync(_client.PutAsJsonAsync(Api(relativePath), body, JsonOutputWriter.JsonOptions));
 
@@ -117,4 +131,3 @@ public sealed class ChoboApiClient : IDisposable
 
     public void Dispose() => _client.Dispose();
 }
-

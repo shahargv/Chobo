@@ -17,6 +17,12 @@ public sealed class BackupsController(
         catch (ArgumentException ex) { return BadRequest(new ErrorResponse(ex.Message)); }
     }
 
+    [HttpPost("backups/settings-preview")]
+    public async Task<ActionResult<ClickHouseSettingsPreviewDto>> SettingsPreview(BackupSettingsPreviewRequest request, CancellationToken cancellationToken)
+    {
+        try { return await backups.PreviewSettingsAsync(request, cancellationToken); }
+        catch (ArgumentException ex) { return BadRequest(new ErrorResponse(ex.Message)); }
+    }
     [HttpGet("backups")]
     public Task<IReadOnlyList<BackupDto>> List(
         [FromQuery] Guid? policyId,

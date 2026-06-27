@@ -3523,11 +3523,13 @@ public sealed class BackupRestoreExecutionTests
         public List<int> BackupStartShardNumbers { get; } = [];
         public List<ClickHouseNodeEndpoint> BackupStartEndpoints { get; } = [];
         public List<string?> BackupBasePaths { get; } = [];
+        public List<IReadOnlyDictionary<string, JsonElement>> BackupSettings { get; } = [];
         public List<string> RestoreStartTables { get; } = [];
         public List<int> RestoreStartShardNumbers { get; } = [];
         public List<ClickHouseNodeEndpoint> RestoreStartEndpoints { get; } = [];
         public List<string> RestoreTargetTables { get; } = [];
         public List<bool> RestoreAllowNonEmptyTables { get; } = [];
+        public List<IReadOnlyDictionary<string, JsonElement>> RestoreSettings { get; } = [];
         public List<string> ExecuteSql { get; } = [];
         public List<ClickHouseNodeEndpoint> GetTablesEndpoints { get; } = [];
         public int GetTablesCallCount { get; private set; }
@@ -3636,13 +3638,13 @@ public sealed class BackupRestoreExecutionTests
             return Topology.ToList();
         }
 
-        public async Task<ClickHouseOperationResult> StartBackupAsync(ClickHouseClusterEntity cluster, BackupTargetEntity target, BackupTableEntity table, string? baseBackupPath, CancellationToken cancellationToken)
+        public async Task<ClickHouseOperationResult> StartBackupAsync(ClickHouseClusterEntity cluster, BackupTargetEntity target, BackupTableEntity table, string? baseBackupPath, IReadOnlyDictionary<string, JsonElement> settings, CancellationToken cancellationToken)
         {
             var shard = new BackupTableShardEntity { SourceShardNumber = 1, S3Path = table.S3Path };
-            return await StartBackupShardAsync(new ClickHouseNodeEndpoint("source", 9000, false), cluster, target, table, shard, baseBackupPath, cancellationToken);
+            return await StartBackupShardAsync(new ClickHouseNodeEndpoint("source", 9000, false), cluster, target, table, shard, baseBackupPath, settings, cancellationToken);
         }
 
-        public async Task<ClickHouseOperationResult> StartBackupShardAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, BackupTargetEntity target, BackupTableEntity table, BackupTableShardEntity shard, string? baseBackupPath, CancellationToken cancellationToken)
+        public async Task<ClickHouseOperationResult> StartBackupShardAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, BackupTargetEntity target, BackupTableEntity table, BackupTableShardEntity shard, string? baseBackupPath, IReadOnlyDictionary<string, JsonElement> settings, CancellationToken cancellationToken)
         {
             lock (_lock)
             {
@@ -3656,6 +3658,7 @@ public sealed class BackupRestoreExecutionTests
                 BackupStartShardNumbers.Add(shard.SourceShardNumber);
                 BackupStartEndpoints.Add(endpoint);
                 BackupBasePaths.Add(baseBackupPath);
+                BackupSettings.Add(settings);
             }
 
             if (RequiredConcurrentBackupStartsBeforeRelease > 0)
@@ -3693,14 +3696,14 @@ public sealed class BackupRestoreExecutionTests
             return new ClickHouseOperationResult(operationId, "CREATING_BACKUP");
         }
 
-        public Task<ClickHouseOperationResult> StartRestoreAsync(ClickHouseClusterEntity cluster, BackupTargetEntity target, RestoreTableEntity table, BackupTableEntity backupTable, CancellationToken cancellationToken)
+        public Task<ClickHouseOperationResult> StartRestoreAsync(ClickHouseClusterEntity cluster, BackupTargetEntity target, RestoreTableEntity table, BackupTableEntity backupTable, IReadOnlyDictionary<string, JsonElement> settings, CancellationToken cancellationToken)
         {
             var shard = new RestoreTableShardEntity { SourceShardNumber = 1, RestoreDatabase = table.TargetDatabase, RestoreTableName = table.TargetTable };
             var backupShard = new BackupTableShardEntity { SourceShardNumber = 1, S3Path = backupTable.S3Path };
-            return StartRestoreShardAsync(new ClickHouseNodeEndpoint("restore", 9000, false), cluster, target, shard, backupTable, backupShard, table.Append, cancellationToken);
+            return StartRestoreShardAsync(new ClickHouseNodeEndpoint("restore", 9000, false), cluster, target, shard, backupTable, backupShard, table.Append, settings, cancellationToken);
         }
 
-        public async Task<ClickHouseOperationResult> StartRestoreShardAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, BackupTargetEntity target, RestoreTableShardEntity table, BackupTableEntity backupTable, BackupTableShardEntity backupShard, bool allowNonEmptyTables, CancellationToken cancellationToken)
+        public async Task<ClickHouseOperationResult> StartRestoreShardAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, BackupTargetEntity target, RestoreTableShardEntity table, BackupTableEntity backupTable, BackupTableShardEntity backupShard, bool allowNonEmptyTables, IReadOnlyDictionary<string, JsonElement> settings, CancellationToken cancellationToken)
         {
             lock (_lock)
             {
@@ -3715,6 +3718,7 @@ public sealed class BackupRestoreExecutionTests
                 RestoreStartEndpoints.Add(endpoint);
                 RestoreTargetTables.Add(table.RestoreTableName);
                 RestoreAllowNonEmptyTables.Add(allowNonEmptyTables);
+                RestoreSettings.Add(settings);
             }
 
             if (RequiredConcurrentRestoreStartsBeforeRelease > 0)
@@ -4267,6 +4271,7 @@ public sealed class BackupRestoreExecutionTests
                 backup.DeletionAttemptCount,
                 backup.Tables.Count,
                 backup.Tables.Any(table => table.BackupSizeBytes.HasValue) ? backup.Tables.Sum(table => table.BackupSizeBytes ?? 0) : null,
+                ClickHouseAdvancedSettings.Deserialize(backup.ClickHouseBackupSettingsJson, ClickHouseAdvancedSettingsKind.Backup),
                 backup.Tables.Select(table => table.ParentFullBackupId)
                     .Concat(backup.Tables.SelectMany(table => table.Shards).Select(shard => shard.ParentFullBackupId))
                     .Where(id => id.HasValue)
@@ -4333,6 +4338,7 @@ public sealed class BackupRestoreExecutionTests
                 restore.CompletedAt,
                 restore.Error,
                 restore.FailureReason,
+                ClickHouseAdvancedSettings.Deserialize(restore.ClickHouseRestoreSettingsJson, ClickHouseAdvancedSettingsKind.Restore),
                 restore.Tables.Select(table => new RestoreTableDto(
                     table.Id,
                     table.RestoreId,

@@ -19,6 +19,8 @@ const nullableProperties = new Set([
   "clickHouseClusterName",
   "clickHouseOperationId",
   "clickHouseStatus",
+  "clickHouseBackupSettings",
+  "clickHouseRestoreSettings",
   "currentRunReason",
   "deactivatedAt",
   "deletedAt",
@@ -87,15 +89,32 @@ const nullableProperties = new Set([
   "warning"
 ]);
 
+const nullablePropertyPaths = new Set([
+  "BackupSettingsPreviewRequest.clusterId"
+]);
+
 const optionalProperties = new Set([
   "InitiateRestoreRequest.database",
   "InitiateRestoreRequest.table",
-  "InitiateRestoreRequest.tables"
+  "InitiateRestoreRequest.tables",
+  "ManualBackupRequest.clickHouseBackupSettings",
+  "InitiateRestoreRequest.clickHouseRestoreSettings"
+]);
+
+const scalarSettingsProperties = new Set([
+  "clickHouseBackupSettings",
+  "clickHouseRestoreSettings",
+  "settings"
+]);
+
+const scalarSettingProperties = new Set([
+  "ClickHouseSettingSourceDto.value"
 ]);
 
 const header = `/* Generated from Chobo OpenAPI. Regenerate with npm run generate:api. */\n\n`;
 const aliases = [
   `export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };`,
+  `export type ClickHouseSettingValue = string | number | boolean;`,
   `export interface PagedResultDto<T> { items: T[]; offset: number; limit: number; totalCount: number; }`
 ];
 const declarations = [];
@@ -129,17 +148,20 @@ function renderInterface(name, schema) {
   const properties = schema.properties ?? {};
   const fields = Object.entries(properties).map(([propertyName, propertySchema]) => {
     const optional = isOptionalProperty(name, propertyName, propertySchema) ? "?" : "";
-    return `${propertyName}${optional}: ${propertyTypeName(propertyName, propertySchema)};`;
+    return `${propertyName}${optional}: ${propertyTypeName(name, propertyName, propertySchema)};`;
   });
   return `export interface ${name} { ${fields.join(" ")} }`;
 }
 
 function isOptionalProperty(schemaName, propertyName, schema) {
-  return optionalProperties.has(`${schemaName}.${propertyName}`) || (schema?.nullable === true && nullableProperties.has(propertyName));
+  return optionalProperties.has(`${schemaName}.${propertyName}`) || (schema?.nullable === true && (nullableProperties.has(propertyName) || nullablePropertyPaths.has(`${schemaName}.${propertyName}`)));
 }
 
-function propertyTypeName(propertyName, schema) {
-  return typeName(schema, schema?.nullable === true && nullableProperties.has(propertyName));
+function propertyTypeName(schemaName, propertyName, schema) {
+  const nullable = schema?.nullable === true && (nullableProperties.has(propertyName) || nullablePropertyPaths.has(`${schemaName}.${propertyName}`));
+  if (scalarSettingProperties.has(`${schemaName}.${propertyName}`)) return withNullable("ClickHouseSettingValue", nullable);
+  if (scalarSettingsProperties.has(propertyName) && schema?.additionalProperties) return withNullable("Record<string, ClickHouseSettingValue>", nullable);
+  return typeName(schema, nullable);
 }
 
 function typeName(schema, nullable = false) {

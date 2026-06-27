@@ -14,12 +14,20 @@ public sealed class RestoreCommand : CliSubject
     public override string Name => "restore";
     public override string Description => "Start restore operations.";
 
-    private static Task<object?> InitiateAsync(CommandContext context)
+    private static async Task<object?> InitiateAsync(CommandContext context)
     {
         var required = context.Command.Options.Require("--backup-id", "--target-cluster-id");
         var tableMappings = ParseTableMappings(context.Command.Options);
         var sourceShards = ParseShards(context.Command.Options.Optional("--source-shards"));
         var targetShards = ParseShards(context.Command.Options.Optional("--target-shards"));
+        IReadOnlyDictionary<string, System.Text.Json.JsonElement>? settings = null;
+        if (HasClickHouseSettingsOptions(context.Command.Options, "restore"))
+        {
+            using var previewClient = await context.CreateClientAsync();
+            var preview = await previewClient.PostAsync<ClickHouseSettingsPreviewDto>("restores/settings-preview", new RestoreSettingsPreviewRequest(Guid.Parse(required["--backup-id"]), Guid.Parse(required["--target-cluster-id"])))
+                ?? new ClickHouseSettingsPreviewDto(new Dictionary<string, System.Text.Json.JsonElement>(), []);
+            settings = CommandHelpers.ClickHouseSettingsFromOptions(context.Command.Options, "restore", preview.Settings);
+        }
         var request = new InitiateRestoreRequest(
             Guid.Parse(required["--backup-id"]),
             Guid.Parse(required["--target-cluster-id"]),
@@ -36,8 +44,9 @@ public sealed class RestoreCommand : CliSubject
             context.Command.Options.Has("--schema-only"),
             sourceShards,
             targetShards,
-            context.Command.Options.Has("--confirm-destructive"));
-        return CommandHelpers.WithClient(context, client => client.PostAsync("restores/initiate", request));
+            context.Command.Options.Has("--confirm-destructive"),
+            settings);
+        return await CommandHelpers.WithClient(context, client => client.PostAsync("restores/initiate", request));
     }
 
     private static IReadOnlyList<int>? ParseShards(string? value) =>
@@ -69,7 +78,12 @@ public sealed class RestoreCommand : CliSubject
             "redistribute" => RestoreLayout.Redistribute,
             _ => Enum.Parse<RestoreLayout>(value, ignoreCase: true)
         };
-}
+
+    private static bool HasClickHouseSettingsOptions(OptionBag options, string prefix) =>
+        options.Has($"--clickhouse-{prefix}-settings-json") ||
+        options.Has($"--clickhouse-{prefix}-settings-file") ||
+        options.Has($"--clickhouse-{prefix}-setting") ||
+        options.Has($"--remove-clickhouse-{prefix}-setting");}
 
 public sealed class RestoresCommands : CliSubject
 {
@@ -131,5 +145,3 @@ public sealed class RestoresCommands : CliSubject
     private static bool IsTerminal(RestoreRunStatus status) =>
         status is RestoreRunStatus.Succeeded or RestoreRunStatus.PartiallySucceeded or RestoreRunStatus.Failed or RestoreRunStatus.Canceled;
 }
-
-

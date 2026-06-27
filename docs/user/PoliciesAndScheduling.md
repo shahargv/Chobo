@@ -31,6 +31,16 @@ Example output:
 }
 ```
 
+Policies can also store default ClickHouse advanced backup settings and default restore settings. Backup settings apply to every scheduled or manual backup started from the policy unless the manual launch overrides them. Restore settings become the default for restores started from backups created by the policy, but they are read from the current policy at restore time, not from old backup metadata.
+
+CLI examples:
+
+```powershell
+ChoboCli policies add --name sales-nightly --source-cluster-id <cluster-id> --target-id <target-id> --clickhouse-backup-setting max_backup_bandwidth=104857600 --clickhouse-restore-setting restore_threads=4
+ChoboCli policies update --id <policy-id> --clickhouse-backup-settings-file .\backup-settings.json --clickhouse-restore-settings-json '{"restore_threads":4}'
+```
+
+Cluster defaults apply first, then policy settings override matching names. Manual backup and restore launch screens show the final inherited settings before the run starts.
 After saving, the policy appears in the policy list with its mode, source, backup storage, rule count, retention summary, and actions.
 
 ![Saved policy in the policy list](assets/policies/policy-saved.png)

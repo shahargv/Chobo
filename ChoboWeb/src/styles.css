@@ -976,3 +976,10 @@ pre, .token-box {
 .setting-input { width: 100%; min-width: 180px; }
 .setting-json { min-height: 72px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 td code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; white-space: pre-wrap; }
+
+.clickhouse-settings-editor { display: grid; gap: 10px; }
+.compact-head { margin-bottom: 0; }
+.settings-row { display: grid; grid-template-columns: minmax(180px, 1fr) 120px minmax(160px, 1fr) auto auto; gap: 10px; align-items: end; }
+.settings-row label { display: grid; gap: 4px; font-size: 0.85rem; color: var(--muted); }
+.settings-row input, .settings-row select { min-width: 0; }
+@media (max-width: 760px) { .settings-row { grid-template-columns: 1fr; align-items: stretch; } }

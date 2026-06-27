@@ -21,6 +21,29 @@ public sealed class BackupApplicationService(
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
     private readonly Serilog.ILogger _logger = logger.ForContext<BackupApplicationService>();
 
+    public async Task<ClickHouseSettingsPreviewDto> PreviewSettingsAsync(BackupSettingsPreviewRequest request, CancellationToken cancellationToken = default)
+    {
+        Guid? clusterId = request.ClusterId;
+        BackupPolicyEntity? policy = null;
+        if (request.PolicyId is { } policyId)
+        {
+            policy = await db.BackupPolicies.AsNoTracking().FirstOrDefaultAsync(x => x.Id == policyId && !x.IsDeleted, cancellationToken)
+                ?? throw new ArgumentException("Policy was not found.");
+            clusterId = policy.SourceClusterId;
+        }
+
+        if (clusterId is null || clusterId == Guid.Empty)
+        {
+            throw new ArgumentException("Cluster id is required.");
+        }
+
+        var cluster = await db.ClickHouseClusters.AsNoTracking().FirstOrDefaultAsync(x => x.Id == clusterId && !x.IsDeleted, cancellationToken)
+            ?? throw new ArgumentException("Cluster was not found.");
+
+        return ClickHouseAdvancedSettings.MergeWithSources(
+            ("cluster", ClickHouseAdvancedSettings.Deserialize(cluster.ClickHouseBackupSettingsJson, ClickHouseAdvancedSettingsKind.Backup)),
+            ("policy", policy is null ? ClickHouseAdvancedSettings.Empty : ClickHouseAdvancedSettings.Deserialize(policy.ClickHouseBackupSettingsJson, ClickHouseAdvancedSettingsKind.Backup)));
+    }
     public async Task<BackupDto> ManualAsync(ManualBackupRequest request, CancellationToken cancellationToken = default)
     {
         BackupPolicyEntity? policy = null;
@@ -71,9 +94,14 @@ public sealed class BackupApplicationService(
             throw new ArgumentException("Target was not found.");
         }
 
+        var inheritedSettings = await PreviewSettingsAsync(new BackupSettingsPreviewRequest(clusterId, request.PolicyId), cancellationToken);
+        var effectiveSettings = request.ClickHouseBackupSettings is null
+            ? inheritedSettings.Settings
+            : ClickHouseAdvancedSettings.Normalize(request.ClickHouseBackupSettings, ClickHouseAdvancedSettingsKind.Backup);
+
         var storedRequest = request.PolicyId is null
             ? request
-            : request with { ClusterId = clusterId, TargetId = targetId, Selector = selector, SchemaOnly = contentMode == BackupContentMode.SchemaOnly };
+            : request with { ClusterId = clusterId, TargetId = targetId, Selector = selector, SchemaOnly = contentMode == BackupContentMode.SchemaOnly, ClickHouseBackupSettings = effectiveSettings };
         var backup = new BackupEntity
         {
             TriggerType = BackupTriggerType.Manual,
@@ -83,7 +111,8 @@ public sealed class BackupApplicationService(
             SourceClusterId = clusterId,
             TargetId = targetId,
             PolicyId = request.PolicyId,
-            ManualRequestJson = JsonSerializer.Serialize(storedRequest, JsonOptions),
+            ManualRequestJson = JsonSerializer.Serialize(storedRequest with { ClickHouseBackupSettings = effectiveSettings }, JsonOptions),
+            ClickHouseBackupSettingsJson = ClickHouseAdvancedSettings.SerializeNormalized(effectiveSettings),
             RequestedByUserId = actor.UserId,
             RequestedByName = actor.ActorName
         };
@@ -166,6 +195,7 @@ public sealed class BackupApplicationService(
                 x.RequestedByUserId,
                 x.RequestedByName,
                 x.ManualRequestJson,
+                x.ClickHouseBackupSettingsJson,
                 x.CreatedAt,
                 x.StartedAt,
                 x.CompletedAt,
@@ -245,7 +275,8 @@ public sealed class BackupApplicationService(
                     x.DeletionAttemptCount,
                     stats?.TableCount ?? 0,
                     stats?.BackupSizeBytes,
-                    relatedFullBackupIds ?? []);
+                    relatedFullBackupIds ?? [],
+                    x.ClickHouseBackupSettingsJson);
             })
             .ToList();
     }
@@ -443,6 +474,7 @@ public sealed class BackupApplicationService(
         Guid? RequestedByUserId,
         string RequestedByName,
         string? ManualRequestJson,
+        string? ClickHouseBackupSettingsJson,
         DateTimeOffset CreatedAt,
         DateTimeOffset? StartedAt,
         DateTimeOffset? CompletedAt,

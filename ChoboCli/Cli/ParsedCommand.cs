@@ -35,11 +35,11 @@ public sealed class ParsedCommand
 
             if (i + 1 < args.Length && !args[i + 1].StartsWith("--", StringComparison.Ordinal))
             {
-                options[current] = args[++i];
+                AddOption(options, current, args[++i]);
             }
             else
             {
-                options[current] = "true";
+                AddOption(options, current, "true");
             }
         }
 
@@ -58,5 +58,16 @@ public sealed class ParsedCommand
         }
 
         return new ParsedCommand(positionals[0], positionals[1], new OptionBag(options), isHelp: false);
+    }
+
+    private static void AddOption(Dictionary<string, string?> options, string name, string? value)
+    {
+        if (options.TryGetValue(name, out var existing) && existing is not null)
+        {
+            options[name] = existing + "\n" + value;
+            return;
+        }
+
+        options[name] = value;
     }
 }

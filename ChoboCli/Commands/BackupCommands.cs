@@ -14,7 +14,7 @@ public sealed class BackupCommand : CliSubject
     public override string Name => "backup";
     public override string Description => "Start backup operations.";
 
-    private static Task<object?> ManualAsync(CommandContext context)
+    private static async Task<object?> ManualAsync(CommandContext context)
     {
         var policyId = context.Command.Options.Optional("--policy-id") is { } policy ? Guid.Parse(policy) : (Guid?)null;
         var backupType = context.Command.Options.Enum("--backup-type", BackupType.Full);
@@ -25,16 +25,30 @@ public sealed class BackupCommand : CliSubject
                 ["--cluster-id"] = context.Command.Options.Optional("--cluster-id") ?? Guid.Empty.ToString(),
                 ["--target-id"] = context.Command.Options.Optional("--target-id") ?? Guid.Empty.ToString()
             };
+        IReadOnlyDictionary<string, System.Text.Json.JsonElement>? settings = null;
+        if (HasClickHouseSettingsOptions(context.Command.Options, "backup"))
+        {
+            using var previewClient = await context.CreateClientAsync();
+            var preview = await previewClient.PostAsync<ClickHouseSettingsPreviewDto>("backups/settings-preview", new BackupSettingsPreviewRequest(Guid.Parse(required["--cluster-id"]), policyId))
+                ?? new ClickHouseSettingsPreviewDto(new Dictionary<string, System.Text.Json.JsonElement>(), []);
+            settings = CommandHelpers.ClickHouseSettingsFromOptions(context.Command.Options, "backup", preview.Settings);
+        }
         var request = new ManualBackupRequest(
             Guid.Parse(required["--cluster-id"]),
             Guid.Parse(required["--target-id"]),
             CommandHelpers.PolicySelectorFromOption(context.Command.Options),
             backupType,
             policyId,
-            context.Command.Options.Has("--schema-only"));
-        return CommandHelpers.WithClient(context, client => client.PostAsync("backups/manual", request));
+            context.Command.Options.Has("--schema-only"),
+            settings);
+        return await CommandHelpers.WithClient(context, client => client.PostAsync("backups/manual", request));
     }
-}
+
+    private static bool HasClickHouseSettingsOptions(OptionBag options, string prefix) =>
+        options.Has($"--clickhouse-{prefix}-settings-json") ||
+        options.Has($"--clickhouse-{prefix}-settings-file") ||
+        options.Has($"--clickhouse-{prefix}-setting") ||
+        options.Has($"--remove-clickhouse-{prefix}-setting");}
 
 public sealed class BackupsCommands : CliSubject
 {

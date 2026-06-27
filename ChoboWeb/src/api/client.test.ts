@@ -40,6 +40,7 @@ describe("ChoboApiClient destructive requests", () => {
       layout: "Preserve",
       schemaOnly: false,
       confirmDestructive: true,
+      clickHouseRestoreSettings: {},
       tables: [{ backupTableId: "table-id", targetDatabase: "sales", targetTable: "orders", append: false, allowSchemaMismatch: false, schemaOnly: false }]
     };
 

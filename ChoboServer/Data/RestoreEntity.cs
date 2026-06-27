@@ -16,6 +16,7 @@ public sealed class RestoreEntity
     public int? SourceShard { get; set; }
     public int? TargetShard { get; set; }
     public string RequestJson { get; set; } = "{}";
+    public string ClickHouseRestoreSettingsJson { get; set; } = "{}";
     public Guid? RequestedByUserId { get; set; }
     public string RequestedByName { get; set; } = "system";
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;

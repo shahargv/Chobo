@@ -459,7 +459,8 @@ public sealed class RestoreRunnerService(
             if (string.IsNullOrWhiteSpace(shard.ClickHouseOperationId))
             {
                 var allowNonEmptyTables = string.Equals(shard.RestoreTableName, table.TargetTable, StringComparison.Ordinal);
-                var operation = await scopedClickHouse.StartRestoreShardAsync(endpoint, restore.TargetCluster!, restore.Backup!.Target!, shard, backupTable, backupShard, allowNonEmptyTables, cancellationToken);
+                var settings = ClickHouseAdvancedSettings.Deserialize(restore.ClickHouseRestoreSettingsJson, ClickHouseAdvancedSettingsKind.Restore);
+                var operation = await scopedClickHouse.StartRestoreShardAsync(endpoint, restore.TargetCluster!, restore.Backup!.Target!, shard, backupTable, backupShard, allowNonEmptyTables, settings, cancellationToken);
                 shard.ClickHouseOperationId = operation.OperationId;
                 shard.ClickHouseStatus = operation.Status;
                 table.ClickHouseOperationId ??= operation.OperationId;

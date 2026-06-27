@@ -15,6 +15,12 @@ public sealed class RestoresController(RestoreApplicationService restores) : Con
         catch (ArgumentException ex) { return BadRequest(new ErrorResponse(ex.Message)); }
     }
 
+    [HttpPost("settings-preview")]
+    public async Task<ActionResult<ClickHouseSettingsPreviewDto>> SettingsPreview(RestoreSettingsPreviewRequest request, CancellationToken cancellationToken)
+    {
+        try { return await restores.PreviewSettingsAsync(request, cancellationToken); }
+        catch (ArgumentException ex) { return BadRequest(new ErrorResponse(ex.Message)); }
+    }
     [HttpGet]
     public Task<IReadOnlyList<RestoreDto>> List(CancellationToken cancellationToken) =>
         restores.ListAsync(cancellationToken);

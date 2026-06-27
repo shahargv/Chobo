@@ -5,6 +5,7 @@ import { ArrowUpToLine, Ban, Info, Play, RefreshCw, RotateCcw, Trash2 } from "lu
 import type { BackupDto, BackupPolicyDto, BackupRunStatus, BackupTableDto, BackupTableShardDto, BackupType } from "../api/generated";
 import { useApi } from "../api-context";
 import { ConfirmDialog, DataTable, Detail, Drawer, Empty, Input, Page, Select, Status } from "../components/ui";
+import { ClickHouseAdvancedSettingsEditor, type ClickHouseSettings } from "../components/ClickHouseAdvancedSettingsEditor";
 import { formatBytes, formatCompletionTime, formatTime } from "../utils/format";
 import { isBackupStatusRestorable } from "./restores/restoreUtils";
 
@@ -369,6 +370,10 @@ function ManualBackupPanel({ policies, onQueued }: { policies: BackupPolicyDto[]
   const [policyId, setPolicyId] = useState(policies[0]?.id ?? "");
   const policy = policies.find((item) => item.id === policyId);
   const [backupType, setBackupType] = useState<BackupType>("Full");
+  const settingsPreview = useQuery({ queryKey: ["backup-settings-preview", policyId], queryFn: () => policy ? api.backupSettingsPreview({ clusterId: policy.sourceClusterId, policyId: policy.id }) : Promise.resolve({ settings: {}, sources: [] }), enabled: Boolean(policy) });
+  const [clickHouseSettings, setClickHouseSettings] = useState<ClickHouseSettings>({});
+  const [settingsValid, setSettingsValid] = useState(true);
+  useEffect(() => { setClickHouseSettings((settingsPreview.data?.settings ?? {}) as ClickHouseSettings); }, [settingsPreview.data, policyId]);
   const canIncremental = policy?.contentMode === "SchemaAndData";
   const manual = useMutation({
     mutationFn: () => {
@@ -379,7 +384,8 @@ function ManualBackupPanel({ policies, onQueued }: { policies: BackupPolicyDto[]
         selector: policy.selector,
         backupType: policy.contentMode === "SchemaOnly" ? "Full" : backupType,
         policyId: policy.id,
-        schemaOnly: policy.contentMode === "SchemaOnly"
+        schemaOnly: policy.contentMode === "SchemaOnly",
+        clickHouseBackupSettings: clickHouseSettings
       });
     },
     onSuccess: () => { showToast({ kind: "success", text: "Manual backup queued." }); onQueued(); },
@@ -392,7 +398,9 @@ function ManualBackupPanel({ policies, onQueued }: { policies: BackupPolicyDto[]
       <Select label="Policy" value={policyId} onChange={(value) => { setPolicyId(value); const selected = policies.find((item) => item.id === value); if (selected?.contentMode === "SchemaOnly") setBackupType("Full"); }} options={policies.map((item) => [item.id, `${item.name} (${item.contentMode === "SchemaOnly" ? "schema only" : "schema + data"})`])} />
       <Select label="Backup type" value={policy?.contentMode === "SchemaOnly" ? "Full" : backupType} onChange={(value) => setBackupType(value as BackupType)} options={canIncremental ? [["Full", "Full"], ["Incremental", "Incremental"]] : [["Full", "Full"]]} />
     </div>
-    <div className="actions"><button className="primary" disabled={!policy || manual.isPending} onClick={() => manual.mutate()}><Play size={16} /> Queue backup</button></div>
+    <ClickHouseAdvancedSettingsEditor title="ClickHouse backup settings for this run" value={clickHouseSettings} sources={(settingsPreview.data?.sources ?? []) as any} onChange={setClickHouseSettings} onValidityChange={setSettingsValid} />
+    {settingsPreview.isError && <span className="field-error">{String(settingsPreview.error)}</span>}
+    <div className="actions"><button className="primary" disabled={!policy || !settingsValid || settingsPreview.isLoading || settingsPreview.isError || manual.isPending} onClick={() => manual.mutate()}><Play size={16} /> Queue backup</button></div>
   </section>;
 }
 function isBackupInExecutionPhase(status: BackupRunStatus | undefined) {
@@ -425,4 +433,3 @@ function toDateTimeLocal(value: Date) {
 function toApiDateTime(value: string) {
   return value ? new Date(value).toISOString() : undefined;
 }
-
