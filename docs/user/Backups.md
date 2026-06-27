@@ -227,15 +227,21 @@ If the S3 target has `--path-prefix`, Chobo prepends it to the ClickHouse S3 URL
 
 ## Storage Metadata Manifests
 
-Each schema+data backup writes a Chobo metadata manifest into storage so backup metadata can be recovered even if local SQLite state is lost. Schema-only backups do not create storage objects or manifests. The manifest is stored as:
+Each schema+data backup writes one Chobo metadata manifest into storage so backup metadata can be recovered even if local SQLite state is lost. Schema-only backups do not create storage objects or manifests.
+
+Policy-backed backups store the manifest under the policy metadata area:
 
 ```text
-<backup table or shard path>/_chobo/backup-metadata.v1.json
+backups/policy-<policy-id>/_chobo/<backup-id>.json
 ```
 
-Chobo writes the full backup-run manifest under each table path and each shard path. This intentionally duplicates the same metadata across cleanup-relevant prefixes, so normal backup deletion removes the manifest with the backup objects.
+Ad hoc manual backups without a policy use:
 
-The manifest includes the backup run, table and shard records, schema definitions, source cluster topology, policy, schedule, and S3 target settings. It never includes ClickHouse username/password or S3 access/secret keys. Failed backups are written too when enough metadata exists, so storage recovery can rebuild failure history for diagnostics and lifecycle handling.
+```text
+backups/manual/_chobo/<backup-id>.json
+```
+
+The manifest includes the backup run, table and shard records, schema definitions, source cluster topology, policy, schedule, S3 target settings, and the S3 data paths the backup used. It never includes ClickHouse username/password or S3 access/secret keys. During metadata recovery, if some declared data paths are already missing, Chobo still imports the backup as `PartiallySucceeded` so the remaining data can be inspected and cleaned up through normal lifecycle tools.
 
 
 ## Monitoring Backups

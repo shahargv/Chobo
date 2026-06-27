@@ -70,12 +70,14 @@ public sealed class BackupRestoreExecutionTests
         var backupId = await fixture.CreateManualBackupAsync();
         await fixture.RunBackupAsync(backupId);
 
-        var manifestEntry = fixture.StorageDeletion.Objects.First(x => x.Key.EndsWith(BackupStorageManifestService.ManifestRelativePath, StringComparison.Ordinal));
+        var manifestEntry = fixture.StorageDeletion.Objects.First(x => x.Key.Contains("/_chobo/", StringComparison.Ordinal) && x.Key.EndsWith($"{backupId:N}.json", StringComparison.Ordinal));
         var manifestJson = Encoding.UTF8.GetString(manifestEntry.Value);
         var manifest = JsonSerializer.Deserialize<BackupStorageManifestV1>(manifestJson, JsonOptions)!;
 
+        Assert.Equal($"backups/manual/_chobo/{backupId:N}.json", manifestEntry.Key);
         Assert.Equal(backupId, manifest.Backup.Id);
         Assert.Equal(BackupRunStatus.Succeeded, manifest.Backup.Status);
+        Assert.Contains("backups/full/manual/sales/orders/", Assert.Single(manifest.RequiredStoragePaths));
         Assert.Equal("source", manifest.SourceCluster.Name);
         Assert.Null(manifestJson.Contains("EncryptedPassword", StringComparison.OrdinalIgnoreCase) ? "leaked" : null);
         Assert.DoesNotContain("secret", manifestJson, StringComparison.OrdinalIgnoreCase);
@@ -145,7 +147,7 @@ public sealed class BackupRestoreExecutionTests
         var shards = await fixture.Db.BackupTableShards.Where(x => x.BackupTable!.BackupId == backupId).ToListAsync();
         Assert.Equal(20, shards.Count);
         Assert.All(shards, shard => Assert.Equal(BackupTableStatus.Succeeded, shard.Status));
-        Assert.True(fixture.StorageDeletion.WriteObjectCount >= 42);
+        Assert.True(fixture.StorageDeletion.WriteObjectCount >= 2);
         Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "metadata-manifest-checkpoint-written" && x.EntityId == backupId.ToString()));
         Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "metadata-manifest-written" && x.EntityId == backupId.ToString()));
     }
@@ -186,6 +188,8 @@ public sealed class BackupRestoreExecutionTests
         failed.Error = "simulated failure";
         await fixture.Db.SaveChangesAsync();
         await fixture.Services.GetRequiredService<IBackupStorageManifestService>().WriteManifestAsync(failed.Id);
+        var failedShardPath = failed.Tables.Single().Shards.Single().S3Path;
+        fixture.StorageDeletion.Objects[$"{failedShardPath}/data.bin"] = Encoding.UTF8.GetBytes("data");
 
         var storedObjects = fixture.StorageDeletion.Objects.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal);
         await fixture.Db.BackupTableShards.ExecuteDeleteAsync();
@@ -231,6 +235,107 @@ public sealed class BackupRestoreExecutionTests
         Assert.Equal(1, second.UpdatedBackupCount);
     }
 
+    [Fact]
+    public async Task Backup_metadata_recovery_imports_missing_storage_paths_as_partially_succeeded()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Succeeded, "backup-op", true)
+        ], shardCount: 2);
+        backup.Status = BackupRunStatus.Succeeded;
+        backup.CompletedAt = DateTimeOffset.UtcNow;
+        await fixture.Db.SaveChangesAsync();
+        await fixture.Services.GetRequiredService<IBackupStorageManifestService>().WriteManifestAsync(backup.Id);
+
+        var presentShard = backup.Tables.Single().Shards.OrderBy(x => x.SourceShardNumber).First();
+        fixture.StorageDeletion.Objects[$"{presentShard.S3Path}/data.bin"] = Encoding.UTF8.GetBytes("data");
+        var storedObjects = fixture.StorageDeletion.Objects.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal);
+
+        await fixture.Db.BackupTableShards.ExecuteDeleteAsync();
+        await fixture.Db.BackupTables.ExecuteDeleteAsync();
+        await fixture.Db.Backups.ExecuteDeleteAsync();
+        await fixture.Db.BackupPolicies.ExecuteDeleteAsync();
+        await fixture.Db.SchemaDefinitions.ExecuteDeleteAsync();
+        await fixture.Db.ClickHouseAccessNodes.ExecuteDeleteAsync();
+        await fixture.Db.ClickHouseClusters.ExecuteDeleteAsync();
+        await fixture.Db.BackupTargets.ExecuteDeleteAsync();
+        var scanTargetId = Guid.NewGuid();
+        fixture.Db.BackupTargets.Add(new BackupTargetEntity
+        {
+            Id = scanTargetId,
+            Name = "scan-target",
+            Endpoint = "http://minio:9000",
+            Bucket = "data-bucket",
+            Region = "us-east-1",
+            EncryptedAccessKey = "encrypted-access",
+            EncryptedSecretKey = "encrypted-secret"
+        });
+        await fixture.Db.SaveChangesAsync();
+        fixture.Db.ChangeTracker.Clear();
+        fixture.StorageDeletion.Objects.Clear();
+        foreach (var entry in storedObjects)
+        {
+            fixture.StorageDeletion.Objects[entry.Key] = entry.Value;
+        }
+
+        var result = await fixture.Services.GetRequiredService<IBackupStorageManifestService>()
+            .RecoverFromScanAsync(new RecoverBackupMetadataScanRequest(scanTargetId, "backups"));
+
+        Assert.Equal(1, result.ImportedBackupCount);
+        Assert.Contains(result.Errors, x => x.Contains("required storage path is missing", StringComparison.Ordinal));
+        var recovered = await fixture.Db.Backups.Include(x => x.Tables).ThenInclude(x => x.Shards).SingleAsync(x => x.Id == backup.Id);
+        Assert.Equal(BackupRunStatus.PartiallySucceeded, recovered.Status);
+        Assert.Contains("missing S3 data path", recovered.FailureReason);
+        Assert.Equal(BackupTableStatus.PartiallySucceeded, recovered.Tables.Single().Status);
+        Assert.Contains(recovered.Tables.Single().Shards, x => x.SourceShardNumber == 1 && x.Status == BackupTableStatus.Succeeded);
+        Assert.Contains(recovered.Tables.Single().Shards, x => x.SourceShardNumber == 2 && x.Status == BackupTableStatus.Failed && x.Error!.Contains("Required S3 data path was missing", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Backup_metadata_recovery_scan_ignores_legacy_per_data_path_manifests()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "legacy_orders", BackupTableStatus.Succeeded, "backup-op", true)
+        ]);
+        backup.Status = BackupRunStatus.Succeeded;
+        await fixture.Db.SaveChangesAsync();
+        await fixture.Services.GetRequiredService<IBackupStorageManifestService>().WriteManifestAsync(backup.Id);
+
+        var manifestEntry = fixture.StorageDeletion.Objects.Single(x => x.Key.Contains("/_chobo/", StringComparison.Ordinal));
+        var legacyPath = $"{backup.Tables.Single().S3Path}/_chobo/backup-metadata.v1.json";
+        fixture.StorageDeletion.Objects.Clear();
+        fixture.StorageDeletion.Objects[legacyPath] = manifestEntry.Value;
+        fixture.StorageDeletion.Objects[$"{backup.Tables.Single().S3Path}/data.bin"] = Encoding.UTF8.GetBytes("data");
+
+        await fixture.Db.BackupTableShards.ExecuteDeleteAsync();
+        await fixture.Db.BackupTables.ExecuteDeleteAsync();
+        await fixture.Db.Backups.ExecuteDeleteAsync();
+        await fixture.Db.BackupPolicies.ExecuteDeleteAsync();
+        await fixture.Db.SchemaDefinitions.ExecuteDeleteAsync();
+        await fixture.Db.ClickHouseAccessNodes.ExecuteDeleteAsync();
+        await fixture.Db.ClickHouseClusters.ExecuteDeleteAsync();
+        await fixture.Db.BackupTargets.ExecuteDeleteAsync();
+        var scanTargetId = Guid.NewGuid();
+        fixture.Db.BackupTargets.Add(new BackupTargetEntity
+        {
+            Id = scanTargetId,
+            Name = "scan-target",
+            Endpoint = "http://minio:9000",
+            Bucket = "data-bucket",
+            Region = "us-east-1",
+            EncryptedAccessKey = "encrypted-access",
+            EncryptedSecretKey = "encrypted-secret"
+        });
+        await fixture.Db.SaveChangesAsync();
+        fixture.Db.ChangeTracker.Clear();
+
+        var result = await fixture.Services.GetRequiredService<IBackupStorageManifestService>()
+            .RecoverFromScanAsync(new RecoverBackupMetadataScanRequest(scanTargetId, "backups"));
+
+        Assert.Equal(0, result.ImportedBackupCount);
+        Assert.Empty(result.Items);
+    }
     [Fact]
     public async Task Replicated_merge_tree_backup_is_supported()
     {
@@ -2364,6 +2469,9 @@ public sealed class BackupRestoreExecutionTests
         Assert.Equal(1, result.LastPendingCleanupCount);
         Assert.Equal(1, result.LastCleanedCount);
         Assert.Contains(backup.Tables.Single().S3Path, fixture.StorageDeletion.DeletedDirectories);
+        var manifestPath = BackupStorageManifestService.ManifestPath(backup);
+        Assert.Contains(manifestPath, fixture.StorageDeletion.DeletedObjects);
+        Assert.Equal($"obj:{manifestPath}", fixture.StorageDeletion.StorageOperations.Last());
         Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "backup-cleanup-succeeded" && x.EntityId == backup.Id.ToString()));
     }
 
@@ -3811,6 +3919,8 @@ public sealed class BackupRestoreExecutionTests
     private sealed class FakeBackupStorageOperations : IBackupStorageOperations
     {
         public List<string> DeletedDirectories { get; } = [];
+        public List<string> DeletedObjects { get; } = [];
+        public List<string> StorageOperations { get; } = [];
         public Dictionary<string, byte[]> Objects { get; } = new(StringComparer.Ordinal);
         public bool FailNextDelete { get; set; }
         public int FailWriteCount { get; set; }
@@ -3826,6 +3936,7 @@ public sealed class BackupRestoreExecutionTests
             }
 
             DeletedDirectories.Add(directoryPath);
+            StorageOperations.Add($"dir:{directoryPath}");
             return Task.CompletedTask;
         }
 
@@ -3858,8 +3969,13 @@ public sealed class BackupRestoreExecutionTests
                 .Select(x => new BackupStorageObjectInfo(x.Key, x.Value.LongLength))
                 .ToList());
 
-        public Task DeleteObjectAsync(BackupTargetEntity target, string path, CancellationToken cancellationToken = default) =>
-            Task.CompletedTask;
+        public Task DeleteObjectAsync(BackupTargetEntity target, string path, CancellationToken cancellationToken = default)
+        {
+            DeletedObjects.Add(path);
+            StorageOperations.Add($"obj:{path}");
+            Objects.Remove(path);
+            return Task.CompletedTask;
+        }
 
         public Task<StorageConnectionTestResult> TestConnectionAsync(BackupTargetEntity target, CancellationToken cancellationToken = default) =>
             Task.FromResult(new StorageConnectionTestResult(target.Id, target.Type, true, "ok"));

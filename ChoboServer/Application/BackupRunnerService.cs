@@ -736,9 +736,7 @@ public sealed class BackupRunnerService(
     private static async Task<long> MeasureBackupPathAsync(IBackupStorageOperations storage, BackupTargetEntity target, string path, CancellationToken cancellationToken)
     {
         var objects = await storage.ListObjectsAsync(target, path, cancellationToken);
-        return objects
-            .Where(x => !x.Path.EndsWith(BackupStorageManifestService.ManifestRelativePath, StringComparison.Ordinal))
-            .Sum(x => x.SizeBytes);
+        return objects.Sum(x => x.SizeBytes);
     }
 
 

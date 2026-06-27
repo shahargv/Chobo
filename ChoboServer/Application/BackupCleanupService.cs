@@ -58,14 +58,22 @@ public sealed class BackupCleanupService(
             _logger.Information("Backup cleanup schema cleanup phase started for backup {BackupId}.", backup.Id);
             var schemaCleanup = await CleanupSchemaDefinitionsAsync(backup, cancellationToken);
             _logger.Information("Backup cleanup schema cleanup phase completed for backup {BackupId}. SchemaReferencesCleared={SchemaReferencesCleared}, SchemaDefinitionsDeleted={SchemaDefinitionsDeleted}.", backup.Id, schemaCleanup.SchemaReferencesCleared, schemaCleanup.SchemaDefinitionsDeleted);
+            var deletedManifestObject = false;
+            if (backup.Target is not null && backup.ContentMode == BackupContentMode.SchemaAndData)
+            {
+                var manifestPath = BackupStorageManifestService.ManifestPath(backup);
+                _logger.Information("Backup cleanup deleting storage manifest for backup {BackupId}: {ManifestPath}.", backup.Id, manifestPath);
+                await storageOperations.DeleteObjectAsync(backup.Target, manifestPath, cancellationToken);
+                deletedManifestObject = true;
+            }
 
             backup.Status = finalStatus;
             backup.DeletedAt = DateTimeOffset.UtcNow;
             backup.DeletionError = null;
             await db.SaveChangesAsync(cancellationToken);
             _logger.Information("Backup cleanup completed for backup {BackupId}. FinalStatus={FinalStatus}, deletedAt={DeletedAt}.", backup.Id, finalStatus, backup.DeletedAt);
-            await audit.RecordAsync("backup-cleanup-succeeded", AuditEntityType.Backup, backup.Id.ToString(), new { reason, finalStatus, backup.DeletionAttemptCount, deletedPathCount, schemaCleanup.SchemaReferencesCleared, schemaCleanup.SchemaDefinitionsDeleted });
-            await audit.RecordAsync("delete-completed", AuditEntityType.Backup, backup.Id.ToString(), new { reason, finalStatus, backup.DeletionAttemptCount, backup.DeletedAt, deletedPathCount, schemaCleanup.SchemaReferencesCleared, schemaCleanup.SchemaDefinitionsDeleted });
+            await audit.RecordAsync("backup-cleanup-succeeded", AuditEntityType.Backup, backup.Id.ToString(), new { reason, finalStatus, backup.DeletionAttemptCount, deletedPathCount, deletedManifestObject, schemaCleanup.SchemaReferencesCleared, schemaCleanup.SchemaDefinitionsDeleted });
+            await audit.RecordAsync("delete-completed", AuditEntityType.Backup, backup.Id.ToString(), new { reason, finalStatus, backup.DeletionAttemptCount, backup.DeletedAt, deletedPathCount, deletedManifestObject, schemaCleanup.SchemaReferencesCleared, schemaCleanup.SchemaDefinitionsDeleted });
             return true;
         }
         catch (Exception ex)
@@ -123,7 +131,3 @@ public sealed class BackupCleanupService(
         }
     }
 }
-
-
-
-

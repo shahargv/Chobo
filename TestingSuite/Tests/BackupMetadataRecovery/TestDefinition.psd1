@@ -68,11 +68,25 @@
         @{ Name = 'start-single-incremental'; Type = 'Cli'; Args = @('backup', 'manual', '--policy-id', '{singlePolicy.id}', '--backup-type', 'Incremental'); SaveJsonAs = 'singleIncremental' }
         @{ Name = 'wait-single-incremental'; Type = 'Cli'; Args = @('backups', 'wait', '--id', '{singleIncremental.id}', '--timeout-seconds', '60', '--poll-seconds', '1'); ExpectJson = @(@{ Path = 'status'; Equals = 'Succeeded' }) }
         @{ Name = 'start-sharded-full'; Type = 'Cli'; Args = @('backup', 'manual', '--policy-id', '{shardedPolicy.id}', '--backup-type', 'Full'); SaveJsonAs = 'shardedFull' }
-        @{ Name = 'wait-sharded-full'; Type = 'Cli'; Args = @('backups', 'wait', '--id', '{shardedFull.id}', '--timeout-seconds', '90', '--poll-seconds', '1'); ExpectJson = @(@{ Path = 'status'; Equals = 'Succeeded' }) }
+        @{ Name = 'wait-sharded-full'; Type = 'Cli'; Args = @('backups', 'wait', '--id', '{shardedFull.id}', '--timeout-seconds', '90', '--poll-seconds', '1'); SaveJsonAs = 'shardedFullComplete'; ExpectJson = @(@{ Path = 'status'; Equals = 'Succeeded' }) }
         @{ Name = 'mutate-sharded-source-one'; Type = 'Sql'; Resource = 'sourceSharded'; Path = 'Sql/mutate-sharded-source.sql' }
         @{ Name = 'mutate-sharded-source-two'; Type = 'Sql'; Resource = 'sourceSharded'; Host = 'clickhouse-sourcesharded-s2-r1'; Path = 'Sql/mutate-sharded-shard-two.sql' }
         @{ Name = 'start-sharded-incremental'; Type = 'Cli'; Args = @('backup', 'manual', '--policy-id', '{shardedPolicy.id}', '--backup-type', 'Incremental'); SaveJsonAs = 'shardedIncremental' }
         @{ Name = 'wait-sharded-incremental'; Type = 'Cli'; Args = @('backups', 'wait', '--id', '{shardedIncremental.id}', '--timeout-seconds', '90', '--poll-seconds', '1'); ExpectJson = @(@{ Path = 'status'; Equals = 'Succeeded' }) }
+        @{ Name = 'start-missing-path-full'; Type = 'Cli'; Args = @('backup', 'manual', '--policy-id', '{singlePolicy.id}', '--backup-type', 'Full'); SaveJsonAs = 'missingPathFull' }
+        @{ Name = 'wait-missing-path-full'; Type = 'Cli'; Args = @('backups', 'wait', '--id', '{missingPathFull.id}', '--timeout-seconds', '60', '--poll-seconds', '1'); SaveJsonAs = 'missingPathFullComplete'; ExpectJson = @(@{ Path = 'status'; Equals = 'Succeeded' }) }
+        @{
+            Name = 'mc-alias'
+            Type = 'Shell'
+            Args = @('mc', 'alias', 'set', 'chobo', 'http://minio:9000', '{backupStore.AccessKey}', '{backupStore.SecretKey}')
+            ExpectTextContains = 'Added'
+        }
+        @{
+            Name = 'delete-one-backup-prefix'
+            Type = 'Shell'
+            Args = @('mc', 'rm', '--recursive', '--force', 'chobo/{backupStore.Bucket}/{missingPathFullComplete.tables.0.s3Path}')
+            ExpectTextContains = 'Removed'
+        }
         @{
             Name = 'seed-failed-backup'
             Type = 'Cli'
@@ -116,7 +130,8 @@
             Type = 'Cli'
             Args = @('backups', 'recover', '--target-id', '{recoveryTarget.id}', '--scan-root', 'backups')
             ExpectJson = @(
-                @{ Path = 'importedBackupCount'; Equals = '5' }
+                @{ Path = 'scannedManifestCount'; Equals = '6' }
+                @{ Path = 'importedBackupCount'; Equals = '6' }
             )
         }
         @{ Name = 'update-single-credentials'; Type = 'Cli'; Args = @('clusters', 'update-credentials', '--id', '{sourceSingleCluster.id}', '--username', 'default') }
@@ -127,7 +142,11 @@
         @{ Name = 'wait-restore-single'; Type = 'Cli'; Args = @('restores', 'wait', '--id', '{singleRestore.id}', '--timeout-seconds', '90', '--poll-seconds', '1'); ExpectJson = @(@{ Path = 'status'; Equals = 'Succeeded' }) }
         @{ Name = 'restore-sharded-incremental'; Type = 'Cli'; Args = @('restore', 'initiate', '--backup-id', '{shardedIncremental.id}', '--target-cluster-id', '{restoreShardedCluster.id}', '--layout', 'preserve'); SaveJsonAs = 'shardedRestore' }
         @{ Name = 'wait-restore-sharded'; Type = 'Cli'; Args = @('restores', 'wait', '--id', '{shardedRestore.id}', '--timeout-seconds', '120', '--poll-seconds', '1'); ExpectJson = @(@{ Path = 'status'; Equals = 'Succeeded' }) }
-        @{ Name = 'show-recovered-failed'; Type = 'Cli'; Args = @('backups', 'show', '--id', '{failedBackup.id}'); ExpectJson = @(@{ Path = 'status'; Equals = 'Failed' }) }
+        @{ Name = 'show-recovered-missing-prefix'; Type = 'Cli'; Args = @('backups', 'show', '--id', '{missingPathFull.id}'); ExpectJson = @(
+            @{ Path = 'status'; Equals = 'PartiallySucceeded' }
+            @{ Path = 'tables'; ContainsObject = @{ status = 'Failed'; clickHouseStatus = 'RECOVERY_MISSING_STORAGE_PATH' } }
+        ) }
+        @{ Name = 'show-recovered-failed'; Type = 'Cli'; Args = @('backups', 'show', '--id', '{failedBackup.id}'); ExpectJson = @(@{ Path = 'status'; Equals = 'PartiallySucceeded' }) }
     )
 
     Verify = @(
