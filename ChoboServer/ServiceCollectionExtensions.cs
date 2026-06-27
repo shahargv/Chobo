@@ -33,6 +33,7 @@ public static class ServiceCollectionExtensions
         services.AddOptions<ChoboWebOptions>().Bind(configuration.GetSection("Chobo:Web"));
         services.AddOptions<ChoboEndpointRewriteOptions>().Bind(configuration.GetSection("Chobo:EndpointRewrites"));
         services.AddOptions<ChoboTestHooksOptions>().Bind(configuration.GetSection("Chobo:TestHooks"));
+        services.AddOptions<ChoboRuntimeSettingsOptions>().Bind(configuration.GetSection("Chobo:Settings"));
 
         services.AddValidatorsFromAssemblyContaining<UpsertClusterRequestValidator>();
         services.Configure<ApiBehaviorOptions>(options =>
@@ -115,6 +116,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IBackupStorageOperations, BackupStorageOperations>();
         services.AddScoped<IApplicationLogStore, ApplicationLogStore>();
         services.AddScoped<IAuditStore, AuditStore>();
+        services.AddScoped<IRuntimeSettingsService, RuntimeSettingsService>();
         services.AddMemoryCache();
         services.AddSingleton<ITestHookCoordinator, TestHookCoordinator>();
         services.AddScoped<IUnitOfWork, EfUnitOfWork>();

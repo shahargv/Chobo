@@ -3,6 +3,7 @@ namespace ChoboServer;
 public static class ChoboConfiguration
 {
     public const string AppSettingsPathEnvironmentVariable = "CHOBO_APPSETTINGS_PATH";
+    public const string RuntimeSettingsFileName = "runtime-settings.json";
 
     public static void AddChoboConfigurationSources(IConfigurationBuilder configuration, string[] args, bool addStandardEnvironmentAndCommandLine = false)
     {
@@ -11,6 +12,10 @@ public static class ChoboConfiguration
         {
             configuration.AddJsonFile(appSettingsPath, optional: false, reloadOnChange: true);
         }
+
+        var dataDirectory = ResolveDataDirectory(configuration);
+        Directory.CreateDirectory(dataDirectory);
+        configuration.AddJsonFile(Path.Combine(dataDirectory, RuntimeSettingsFileName), optional: true, reloadOnChange: true);
 
         if (addStandardEnvironmentAndCommandLine || !string.IsNullOrWhiteSpace(appSettingsPath))
         {
@@ -22,6 +27,27 @@ public static class ChoboConfiguration
         }
 
         AddChoboEnvironmentAliases(configuration);
+    }
+
+    public static string GetRuntimeSettingsPath(IConfiguration configuration)
+    {
+        var dataDirectory = ResolveDataDirectory(configuration);
+        Directory.CreateDirectory(dataDirectory);
+        return Path.Combine(dataDirectory, RuntimeSettingsFileName);
+    }
+
+    private static string ResolveDataDirectory(IConfigurationBuilder configuration)
+    {
+        var built = configuration.Build();
+        return ResolveDataDirectory(built);
+    }
+
+    private static string ResolveDataDirectory(IConfiguration configuration)
+    {
+        var value = Environment.GetEnvironmentVariable("CHOBO_DATA_DIRECTORY")
+            ?? configuration["Chobo:DataDirectory"]
+            ?? "data";
+        return ChoboPaths.GetDataDirectory(value);
     }
 
     private static void AddChoboEnvironmentAliases(IConfigurationBuilder configuration)

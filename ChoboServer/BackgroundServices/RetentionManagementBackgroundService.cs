@@ -10,7 +10,7 @@ namespace ChoboServer.BackgroundServices;
 
 public sealed class RetentionManagementBackgroundService(
     IServiceProvider services,
-    IOptions<RetentionManagementOptions> options,
+    IOptionsMonitor<RetentionManagementOptions> options,
     TimeProvider timeProvider,
     Serilog.ILogger logger) : BackgroundService
 {
@@ -29,7 +29,7 @@ public sealed class RetentionManagementBackgroundService(
                 _logger.Error(ex, "Backup retention management failed.");
             }
 
-            var interval = options.Value.Interval <= TimeSpan.Zero ? TimeSpan.FromHours(1) : options.Value.Interval;
+            var interval = options.CurrentValue.Interval <= TimeSpan.Zero ? TimeSpan.FromHours(1) : options.CurrentValue.Interval;
             await Task.Delay(interval, stoppingToken);
         }
     }
@@ -49,7 +49,7 @@ public sealed class RetentionManagementBackgroundService(
                 .ToListAsync(cancellationToken);
         }
 
-        await ForEachAsync(pending, options.Value.MaxDop, async id =>
+        await ForEachAsync(pending, options.CurrentValue.MaxDop, async id =>
         {
             using var scope = services.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
@@ -84,7 +84,7 @@ public sealed class RetentionManagementBackgroundService(
             var fullWorkIds = await FullWorkBackupIdsAsync(db, successfulIds, cancellationToken);
             var protectedGlobal = successful.Take(policy.MinBackupsToKeep).Select(x => x.Id).ToHashSet();
             var protectedFull = successful
-                .Where(x => fullWorkIds.Contains(x.Id))
+                .Where(x => x.BackupType == BackupType.Full)
                 .Take(policy.MinFullBackupsToKeep)
                 .Select(x => x.Id)
                 .ToHashSet();

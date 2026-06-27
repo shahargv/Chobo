@@ -54,14 +54,14 @@ public sealed class BackupStorageOperations(
 
 public sealed record BackupStorageObjectInfo(string Path, long SizeBytes);
 
-public sealed class S3BackupStorageOperations(ICredentialProtector protector, IOptions<BackupStorageOperationOptions> options, Serilog.ILogger logger) : IBackupStorageOperations
+public sealed class S3BackupStorageOperations(ICredentialProtector protector, IOptionsMonitor<BackupStorageOperationOptions> options, Serilog.ILogger logger) : IBackupStorageOperations
 {
     private readonly Serilog.ILogger _logger = logger.ForContext<S3BackupStorageOperations>();
 
     public async Task DeleteDirectoryAsync(BackupTargetEntity target, string directoryPath, CancellationToken cancellationToken = default)
     {
         var prefix = S3TargetUrlBuilder.StoragePath(target, directoryPath).TrimStart('/');
-        var batchSize = Math.Clamp(options.Value.S3DeleteBatchSize, 1, 1000);
+        var batchSize = Math.Clamp(options.CurrentValue.S3DeleteBatchSize, 1, 1000);
         var deletedCount = 0;
         using var client = await CreateClientAsync(target, cancellationToken);
         while (true)
@@ -261,8 +261,8 @@ public sealed class S3BackupStorageOperations(ICredentialProtector protector, IO
             ServiceURL = endpoint.ToString(),
             AuthenticationRegion = region,
             ForcePathStyle = target.ForcePathStyle,
-            Timeout = options.Value.S3RequestTimeout <= TimeSpan.Zero ? TimeSpan.FromMinutes(1) : options.Value.S3RequestTimeout,
-            MaxErrorRetry = Math.Max(0, options.Value.S3MaxErrorRetry)
+            Timeout = options.CurrentValue.S3RequestTimeout <= TimeSpan.Zero ? TimeSpan.FromMinutes(1) : options.CurrentValue.S3RequestTimeout,
+            MaxErrorRetry = Math.Max(0, options.CurrentValue.S3MaxErrorRetry)
         };
 
         if (string.Equals(endpoint.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase))

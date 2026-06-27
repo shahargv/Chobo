@@ -9,7 +9,7 @@ namespace ChoboServer.BackgroundServices;
 
 public sealed class SqliteSelfBackupBackgroundService(
     IServiceProvider services,
-    IOptions<ChoboSqliteSelfBackupOptions> options,
+    IOptionsMonitor<ChoboSqliteSelfBackupOptions> options,
     IOptions<ChoboStorageOptions> storageOptions,
     TimeProvider timeProvider,
     Serilog.ILogger logger) : BackgroundService
@@ -29,16 +29,16 @@ public sealed class SqliteSelfBackupBackgroundService(
                 _logger.Error(ex, "SQLite self-backup check failed.");
             }
 
-            var interval = options.Value.PollInterval <= TimeSpan.Zero
+            var interval = options.CurrentValue.PollInterval <= TimeSpan.Zero
                 ? TimeSpan.FromMinutes(5)
-                : options.Value.PollInterval;
+                : options.CurrentValue.PollInterval;
             await Task.Delay(interval, stoppingToken);
         }
     }
 
     public async Task<string?> RunOnceAsync(CancellationToken cancellationToken = default)
     {
-        var selfBackup = options.Value;
+        var selfBackup = options.CurrentValue;
         if (!selfBackup.Enabled)
         {
             return null;

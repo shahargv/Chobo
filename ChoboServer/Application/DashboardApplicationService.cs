@@ -4,11 +4,11 @@ using Microsoft.EntityFrameworkCore;
 
 namespace ChoboServer.Application;
 
-public sealed class DashboardApplicationService(ChoboDbContext db)
+public sealed class DashboardApplicationService(ChoboDbContext db, TimeProvider timeProvider)
 {
     public async Task<DashboardDto> GetDashboardAsync(int nextHours = 6, CancellationToken cancellationToken = default)
     {
-        var generatedAt = DateTimeOffset.UtcNow;
+        var generatedAt = timeProvider.GetUtcNow();
         var boundedHours = Math.Clamp(nextHours, 1, 168);
 
         var runningBackupDtos = await db.Backups
@@ -119,7 +119,7 @@ public sealed class DashboardApplicationService(ChoboDbContext db)
 
     public async Task<IReadOnlyDictionary<string, double?>> GetMetricsAsync(CancellationToken cancellationToken = default)
     {
-        var generatedAt = DateTimeOffset.UtcNow;
+        var generatedAt = timeProvider.GetUtcNow();
         var policies = await db.BackupPolicies
             .AsNoTracking()
             .Where(x => !x.IsDeleted)
@@ -337,7 +337,7 @@ internal static class QuartzCronProjection
             Hours.Matches(local.Hour) &&
             Days.Matches(local.Day) &&
             Months.Matches(local.Month) &&
-            DaysOfWeek.Matches(ToQuartzDayOfWeek(local.DayOfWeek)) &&
+            DaysOfWeek.MatchesDayOfWeek(ToQuartzDayOfWeek(local.DayOfWeek)) &&
             Years.Matches(local.Year);
     }
 
@@ -370,7 +370,9 @@ internal static class QuartzCronProjection
             return new CronField(values);
         }
 
-        public bool Matches(int value) => _values.Contains(value) || (value == 1 && (_values.Contains(0) || _values.Contains(7)));
+        public bool Matches(int value) => _values.Contains(value);
+
+        public bool MatchesDayOfWeek(int value) => _values.Contains(value) || (value == 1 && (_values.Contains(0) || _values.Contains(7)));
 
         private static void AddPart(HashSet<int> values, string part, int min, int max, IReadOnlyDictionary<string, int>? aliases)
         {

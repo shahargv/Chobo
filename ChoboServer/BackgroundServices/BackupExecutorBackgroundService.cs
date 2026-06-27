@@ -9,7 +9,7 @@ namespace ChoboServer.BackgroundServices;
 public sealed class BackupExecutorBackgroundService(
     IServiceProvider services,
     IBackupRestoreQueues queues,
-    IOptions<ChoboBackupRestoreOptions> options,
+    IOptionsMonitor<ChoboBackupRestoreOptions> options,
     Serilog.ILogger logger) : BackgroundService
 {
     private readonly Serilog.ILogger _logger = logger.ForContext<BackupExecutorBackgroundService>();
@@ -39,7 +39,7 @@ public sealed class BackupExecutorBackgroundService(
 
     private async Task WaitForQueueCapacityAsync(CancellationToken stoppingToken)
     {
-        var maxActiveQueueItems = options.Value.MaxActiveQueueItems;
+        var maxActiveQueueItems = options.CurrentValue.MaxActiveQueueItems;
         if (maxActiveQueueItems <= 0)
         {
             return;
@@ -57,7 +57,7 @@ public sealed class BackupExecutorBackgroundService(
                 return;
             }
 
-            await Task.Delay(options.Value.PollInterval <= TimeSpan.Zero ? TimeSpan.FromSeconds(2) : options.Value.PollInterval, stoppingToken);
+            await Task.Delay(options.CurrentValue.PollInterval <= TimeSpan.Zero ? TimeSpan.FromSeconds(2) : options.CurrentValue.PollInterval, stoppingToken);
         }
     }
 

@@ -1,6 +1,7 @@
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 
 namespace ChoboServer.Services;
 
@@ -10,6 +11,11 @@ public static class AuditDetails
     {
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
+
+    static AuditDetails()
+    {
+        JsonOptions.Converters.Add(new JsonStringEnumConverter());
+    }
 
     public static object Change(object? previous, object? current) =>
         new { previous, current };

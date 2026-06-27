@@ -10,7 +10,7 @@ namespace ChoboServer.BackgroundServices;
 
 public sealed class BackupSchedulerDispatcherBackgroundService(
     IServiceProvider services,
-    IOptions<ChoboBackupRestoreOptions> options,
+    IOptionsMonitor<ChoboBackupRestoreOptions> options,
     IBackupRestoreQueues queues,
     Serilog.ILogger logger,
     TimeProvider timeProvider) : BackgroundService
@@ -42,7 +42,7 @@ public sealed class BackupSchedulerDispatcherBackgroundService(
                 _logger.Error(ex, "Backup schedule dispatch failed.");
             }
 
-            var interval = options.Value.SchedulerInterval <= TimeSpan.Zero ? TimeSpan.FromMinutes(1) : options.Value.SchedulerInterval;
+            var interval = options.CurrentValue.SchedulerInterval <= TimeSpan.Zero ? TimeSpan.FromMinutes(1) : options.CurrentValue.SchedulerInterval;
             await Task.Delay(interval, stoppingToken);
         }
     }
@@ -58,8 +58,8 @@ public sealed class BackupSchedulerDispatcherBackgroundService(
             .ToListAsync(cancellationToken);
 
         var now = timeProvider.GetUtcNow();
-        var schedulerInterval = options.Value.SchedulerInterval <= TimeSpan.Zero ? TimeSpan.FromMinutes(1) : options.Value.SchedulerInterval;
-        var defaultMissedRunGracePeriod = options.Value.SchedulerMissedRunGracePeriod <= TimeSpan.Zero ? TimeSpan.FromMinutes(5) : options.Value.SchedulerMissedRunGracePeriod;
+        var schedulerInterval = options.CurrentValue.SchedulerInterval <= TimeSpan.Zero ? TimeSpan.FromMinutes(1) : options.CurrentValue.SchedulerInterval;
+        var defaultMissedRunGracePeriod = options.CurrentValue.SchedulerMissedRunGracePeriod <= TimeSpan.Zero ? TimeSpan.FromMinutes(5) : options.CurrentValue.SchedulerMissedRunGracePeriod;
         var recentCutoff = now.Subtract(schedulerInterval);
         foreach (var schedule in schedules)
         {

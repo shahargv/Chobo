@@ -961,3 +961,14 @@ pre, .token-box {
   color: var(--bad);
 }
 
+
+.muted { color: var(--muted); font-size: 12px; }
+.settings-panel table { min-width: 1320px; }
+.settings-section-filter { min-width: 220px; color: var(--muted); font-size: 12px; font-weight: 700; }
+.settings-section-filter select { margin-top: 6px; }
+.setting-key { display: grid; gap: 3px; min-width: 260px; }
+.setting-key span { color: var(--muted); font-size: 12px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.setting-key em { color: #8a5a00; font-size: 12px; font-style: normal; }
+.setting-input { width: 100%; min-width: 180px; }
+.setting-json { min-height: 72px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+td code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; white-space: pre-wrap; }

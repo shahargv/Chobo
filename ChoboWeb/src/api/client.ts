@@ -38,6 +38,10 @@ import type {
   RecoverBackupMetadataFromPathRequest,
   RecoverBackupMetadataScanRequest,
   RestoreDto,
+  RuntimeSettingDto,
+  RuntimeSettingUpdateResult,
+  RuntimeSettingsListDto,
+  RuntimeSettingsReloadResult,
   ServerVersionDto,
   SchemaBackupDto,
   SchemaBackupSummaryDto,
@@ -74,6 +78,11 @@ export class ChoboApiClient {
   dashboard(nextHours = 6) { return this.get<DashboardDto>(`dashboard?nextHours=${nextHours}`); }
   metrics() { return this.get<Record<string, number | null>>("metrics"); }
   metricsJsonText() { return this.requestText("metrics"); }
+  runtimeSettings() { return this.get<RuntimeSettingsListDto>("settings"); }
+  runtimeSetting(key: string) { return this.get<RuntimeSettingDto>(`settings/${encodeURIComponent(key)}`); }
+  setRuntimeSetting(key: string, value: string | null) { return this.put<RuntimeSettingUpdateResult>(`settings/${encodeURIComponent(key)}`, { value }); }
+  unsetRuntimeSetting(key: string) { return this.delete<RuntimeSettingUpdateResult>(`settings/${encodeURIComponent(key)}`); }
+  reloadRuntimeSettings() { return this.post<RuntimeSettingsReloadResult>("settings/reload", {}); }
 
   users() { return this.get<UserDto[]>("users"); }
   addUser(request: CreateUserRequest) { return this.post<CreateUserResponse>("users", request); }

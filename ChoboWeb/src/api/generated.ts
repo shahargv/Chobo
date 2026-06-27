@@ -88,6 +88,12 @@ export interface RestoreTableMappingRequest { backupTableId: string; targetDatab
 export interface RestoreTableShardDto { id: string; restoreTableId: string; backupTableShardId: string; sourceShardNumber: number; targetShardNumber?: number | null; targetShardName?: string | null; targetReplicaNumber?: number | null; targetHost: string; targetPort: number; targetUseTls: boolean; layoutRole: string; restoreDatabase: string; restoreTableName: string; status: RestoreTableStatus; clickHouseOperationId?: string | null; clickHouseStatus?: string | null; warning?: string | null; startedAt?: string | null; completedAt: string; error?: string | null; }
 export interface RestoreTableShardExport { id: string; restoreTableId: string; backupTableShardId: string; sourceShardNumber: number; targetShardNumber?: number | null; targetShardName?: string | null; targetReplicaNumber?: number | null; targetHost: string; targetPort: number; targetUseTls: boolean; layoutRole: string; restoreDatabase: string; restoreTableName: string; status: RestoreTableStatus; clickHouseOperationId?: string | null; clickHouseStatus?: string | null; warning?: string | null; startedAt?: string | null; completedAt: string; error?: string | null; }
 export type RestoreTableStatus = "Queued" | "Running" | "Succeeded" | "PartiallySucceeded" | "Failed" | "Skipped";
+export type RuntimeSettingApplyMode = "Live" | "RestartRequired";
+export interface RuntimeSettingDto { key: string; section: string; name: string; valueType: RuntimeSettingValueType; applyMode: RuntimeSettingApplyMode; isNullable: boolean; isReadOnly: boolean; hasOverlayValue: boolean; isExternallyOverridden: boolean; effectiveValue: string; overlayValue: string; defaultValue: string; warning?: string | null; }
+export interface RuntimeSettingUpdateResult { setting: RuntimeSettingDto; effectiveValueUnchanged: boolean; restartRequired: boolean; }
+export type RuntimeSettingValueType = "String" | "Boolean" | "Integer" | "TimeSpan" | "DateTimeOffset" | "Json";
+export interface RuntimeSettingsListDto { items: RuntimeSettingDto[]; }
+export interface RuntimeSettingsReloadResult { items: RuntimeSettingDto[]; liveCount: number; restartRequiredCount: number; }
 export interface S3TargetSettingsDto { endpoint: string; region: string; bucket: string; pathPrefix?: string | null; forcePathStyle: boolean; }
 export interface SchemaBackupDto { backupId: string; status: BackupRunStatus; contentMode: BackupContentMode; databases: SchemaDatabaseDto[]; }
 export interface SchemaBackupSummaryDto { id: string; status: BackupRunStatus; contentMode: BackupContentMode; backupType: BackupType; sourceClusterId: string; sourceClusterName: string; policyId?: string | null; policyName?: string | null; createdAt: string; endedAt?: string | null; tableCount: number; }
@@ -98,6 +104,7 @@ export interface SelectorPattern { kind: PolicyMatchKind; value: string; }
 export interface ServerVersionDto { productName: string; productVersion: string; apiVersion: number; schemaVersion: number; databaseSchemaVersion: number; }
 export interface StorageConnectionTestResult { targetId: string; targetType: BackupTargetType; succeeded: boolean; message: string; }
 export interface UpdateClusterCredentialsRequest { userName?: string | null; password?: string | null; }
+export interface UpdateRuntimeSettingRequest { value: string; }
 export interface UpsertAccessNodeRequest { host: string; port: number; useTls: boolean; }
 export interface UpsertClusterRequest { name: string; mode: ClusterMode; accessNodes: UpsertAccessNodeRequest[]; userName?: string | null; password?: string | null; backupRestoreMaxDop: number; clickHouseClusterName?: string | null; nodeMaxDopDefault: number; nodeMaxDopOverrides: ClusterNodeMaxDopOverrideDto[]; shardMaxDopDefault: number; shardMaxDopOverrides: ClusterShardMaxDopOverrideDto[]; }
 export interface UpsertPolicyRequest { name: string; sourceClusterId: string; targetId: string; selector: PolicySelector; contentMode: BackupContentMode; retention: BackupRetentionDto; failedBackupRetentionMode: FailedBackupRetentionMode; }
@@ -193,6 +200,12 @@ export const openApiSchemaNames = [
   "RestoreTableShardDto",
   "RestoreTableShardExport",
   "RestoreTableStatus",
+  "RuntimeSettingApplyMode",
+  "RuntimeSettingDto",
+  "RuntimeSettingUpdateResult",
+  "RuntimeSettingValueType",
+  "RuntimeSettingsListDto",
+  "RuntimeSettingsReloadResult",
   "S3TargetSettingsDto",
   "SchemaBackupDto",
   "SchemaBackupSummaryDto",
@@ -203,6 +216,7 @@ export const openApiSchemaNames = [
   "ServerVersionDto",
   "StorageConnectionTestResult",
   "UpdateClusterCredentialsRequest",
+  "UpdateRuntimeSettingRequest",
   "UpsertAccessNodeRequest",
   "UpsertClusterRequest",
   "UpsertPolicyRequest",

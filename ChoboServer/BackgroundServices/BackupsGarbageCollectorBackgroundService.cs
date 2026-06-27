@@ -10,7 +10,7 @@ namespace ChoboServer.BackgroundServices;
 
 public sealed class BackupsGarbageCollectorBackgroundService(
     IServiceProvider services,
-    IOptions<BackupsGarbageCollectorOptions> options,
+    IOptionsMonitor<BackupsGarbageCollectorOptions> options,
     TimeProvider timeProvider,
     Serilog.ILogger logger) : BackgroundService
 {
@@ -43,7 +43,7 @@ public sealed class BackupsGarbageCollectorBackgroundService(
                 _logger.Error(ex, "Backup garbage collection failed.");
             }
 
-            var interval = options.Value.Interval <= TimeSpan.Zero ? TimeSpan.FromHours(1) : options.Value.Interval;
+            var interval = options.CurrentValue.Interval <= TimeSpan.Zero ? TimeSpan.FromHours(1) : options.CurrentValue.Interval;
             await Task.Delay(interval, stoppingToken);
         }
     }
@@ -198,7 +198,7 @@ public sealed class BackupsGarbageCollectorBackgroundService(
     {
         var cleanedCount = 0;
         var failedCount = 0;
-        await ForEachAsync(pending, options.Value.MaxDop, async pendingCleanup =>
+        await ForEachAsync(pending, options.CurrentValue.MaxDop, async pendingCleanup =>
         {
             try
             {

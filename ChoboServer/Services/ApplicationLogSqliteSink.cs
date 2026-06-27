@@ -1,5 +1,6 @@
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 using Serilog.Core;
 using Serilog.Events;
@@ -65,6 +66,11 @@ public sealed class ApplicationLogSqliteSink(string dataDirectory) : ILogEventSi
     {
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
+
+    static ApplicationLogSqliteSink()
+    {
+        JsonOptions.Converters.Add(new JsonStringEnumConverter());
+    }
 
     private static object? ToJsonValue(LogEventPropertyValue value) =>
         value switch
