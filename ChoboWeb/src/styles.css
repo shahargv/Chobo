@@ -281,6 +281,28 @@ pre, .token-box {
 .summary-row { display: flex; gap: 10px; align-items: start; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-muted); }
 .summary-row.valid { border-color: rgba(20, 122, 82, .45); background: rgba(20, 122, 82, .06); }
 .summary-row.invalid { border-color: rgba(180, 35, 24, .45); background: rgba(180, 35, 24, .06); }
+.failure-summary-row {
+  align-items: center;
+}
+.failure-summary-row > div {
+  min-width: 0;
+  flex: 1;
+}
+.error-preview {
+  display: inline;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.error-expand-button {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  margin-left: 8px;
+  padding: 0 4px;
+  font-weight: 700;
+}
 .field-error { color: var(--bad) !important; }
 .data-grid {
   overflow: hidden;
@@ -551,6 +573,9 @@ pre, .token-box {
 }
 .backup-detail-drawer .detail-list strong {
   overflow-wrap: anywhere;
+}
+.backup-detail-drawer .detail-list .detail-wide {
+  grid-column: 1 / -1;
 }
 .backup-completion {
   display: inline-flex;

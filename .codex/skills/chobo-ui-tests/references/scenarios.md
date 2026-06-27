@@ -97,6 +97,14 @@ Open Logs and Audit. Test recent records, search/filter affordances, time window
 ## failure
 
 Use one intentionally bad value at a time, such as `http://backup-s3:9999` for storage or `missing-clickhouse:9000` for cluster. Verify the UI gives a clear failure message, remains recoverable, and screenshots/report capture the failure.
+
+The scenario also seeds a failed scheduled backup through the test-only hook and verifies dashboard failure UX:
+
+- Recent failures shows when the failure happened, not the raw exception.
+- The info button opens the failed backup detail drawer.
+- Backup detail failure text is shortened by default.
+- Expand opens the full failure text in a modal.
+
 ## large-table
 
 Prerequisite: fresh `start-ui-env.ps1 -Scenario large-table` environment. This setup loads and optimizes the ClickHouse public OnTime dataset years 2000-2010, so it is intentionally slow and should not be part of normal UI smoke runs.

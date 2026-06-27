@@ -1,14 +1,17 @@
 import { NavLink } from "react-router-dom";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Activity, CheckCircle2, Circle, ShieldCheck } from "lucide-react";
+import { Activity, CheckCircle2, Circle, Info, ShieldCheck } from "lucide-react";
+import type { BackupDto } from "../api/generated";
 import { useApi } from "../api-context";
-import { DataTable, Empty, Page, Stat, Status } from "../components/ui";
+import { DataTable, Empty, ExpandableErrorText, Page, Stat, Status } from "../components/ui";
+import { BackupDrawer } from "./BackupsPage";
 import { formatCompletionTime, formatTime } from "../utils/format";
 
 export function Dashboard() {
   const { api } = useApi();
   const [futureWindowHours, setFutureWindowHours] = useState(6);
+  const [selectedBackupId, setSelectedBackupId] = useState<string | null>(null);
   const dashboard = useQuery({ queryKey: ["dashboard", futureWindowHours], queryFn: () => api.dashboard(futureWindowHours) });
   const clusters = useQuery({ queryKey: ["clusters"], queryFn: () => api.clusters() });
   const targets = useQuery({ queryKey: ["targets"], queryFn: () => api.targets() });
@@ -19,9 +22,10 @@ export function Dashboard() {
   const running = dashboard.data?.runningBackups ?? [];
   const schedules = dashboard.data?.schedules ?? [];
   const failures = schedules.filter((schedule) => schedule.lastRunFailureReason);
-  const latestBackups = [...(backups.data ?? [])]
-    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
-    .slice(0, 8);
+  const sortedBackups = [...(backups.data ?? [])]
+    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+  const latestBackups = sortedBackups.slice(0, 8);
+  const latestBackupByScheduleId = latestBackupBySchedule(sortedBackups);
   const onboardingIsLoading = [clusters, targets, policies, allSchedules, backups, restores].some((query) => query.isLoading);
   const onboarding = onboardingIsLoading ? [] : buildOnboardingSteps({
     clusterCount: clusters.data?.filter((x) => !x.isDeleted).length ?? 0,
@@ -76,7 +80,7 @@ export function Dashboard() {
               <td>{formatTime(backup.startedAt)}</td>
               <td>{backup.tableCount}</td>
               <td>{backup.succeededShardCount}/{backup.shardCount} ok · {backup.failedShardCount} failed · {backup.runningShardCount} running</td>
-              <td>{backup.failureReason ?? ""}</td>
+              <td>{backup.failureReason ? <ExpandableErrorText text={backup.failureReason} title={`Backup ${backup.backupId} failure`} /> : ""}</td>
             </tr>
           ))}
         </DataTable>
@@ -92,7 +96,7 @@ export function Dashboard() {
                 <td>{formatCompletionTime(backup.endedAt ?? backup.deletedAt, backup.startedAt, backup.createdAt)}</td>
                 <td>{backup.backupType}</td>
                 <td>{backup.tableCount}</td>
-                <td>{backup.failureReason ?? backup.error ?? ""}</td>
+                <td>{backup.failureReason || backup.error ? <ExpandableErrorText text={backup.failureReason ?? backup.error} title={`Backup ${backup.id} failure`} /> : ""}</td>
               </tr>
             ))}
           </DataTable>
@@ -100,19 +104,31 @@ export function Dashboard() {
         <div>
           <h2>Recent failures</h2>
           <div className="stack">
-            {failures.length === 0 ? <Empty text="No schedule failures in the current dashboard window." /> : failures.map((failure) => (
-              <div className="summary-row" key={failure.scheduleId}>
+            {failures.length === 0 ? <Empty text="No schedule failures in the current dashboard window." /> : failures.map((failure) => {
+              const backup = latestBackupByScheduleId.get(failure.scheduleId);
+              return <div className="summary-row failure-summary-row" key={failure.scheduleId}>
                 <Status value={failure.lastRunStatus ?? "Failed"} />
-                <div><strong>{failure.scheduleName}</strong><span>{failure.lastRunFailureReason}</span></div>
-              </div>
-            ))}
+                <div><strong>{failure.scheduleName}</strong><span>Failed {formatTime(failure.lastRunAt)}</span></div>
+                {backup && <button type="button" className="ghost icon-button" title="Open backup details" aria-label={`Open backup details for ${failure.scheduleName ?? failure.scheduleId}`} onClick={() => setSelectedBackupId(backup.id)}><Info size={16} /></button>}
+              </div>;
+            })}
           </div>
         </div>
       </section>
+      {selectedBackupId && <BackupDrawer backupId={selectedBackupId} onClose={() => setSelectedBackupId(null)} onOpenBackup={setSelectedBackupId} />}
     </Page>
   );
 }
 
+
+function latestBackupBySchedule(backups: BackupDto[]) {
+  const byScheduleId = new Map<string, BackupDto>();
+  for (const backup of backups) {
+    if (!backup.scheduleId || byScheduleId.has(backup.scheduleId)) continue;
+    byScheduleId.set(backup.scheduleId, backup);
+  }
+  return byScheduleId;
+}
 function OnboardingLoading() {
   return (
     <section className="panel onboarding-panel">
