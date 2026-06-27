@@ -719,6 +719,34 @@ public sealed class BackupRestoreExecutionTests
         Assert.Equal(BackupType.Full, shardTwo.EffectiveBackupType);
         Assert.Null(shardTwo.ParentFullBackupTableShardId);
         Assert.StartsWith("backups/full/", shardTwo.S3Path);
+
+        var laterIncremental = new BackupEntity
+        {
+            TriggerType = BackupTriggerType.Manual,
+            Status = BackupRunStatus.Queued,
+            BackupType = BackupType.Incremental,
+            SourceClusterId = fixture.SourceClusterId,
+            TargetId = fixture.TargetId,
+            PolicyId = policy.Id
+        };
+        fixture.Db.Backups.Add(laterIncremental);
+        await fixture.Db.SaveChangesAsync();
+        await fixture.RunBackupAsync(laterIncremental.Id);
+
+        fixture.Db.ChangeTracker.Clear();
+        var laterTable = await fixture.Db.BackupTables.Include(x => x.Shards).SingleAsync(x => x.BackupId == laterIncremental.Id);
+        var laterShardOne = Assert.Single(laterTable.Shards, x => x.SourceShardNumber == 1);
+        var laterShardTwo = Assert.Single(laterTable.Shards, x => x.SourceShardNumber == 2);
+        Assert.Equal(BackupType.Incremental, laterTable.EffectiveBackupType);
+        Assert.Equal(BackupType.Incremental, laterShardOne.EffectiveBackupType);
+        Assert.Equal(shardOne.ParentFullBackupTableShardId, laterShardOne.ParentFullBackupTableShardId);
+        Assert.Equal(full.Id, laterShardOne.ParentFullBackupId);
+        Assert.Equal(BackupType.Incremental, laterShardTwo.EffectiveBackupType);
+        Assert.Equal(shardTwo.Id, laterShardTwo.ParentFullBackupTableShardId);
+        Assert.Equal(incremental.Id, laterShardTwo.ParentFullBackupId);
+
+        var detail = await fixture.Services.GetRequiredService<BackupApplicationService>().GetAsync(laterIncremental.Id, includeTables: false);
+        Assert.Equal(new[] { full.Id, incremental.Id }.OrderBy(x => x).ToList(), detail!.RelatedFullBackupIds.OrderBy(x => x).ToList());
     }
 
     [Fact]
