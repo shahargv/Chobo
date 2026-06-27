@@ -40,7 +40,9 @@ public sealed class PolicyApplicationService(
             IncrementalRetentionMinutes = request.Retention?.IncrementalRetentionMinutes,
             MinBackupsToKeep = request.Retention?.MinBackupsToKeep ?? 0,
             MinFullBackupsToKeep = request.Retention?.MinFullBackupsToKeep ?? 0,
-            FailedBackupRetentionMode = request.FailedBackupRetentionMode
+            FailedBackupRetentionMode = request.FailedBackupRetentionMode,
+            ClickHouseBackupSettingsJson = ClickHouseAdvancedSettings.Serialize(request.ClickHouseBackupSettings, ClickHouseAdvancedSettingsKind.Backup),
+            ClickHouseRestoreSettingsJson = ClickHouseAdvancedSettings.Serialize(request.ClickHouseRestoreSettings, ClickHouseAdvancedSettingsKind.Restore)
         };
 
         await policies.AddAsync(policy);
@@ -72,6 +74,14 @@ public sealed class PolicyApplicationService(
         policy.MinBackupsToKeep = request.Retention?.MinBackupsToKeep ?? 0;
         policy.MinFullBackupsToKeep = request.Retention?.MinFullBackupsToKeep ?? 0;
         policy.FailedBackupRetentionMode = request.FailedBackupRetentionMode;
+        if (request.ClickHouseBackupSettings is not null)
+        {
+            policy.ClickHouseBackupSettingsJson = ClickHouseAdvancedSettings.Serialize(request.ClickHouseBackupSettings, ClickHouseAdvancedSettingsKind.Backup);
+        }
+        if (request.ClickHouseRestoreSettings is not null)
+        {
+            policy.ClickHouseRestoreSettingsJson = ClickHouseAdvancedSettings.Serialize(request.ClickHouseRestoreSettings, ClickHouseAdvancedSettingsKind.Restore);
+        }
         policy.UpdatedAt = DateTimeOffset.UtcNow;
         await unitOfWork.SaveChangesAsync();
 
@@ -199,6 +209,8 @@ public sealed class PolicyApplicationService(
                 throw new ArgumentException("MinFullBackupsToKeep must be zero or greater.");
             }
         }
+        ClickHouseAdvancedSettings.Normalize(request.ClickHouseBackupSettings, ClickHouseAdvancedSettingsKind.Backup);
+        ClickHouseAdvancedSettings.Normalize(request.ClickHouseRestoreSettings, ClickHouseAdvancedSettingsKind.Restore);
         foreach (var rule in request.Selector.Rules)
         {
             ValidatePattern(rule.Database, "Database");
@@ -222,6 +234,8 @@ public sealed class PolicyApplicationService(
                 ? null
                 : new BackupRetentionDto(x.FullRetentionMinutes, x.IncrementalRetentionMinutes, x.MinBackupsToKeep, x.MinFullBackupsToKeep),
             x.FailedBackupRetentionMode,
+            ClickHouseAdvancedSettings.Deserialize(x.ClickHouseBackupSettingsJson, ClickHouseAdvancedSettingsKind.Backup),
+            ClickHouseAdvancedSettings.Deserialize(x.ClickHouseRestoreSettingsJson, ClickHouseAdvancedSettingsKind.Restore),
             x.IsSystemDefault,
             x.IsDeleted,
             x.CreatedAt,

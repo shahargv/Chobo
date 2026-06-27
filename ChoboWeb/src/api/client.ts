@@ -4,6 +4,8 @@ import type {
   PagedResultDto,
   AuditEntryDto,
   BackupDto,
+  BackupSettingsPreviewRequest,
+  ClickHouseSettingsPreviewDto,
   BackupGarbageCollectorQueueItemDto,
   BackupGarbageCollectorStatusDto,
   BackupMetadataRecoveryResult,
@@ -26,6 +28,7 @@ import type {
   DashboardDto,
   ExportEnvelope,
   InitiateRestoreRequest,
+  RestoreSettingsPreviewRequest,
   InstallRequest,
   InstallResponse,
   InstallStatusDto,
@@ -127,6 +130,7 @@ export class ChoboApiClient {
   }
   backup(id: string, options: { includeTables?: boolean } = {}) { return this.get<BackupDto>(`backups/${id}${query({ includeTables: options.includeTables })}`); }
   manualBackup(request: ManualBackupRequest) { return this.post<BackupDto>("backups/manual", request); }
+  backupSettingsPreview(request: BackupSettingsPreviewRequest) { return this.post<ClickHouseSettingsPreviewDto>("backups/settings-preview", request); }
   pinBackup(id: string) { return this.post<BackupDto>(`backups/${id}/pin`, {}); }
   unpinBackup(id: string) { return this.post<BackupDto>(`backups/${id}/unpin`, {}); }
   deleteBackup(id: string, options: { force?: boolean; confirmDestructive: true }) { return this.delete<BackupDto>(`backups/${id}${query({ force: options.force ? true : undefined, confirmDestructive: true })}`); }
@@ -145,6 +149,7 @@ export class ChoboApiClient {
   restores() { return this.get<RestoreDto[]>("restores"); }
   restore(id: string) { return this.get<RestoreDto>(`restores/${id}`); }
   initiateRestore(request: InitiateRestoreRequest) { return this.post<RestoreDto>("restores/initiate", request); }
+  restoreSettingsPreview(request: RestoreSettingsPreviewRequest) { return this.post<ClickHouseSettingsPreviewDto>("restores/settings-preview", request); }
   cancelRestore(id: string) { return this.post<RestoreDto>(`restores/${id}/cancel`, {}); }
 
   queue(filters: { kind?: BackupRestoreQueueKind; status?: BackupRestoreQueueStatus | "active" | "all"; limit?: number } = {}) { return this.get<BackupRestoreQueueItemDto[]>(`queue${query(filters)}`); }

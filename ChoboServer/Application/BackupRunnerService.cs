@@ -96,20 +96,17 @@ public sealed class BackupRunnerService(
                 : null;
             backup.Error = backup.FailureReason;
             await db.SaveChangesAsync(cancellationToken);
-            if (backup.ContentMode == BackupContentMode.SchemaAndData)
+            var auditAction = backup.Status == BackupRunStatus.Succeeded ? "succeeded" : backup.Status == BackupRunStatus.PartiallySucceeded ? "partially-succeeded" : "failed";
+            if (backup.ContentMode == BackupContentMode.SchemaAndData && backup.Status == BackupRunStatus.Succeeded)
             {
-                if (backup.Status == BackupRunStatus.Succeeded)
-                {
-                    await TryWriteFinalManifestAsync(backup, tableCount, cancellationToken);
-                }
-                else
-                {
-                    await TryWriteFailedManifestAsync(backup.Id);
-                }
+                await TryWriteFinalManifestAsync(backup, tableCount, cancellationToken);
             }
             LogBackupCompletion(backup);
-            var auditAction = backup.Status == BackupRunStatus.Succeeded ? "succeeded" : backup.Status == BackupRunStatus.PartiallySucceeded ? "partially-succeeded" : "failed";
             await audit.RecordAsync(auditAction, AuditEntityType.Backup, backup.Id.ToString(), new { tableCount, backup.FailureReason });
+            if (backup.ContentMode == BackupContentMode.SchemaAndData && backup.Status != BackupRunStatus.Succeeded)
+            {
+                await TryWriteFailedManifestAsync(backup.Id);
+            }
         }
         catch (Exception ex)
         {
@@ -300,7 +297,8 @@ public sealed class BackupRunnerService(
             }
 
             var baseBackupPath = await GetParentTablePathAsync(table.ParentFullBackupTableId, cancellationToken);
-            var operation = await clickHouse.StartBackupAsync(backup.SourceCluster!, backup.Target!, table, baseBackupPath, cancellationToken);
+            var settings = ClickHouseAdvancedSettings.Deserialize(backup.ClickHouseBackupSettingsJson, ClickHouseAdvancedSettingsKind.Backup);
+            var operation = await clickHouse.StartBackupAsync(backup.SourceCluster!, backup.Target!, table, baseBackupPath, settings, cancellationToken);
             table.ClickHouseOperationId = operation.OperationId;
             table.ClickHouseStatus = operation.Status;
             await db.SaveChangesAsync(cancellationToken);
@@ -638,7 +636,8 @@ public sealed class BackupRunnerService(
             }
 
             var baseBackupPath = await GetParentShardPathAsync(scopedDb, shard.ParentFullBackupTableShardId, cancellationToken);
-            var operation = await scopedClickHouse.StartBackupShardAsync(endpoint, backup.SourceCluster!, backup.Target!, table, shard, baseBackupPath, cancellationToken);
+            var settings = ClickHouseAdvancedSettings.Deserialize(backup.ClickHouseBackupSettingsJson, ClickHouseAdvancedSettingsKind.Backup);
+            var operation = await scopedClickHouse.StartBackupShardAsync(endpoint, backup.SourceCluster!, backup.Target!, table, shard, baseBackupPath, settings, cancellationToken);
             shard.ClickHouseOperationId = operation.OperationId;
             shard.ClickHouseStatus = operation.Status;
             table.ClickHouseOperationId ??= operation.OperationId;

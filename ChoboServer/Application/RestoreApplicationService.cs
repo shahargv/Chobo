@@ -21,6 +21,22 @@ public sealed class RestoreApplicationService(
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
     private readonly Serilog.ILogger _logger = logger.ForContext<RestoreApplicationService>();
 
+    public async Task<ClickHouseSettingsPreviewDto> PreviewSettingsAsync(RestoreSettingsPreviewRequest request, CancellationToken cancellationToken = default)
+    {
+        var backup = await db.Backups.AsNoTracking().FirstOrDefaultAsync(x => x.Id == request.BackupId, cancellationToken)
+            ?? throw new ArgumentException("Backup was not found.");
+        var targetCluster = await db.ClickHouseClusters.AsNoTracking().FirstOrDefaultAsync(x => x.Id == request.TargetClusterId && !x.IsDeleted, cancellationToken)
+            ?? throw new ArgumentException("Target cluster was not found.");
+        BackupPolicyEntity? policy = null;
+        if (backup.PolicyId is { } policyId)
+        {
+            policy = await db.BackupPolicies.AsNoTracking().FirstOrDefaultAsync(x => x.Id == policyId && !x.IsDeleted, cancellationToken);
+        }
+
+        return ClickHouseAdvancedSettings.MergeWithSources(
+            ("cluster", ClickHouseAdvancedSettings.Deserialize(targetCluster.ClickHouseRestoreSettingsJson, ClickHouseAdvancedSettingsKind.Restore)),
+            ("policy", policy is null ? ClickHouseAdvancedSettings.Empty : ClickHouseAdvancedSettings.Deserialize(policy.ClickHouseRestoreSettingsJson, ClickHouseAdvancedSettingsKind.Restore)));
+    }
     public async Task<RestoreDto> InitiateAsync(InitiateRestoreRequest request, CancellationToken cancellationToken = default)
     {
         var backup = await db.Backups
@@ -102,6 +118,10 @@ public sealed class RestoreApplicationService(
         }
 
         var targetRepresentatives = SelectShardRepresentatives(await clickHouse.GetTopologyAsync(targetCluster, cancellationToken));
+        var inheritedSettings = await PreviewSettingsAsync(new RestoreSettingsPreviewRequest(request.BackupId, request.TargetClusterId), cancellationToken);
+        var effectiveSettings = request.ClickHouseRestoreSettings is null
+            ? inheritedSettings.Settings
+            : ClickHouseAdvancedSettings.Normalize(request.ClickHouseRestoreSettings, ClickHouseAdvancedSettingsKind.Restore);
 
         var restore = new RestoreEntity
         {
@@ -112,7 +132,8 @@ public sealed class RestoreApplicationService(
             Layout = layout,
             SourceShard = request.SourceShard ?? (request.SourceShards?.Count == 1 ? request.SourceShards[0] : null),
             TargetShard = request.TargetShard,
-            RequestJson = JsonSerializer.Serialize(request, JsonOptions),
+            RequestJson = JsonSerializer.Serialize(request with { ClickHouseRestoreSettings = effectiveSettings }, JsonOptions),
+            ClickHouseRestoreSettingsJson = ClickHouseAdvancedSettings.SerializeNormalized(effectiveSettings),
             RequestedByUserId = actor.UserId,
             RequestedByName = actor.ActorName
         };
@@ -454,6 +475,3 @@ public sealed class RestoreApplicationService(
         return options;
     }
 }
-
-
-

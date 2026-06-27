@@ -637,6 +637,87 @@ public sealed class ChoboFoundationTests
     }
 
     [Fact]
+    public async Task Cluster_update_preserves_clickhouse_settings_when_omitted_and_clears_with_explicit_empty_object()
+    {
+        await using var factory = CreateFactory();
+        var client = AuthenticatedClient(factory);
+        var created = await Post<ClusterDto>(client, "/api/v1/clusters", new UpsertClusterRequest(
+            "prod-settings",
+            ClusterMode.SingleInstance,
+            [new UpsertAccessNodeRequest("clickhouse-1")],
+            null,
+            null,
+            3,
+            ClickHouseBackupSettings: Settings(("backup_threads", 4)),
+            ClickHouseRestoreSettings: Settings(("restore_threads", 2))));
+
+        var updated = await Put<ClusterDto>(client, $"/api/v1/clusters/{created.Id}", new UpsertClusterRequest(
+            "prod-settings-renamed",
+            ClusterMode.SingleInstance,
+            [new UpsertAccessNodeRequest("clickhouse-2")],
+            null,
+            null,
+            3));
+
+        Assert.Equal(4, updated.ClickHouseBackupSettings["backup_threads"].GetInt32());
+        Assert.Equal(2, updated.ClickHouseRestoreSettings["restore_threads"].GetInt32());
+
+        var cleared = await Put<ClusterDto>(client, $"/api/v1/clusters/{created.Id}", new UpsertClusterRequest(
+            "prod-settings-cleared",
+            ClusterMode.SingleInstance,
+            [new UpsertAccessNodeRequest("clickhouse-2")],
+            null,
+            null,
+            3,
+            ClickHouseBackupSettings: new Dictionary<string, JsonElement>(),
+            ClickHouseRestoreSettings: new Dictionary<string, JsonElement>()));
+
+        Assert.Empty(cleared.ClickHouseBackupSettings);
+        Assert.Empty(cleared.ClickHouseRestoreSettings);
+    }
+
+    [Fact]
+    public async Task Policy_update_preserves_clickhouse_settings_when_omitted_and_clears_with_explicit_empty_object()
+    {
+        await using var factory = CreateFactory();
+        var client = AuthenticatedClient(factory);
+        var cluster = await Post<ClusterDto>(client, "/api/v1/clusters", new UpsertClusterRequest(
+            "policy-source",
+            ClusterMode.SingleInstance,
+            [new UpsertAccessNodeRequest("clickhouse-1")],
+            null,
+            null,
+            3));
+        var target = await Post<BackupTargetDto>(client, "/api/v1/targets/s3", new UpsertS3TargetRequest("s3", "http://minio:9000", "us-east-1", "bucket", null, true, null, null));
+        var created = await Post<BackupPolicyDto>(client, "/api/v1/policies", new UpsertPolicyRequest(
+            "policy-settings",
+            cluster.Id,
+            target.Id,
+            PolicySelector.Empty,
+            ClickHouseBackupSettings: Settings(("backup_threads", 4)),
+            ClickHouseRestoreSettings: Settings(("restore_threads", 2))));
+
+        var updated = await Put<BackupPolicyDto>(client, $"/api/v1/policies/{created.Id}", new UpsertPolicyRequest(
+            "policy-settings-renamed",
+            cluster.Id,
+            target.Id,
+            PolicySelector.Empty));
+
+        Assert.Equal(4, updated.ClickHouseBackupSettings["backup_threads"].GetInt32());
+        Assert.Equal(2, updated.ClickHouseRestoreSettings["restore_threads"].GetInt32());
+
+        var cleared = await Put<BackupPolicyDto>(client, $"/api/v1/policies/{created.Id}", new UpsertPolicyRequest(
+            "policy-settings-cleared",
+            cluster.Id,
+            target.Id,
+            PolicySelector.Empty,
+            ClickHouseBackupSettings: new Dictionary<string, JsonElement>(),
+            ClickHouseRestoreSettings: new Dictionary<string, JsonElement>()));
+
+        Assert.Empty(cleared.ClickHouseBackupSettings);
+        Assert.Empty(cleared.ClickHouseRestoreSettings);
+    }
+    [Fact]
     public async Task Users_can_add_list_and_deactivate_named_access_tokens()
     {
         await using var factory = CreateFactory();
@@ -1774,6 +1855,16 @@ public sealed class ChoboFoundationTests
         return client;
     }
 
+    private static IReadOnlyDictionary<string, JsonElement> Settings(params (string Name, object Value)[] settings)
+    {
+        var result = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (name, value) in settings)
+        {
+            result[name] = JsonSerializer.SerializeToElement(value, JsonOptions);
+        }
+
+        return result;
+    }
     private static async Task<T> Post<T>(HttpClient client, string path, object body)
     {
         var response = await client.PostAsJsonAsync(path, body, JsonOptions);

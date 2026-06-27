@@ -613,6 +613,54 @@
         }
       }
     },
+    "/api/v1/backups/settings-preview": {
+      "post": {
+        "tags": [
+          "Backups"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BackupSettingsPreviewRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BackupSettingsPreviewRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/BackupSettingsPreviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClickHouseSettingsPreviewDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClickHouseSettingsPreviewDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClickHouseSettingsPreviewDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/backups": {
       "get": {
         "tags": [
@@ -2048,6 +2096,54 @@
               "text/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RestoreDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/restores/settings-preview": {
+      "post": {
+        "tags": [
+          "Restores"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreSettingsPreviewRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreSettingsPreviewRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreSettingsPreviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClickHouseSettingsPreviewDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClickHouseSettingsPreviewDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClickHouseSettingsPreviewDto"
                 }
               }
             }
@@ -3651,6 +3747,11 @@
             "format": "int64",
             "nullable": true
           },
+          "clickHouseBackupSettings": {
+            "type": "object",
+            "additionalProperties": { },
+            "nullable": true
+          },
           "relatedFullBackupIds": {
             "type": "array",
             "items": {
@@ -3790,6 +3891,11 @@
           "deletionAttemptCount": {
             "type": "integer",
             "format": "int32"
+          },
+          "clickHouseBackupSettings": {
+            "type": "object",
+            "additionalProperties": { },
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -3977,6 +4083,16 @@
           "failedBackupRetentionMode": {
             "$ref": "#/components/schemas/FailedBackupRetentionMode"
           },
+          "clickHouseBackupSettings": {
+            "type": "object",
+            "additionalProperties": { },
+            "nullable": true
+          },
+          "clickHouseRestoreSettings": {
+            "type": "object",
+            "additionalProperties": { },
+            "nullable": true
+          },
           "isSystemDefault": {
             "type": "boolean"
           },
@@ -4030,6 +4146,16 @@
           },
           "failedBackupRetentionMode": {
             "$ref": "#/components/schemas/FailedBackupRetentionMode"
+          },
+          "clickHouseBackupSettings": {
+            "type": "object",
+            "additionalProperties": { },
+            "nullable": true
+          },
+          "clickHouseRestoreSettings": {
+            "type": "object",
+            "additionalProperties": { },
+            "nullable": true
           },
           "isSystemDefault": {
             "type": "boolean"
@@ -4353,6 +4479,22 @@
           "deletedAt": {
             "type": "string",
             "format": "date-time",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "BackupSettingsPreviewRequest": {
+        "type": "object",
+        "properties": {
+          "clusterId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "policyId": {
+            "type": "string",
+            "format": "uuid",
             "nullable": true
           }
         },
@@ -4900,6 +5042,39 @@
         },
         "additionalProperties": false
       },
+      "ClickHouseSettingSourceDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "value": { },
+          "source": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "ClickHouseSettingsPreviewDto": {
+        "type": "object",
+        "properties": {
+          "settings": {
+            "type": "object",
+            "additionalProperties": { },
+            "nullable": true
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClickHouseSettingSourceDto"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
       "ClusterConnectionTestResult": {
         "type": "object",
         "properties": {
@@ -4966,6 +5141,16 @@
           },
           "clickHouseClusterName": {
             "type": "string",
+            "nullable": true
+          },
+          "clickHouseBackupSettings": {
+            "type": "object",
+            "additionalProperties": { },
+            "nullable": true
+          },
+          "clickHouseRestoreSettings": {
+            "type": "object",
+            "additionalProperties": { },
             "nullable": true
           },
           "isDeleted": {
@@ -5051,6 +5236,16 @@
             "items": {
               "$ref": "#/components/schemas/ClusterShardMaxDopOverrideDto"
             },
+            "nullable": true
+          },
+          "clickHouseBackupSettings": {
+            "type": "object",
+            "additionalProperties": { },
+            "nullable": true
+          },
+          "clickHouseRestoreSettings": {
+            "type": "object",
+            "additionalProperties": { },
             "nullable": true
           },
           "isDeleted": {
@@ -5598,6 +5793,11 @@
           },
           "confirmDestructive": {
             "type": "boolean"
+          },
+          "clickHouseRestoreSettings": {
+            "type": "object",
+            "additionalProperties": { },
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -5668,6 +5868,11 @@
           },
           "schemaOnly": {
             "type": "boolean"
+          },
+          "clickHouseBackupSettings": {
+            "type": "object",
+            "additionalProperties": { },
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -5961,6 +6166,11 @@
             "type": "string",
             "nullable": true
           },
+          "clickHouseRestoreSettings": {
+            "type": "object",
+            "additionalProperties": { },
+            "nullable": true
+          },
           "tables": {
             "type": "array",
             "items": {
@@ -6047,6 +6257,11 @@
           "failureReason": {
             "type": "string",
             "nullable": true
+          },
+          "clickHouseRestoreSettings": {
+            "type": "object",
+            "additionalProperties": { },
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -6069,6 +6284,20 @@
           "Canceled"
         ],
         "type": "string"
+      },
+      "RestoreSettingsPreviewRequest": {
+        "type": "object",
+        "properties": {
+          "backupId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "targetClusterId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
       },
       "RestoreTableDto": {
         "type": "object",
@@ -6903,6 +7132,16 @@
               "$ref": "#/components/schemas/ClusterShardMaxDopOverrideDto"
             },
             "nullable": true
+          },
+          "clickHouseBackupSettings": {
+            "type": "object",
+            "additionalProperties": { },
+            "nullable": true
+          },
+          "clickHouseRestoreSettings": {
+            "type": "object",
+            "additionalProperties": { },
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -6934,6 +7173,16 @@
           },
           "failedBackupRetentionMode": {
             "$ref": "#/components/schemas/FailedBackupRetentionMode"
+          },
+          "clickHouseBackupSettings": {
+            "type": "object",
+            "additionalProperties": { },
+            "nullable": true
+          },
+          "clickHouseRestoreSettings": {
+            "type": "object",
+            "additionalProperties": { },
+            "nullable": true
           }
         },
         "additionalProperties": false

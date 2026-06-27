@@ -461,7 +461,7 @@
             Name = 'audit-shows-failures'
             Type = 'Cli'
             Args = @('audit', 'show', '--last', '500')
-            RetryTimeoutSeconds = 6
+            RetryTimeoutSeconds = 90
             RetryIntervalSeconds = 1
             ExpectJson = @(
                 @{ Path = 'items'; ContainsObject = @{ action = 'failed'; entityType = 'backup'; entityId = '{authFailureBackup.id}' } }

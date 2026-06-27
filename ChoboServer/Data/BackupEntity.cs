@@ -18,6 +18,7 @@ public sealed class BackupEntity
     public Guid? ScheduleId { get; set; }
     public BackupScheduleEntity? Schedule { get; set; }
     public string? ManualRequestJson { get; set; }
+    public string ClickHouseBackupSettingsJson { get; set; } = "{}";
     public Guid? RequestedByUserId { get; set; }
     public string RequestedByName { get; set; } = "system";
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
@@ -38,4 +39,3 @@ public sealed class BackupEntity
     public int DeletionAttemptCount { get; set; }
     public List<BackupTableEntity> Tables { get; set; } = [];
 }
-

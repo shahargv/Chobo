@@ -5,6 +5,7 @@ import { CalendarClock, Copy, ListFilter, Play, Save, X } from "lucide-react";
 import type { BackupContentMode, BackupPolicyDto, BackupType, FailedBackupRetentionMode, PolicyMatchKind, PolicySelector, PolicySelectorAction, PolicySelectorRule, UpsertPolicyRequest } from "../api/generated";
 import { useApi } from "../api-context";
 import { DataTable, Input, Page, Select } from "../components/ui";
+import { ClickHouseAdvancedSettingsEditor, type ClickHouseSettings } from "../components/ClickHouseAdvancedSettingsEditor";
 import { emptySelector } from "../policies";
 import { move } from "../utils/arrays";
 import { nameOf } from "../utils/format";
@@ -19,12 +20,12 @@ export function Policies() {
   const [editing, setEditing] = useState<BackupPolicyDto | null>(null);
   const [createdPolicy, setCreatedPolicy] = useState<BackupPolicyDto | null>(null);
   const [runPolicyTarget, setRunPolicyTarget] = useState<BackupPolicyDto | null>(null);
-  const defaultPolicyDraft = (): UpsertPolicyRequest => ({ name: "", sourceClusterId: "", targetId: "", selector: emptySelector, contentMode: "SchemaAndData", retention: { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 }, failedBackupRetentionMode: "KeepAndExcludeFromMinBackupsToKeep" });
+  const defaultPolicyDraft = (): UpsertPolicyRequest => ({ name: "", sourceClusterId: "", targetId: "", selector: emptySelector, contentMode: "SchemaAndData", retention: { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 }, failedBackupRetentionMode: "KeepAndExcludeFromMinBackupsToKeep", clickHouseBackupSettings: {}, clickHouseRestoreSettings: {} });
   const [draft, setDraft] = useState<UpsertPolicyRequest>(() => defaultPolicyDraft());
   const editPolicy = (policy: BackupPolicyDto) => {
     setEditing(policy);
     setCreatedPolicy(null);
-    setDraft({ name: policy.name, sourceClusterId: policy.sourceClusterId, targetId: policy.targetId ?? "", selector: policy.selector, contentMode: policy.contentMode, retention: policy.retention ?? { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 }, failedBackupRetentionMode: policy.failedBackupRetentionMode });
+    setDraft({ name: policy.name, sourceClusterId: policy.sourceClusterId, targetId: policy.targetId ?? "", selector: policy.selector, contentMode: policy.contentMode, retention: policy.retention ?? { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 }, failedBackupRetentionMode: policy.failedBackupRetentionMode, clickHouseBackupSettings: policy.clickHouseBackupSettings ?? {}, clickHouseRestoreSettings: policy.clickHouseRestoreSettings ?? {} });
     setShowForm(true);
   };
   useEffect(() => {
@@ -57,13 +58,14 @@ export function Policies() {
     onError: (error) => showToast({ kind: "error", text: String(error) })
   });
   const executePolicy = useMutation({
-    mutationFn: ({ policy, mode }: { policy: BackupPolicyDto; mode: PolicyRunMode }) => api.manualBackup({
+    mutationFn: ({ policy, mode, clickHouseBackupSettings }: { policy: BackupPolicyDto; mode: PolicyRunMode; clickHouseBackupSettings: ClickHouseSettings }) => api.manualBackup({
       clusterId: policy.sourceClusterId,
       targetId: policy.contentMode === "SchemaOnly" ? (null as unknown as string) : policy.targetId,
       selector: policy.selector,
       backupType: backupTypeForPolicyRun(policy, mode),
       policyId: policy.id,
-      schemaOnly: policy.contentMode === "SchemaOnly"
+      schemaOnly: policy.contentMode === "SchemaOnly",
+      clickHouseBackupSettings
     }),
     onSuccess: () => {
       showToast({ kind: "success", text: "Backup queued." });
@@ -109,7 +111,7 @@ export function Policies() {
           <button className="secondary" disabled={executePolicy.isPending} onClick={() => setRunPolicyTarget(createdPolicy)}><Play size={16} /> Run backup now</button>
         </div>
       </section>}
-      {runPolicyTarget && <RunPolicyDialog policy={runPolicyTarget} busy={executePolicy.isPending} onCancel={() => setRunPolicyTarget(null)} onRun={(mode) => executePolicy.mutate({ policy: runPolicyTarget, mode })} />}
+      {runPolicyTarget && <RunPolicyDialog policy={runPolicyTarget} busy={executePolicy.isPending} onCancel={() => setRunPolicyTarget(null)} onRun={(mode, clickHouseBackupSettings) => executePolicy.mutate({ policy: runPolicyTarget, mode, clickHouseBackupSettings })} />}
       {showForm && <section className="panel form-panel">
         <div className="section-head"><h2>{editing ? "Edit policy" : "Create policy"}</h2><button className="ghost" onClick={reset}>Cancel</button></div>
         <div className="form-grid">
@@ -121,6 +123,8 @@ export function Policies() {
         </div>
         <SelectorBuilder selector={draft.selector} hasSource={draft.sourceClusterId.length > 0} inventory={simulation.data?.inventory ?? []} selected={simulation.data?.tables ?? []} isLoading={simulation.isFetching} error={simulation.error ? String(simulation.error) : null} onChange={(selector) => setDraft({ ...draft, selector })} />
         <RetentionEditor value={draft.retention ?? { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 }} onChange={(retention) => setDraft({ ...draft, retention })} />
+        <ClickHouseAdvancedSettingsEditor title="Backup advanced settings" value={(draft.clickHouseBackupSettings ?? {}) as Record<string, string | number | boolean>} onChange={(settings) => setDraft({ ...draft, clickHouseBackupSettings: settings })} />
+        <ClickHouseAdvancedSettingsEditor title="Default restore advanced settings" value={(draft.clickHouseRestoreSettings ?? {}) as Record<string, string | number | boolean>} onChange={(settings) => setDraft({ ...draft, clickHouseRestoreSettings: settings })} />
         {policyErrors.map((error) => <span className="field-error" key={error}>{error}</span>)}
         <button className="primary" disabled={policyErrors.length > 0 || save.isPending} onClick={() => {
           if (policyErrors.length === 0) save.mutate();
@@ -132,21 +136,36 @@ export function Policies() {
 
 type PolicyRunMode = "full" | "regular";
 
-function RunPolicyDialog({ policy, busy, onRun, onCancel }: { policy: BackupPolicyDto; busy: boolean; onRun: (mode: PolicyRunMode) => void; onCancel: () => void }) {
+function RunPolicyDialog({ policy, busy, onRun, onCancel }: { policy: BackupPolicyDto; busy: boolean; onRun: (mode: PolicyRunMode, clickHouseBackupSettings: ClickHouseSettings) => void; onCancel: () => void }) {
+  const { api } = useApi();
+  const [clickHouseSettings, setClickHouseSettings] = useState<ClickHouseSettings>({});
+  const [settingsValid, setSettingsValid] = useState(true);
   const regularDisabled = policy.contentMode === "SchemaOnly";
   const fullDescription = regularDisabled ? "Capture the selected schema as a new full schema snapshot." : "Capture all selected table data and schema as a new full base backup.";
+  const settingsPreview = useQuery({
+    queryKey: ["backup-settings-preview", policy.sourceClusterId, policy.id],
+    queryFn: () => api.backupSettingsPreview({ clusterId: policy.sourceClusterId, policyId: policy.id }),
+    enabled: Boolean(policy.sourceClusterId && policy.id)
+  });
+
+  useEffect(() => {
+    setClickHouseSettings((settingsPreview.data?.settings ?? {}) as ClickHouseSettings);
+  }, [settingsPreview.data, policy.id]);
+
   return <div className="modal-backdrop" role="presentation" onClick={onCancel}>
     <section className="confirm-dialog run-policy-dialog" role="dialog" aria-modal="true" aria-labelledby="run-policy-dialog-title" onClick={(event) => event.stopPropagation()}>
       <div className="confirm-icon primary"><Play size={22} /></div>
       <div className="confirm-content">
         <h2 id="run-policy-dialog-title">Run policy now</h2>
         <p>Choose how to run {policy.name}.</p>
+        <ClickHouseAdvancedSettingsEditor title="ClickHouse backup settings for this run" value={clickHouseSettings} sources={(settingsPreview.data?.sources ?? []) as any} onChange={setClickHouseSettings} onValidityChange={setSettingsValid} />
+        {settingsPreview.error && <span className="field-error">{String(settingsPreview.error)}</span>}
         <div className="run-policy-options">
-          <button className="secondary run-policy-option" disabled={busy} onClick={() => onRun("full")}>
+          <button className="secondary run-policy-option" disabled={busy || !settingsValid || settingsPreview.isLoading || settingsPreview.isError} onClick={() => onRun("full", clickHouseSettings)}>
             <strong>Full backup</strong>
             <span>{fullDescription}</span>
           </button>
-          <button className="secondary run-policy-option" disabled={busy || regularDisabled} onClick={() => onRun("regular")}>
+          <button className="secondary run-policy-option" disabled={busy || regularDisabled || !settingsValid || settingsPreview.isLoading || settingsPreview.isError} onClick={() => onRun("regular", clickHouseSettings)}>
             <strong>Regular backup</strong>
             <span>Back up only changes since the latest usable full backup. If no suitable full backup is available, Chobo automatically creates a full backup for the affected data.</span>
           </button>
@@ -157,7 +176,6 @@ function RunPolicyDialog({ policy, busy, onRun, onCancel }: { policy: BackupPoli
     </section>
   </div>;
 }
-
 export function backupTypeForPolicyRun(policy: Pick<BackupPolicyDto, "contentMode">, mode: PolicyRunMode): BackupType {
   return mode === "regular" && policy.contentMode !== "SchemaOnly" ? "Incremental" : "Full";
 }
@@ -273,4 +291,3 @@ function validatePolicyDraft(draft: UpsertPolicyRequest) {
   if (draft.selector.rules.length === 0) errors.push("Add at least one selector rule.");
   return errors;
 }
-

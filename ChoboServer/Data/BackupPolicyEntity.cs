@@ -18,12 +18,11 @@ public sealed class BackupPolicyEntity
     public int MinBackupsToKeep { get; set; }
     public int MinFullBackupsToKeep { get; set; }
     public FailedBackupRetentionMode FailedBackupRetentionMode { get; set; } = FailedBackupRetentionMode.KeepAndExcludeFromMinBackupsToKeep;
+    public string ClickHouseBackupSettingsJson { get; set; } = "{}";
+    public string ClickHouseRestoreSettingsJson { get; set; } = "{}";
     public bool IsSystemDefault { get; set; }
     public bool IsDeleted { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? UpdatedAt { get; set; }
     public DateTimeOffset? DeletedAt { get; set; }
 }
-
-
-

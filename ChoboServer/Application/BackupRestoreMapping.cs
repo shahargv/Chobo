@@ -1,5 +1,6 @@
 using Chobo.Contracts;
 using ChoboServer.Data;
+using ChoboServer.Services;
 
 namespace ChoboServer.Application;
 
@@ -36,6 +37,7 @@ internal static class BackupRestoreMapping
             x.DeletionAttemptCount,
             tableCount ?? x.Tables.Count,
             backupSizeBytes ?? CalculateBackupSizeBytes(x.Tables),
+            ClickHouseAdvancedSettings.Deserialize(x.ClickHouseBackupSettingsJson, ClickHouseAdvancedSettingsKind.Backup),
             relatedFullBackupIds ?? CalculateRelatedFullBackupIds(x.Tables),
             includeTables ? x.Tables.OrderBy(t => t.Database).ThenBy(t => t.Table).Select(ToDto).ToList() : []);
 
@@ -70,7 +72,8 @@ internal static class BackupRestoreMapping
         int deletionAttemptCount,
         int tableCount,
         long? backupSizeBytes,
-        IReadOnlyList<Guid> relatedFullBackupIds) =>
+        IReadOnlyList<Guid> relatedFullBackupIds,
+        string? clickHouseBackupSettingsJson = null) =>
         new(
             id,
             triggerType,
@@ -101,6 +104,7 @@ internal static class BackupRestoreMapping
             deletionAttemptCount,
             tableCount,
             backupSizeBytes,
+            ClickHouseAdvancedSettings.Deserialize(clickHouseBackupSettingsJson, ClickHouseAdvancedSettingsKind.Backup),
             relatedFullBackupIds,
             []);
     private static IReadOnlyList<Guid> CalculateRelatedFullBackupIds(IEnumerable<BackupTableEntity> tables) =>
@@ -180,6 +184,7 @@ internal static class BackupRestoreMapping
             x.CompletedAt,
             x.Error,
             x.FailureReason,
+            ClickHouseAdvancedSettings.Deserialize(x.ClickHouseRestoreSettingsJson, ClickHouseAdvancedSettingsKind.Restore),
             x.Tables.OrderBy(t => t.TargetDatabase).ThenBy(t => t.TargetTable).Select(ToDto).ToList());
 
     public static RestoreTableDto ToDto(RestoreTableEntity x) =>

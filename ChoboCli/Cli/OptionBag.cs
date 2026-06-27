@@ -24,6 +24,9 @@ public sealed class OptionBag(Dictionary<string, string?> values)
     public bool Has(string name) =>
         values.ContainsKey(name);
 
+    public IReadOnlyList<string> Values(string name) =>
+        Optional(name)?.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? [];
+
     public int Int(string name, int defaultValue) =>
         Optional(name) is { } value ? int.Parse(value) : defaultValue;
 

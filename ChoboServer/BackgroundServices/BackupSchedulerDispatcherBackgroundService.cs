@@ -22,7 +22,8 @@ public sealed class BackupSchedulerDispatcherBackgroundService(
         "scheduled-backup-missed",
         "schedule-skip-active",
         "schedule-skip-active-policy",
-        "schedule-skip-missing-policy"
+        "schedule-skip-missing-policy",
+        "schedule-skip-missing-cluster"
     ];
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -158,6 +159,16 @@ public sealed class BackupSchedulerDispatcherBackgroundService(
                 continue;
             }
 
+            var cluster = await db.ClickHouseClusters.AsNoTracking().FirstOrDefaultAsync(x => x.Id == schedule.Policy.SourceClusterId && !x.IsDeleted, cancellationToken);
+            if (cluster is null)
+            {
+                await audit.RecordAsync("schedule-skip-missing-cluster", AuditEntityType.BackupSchedule, schedule.Id.ToString(), new { plannedRunAt = latestOccurrence, schedule.Policy.SourceClusterId });
+                continue;
+            }
+            var settings = ClickHouseAdvancedSettings.MergeWithSources(
+                ("cluster", ClickHouseAdvancedSettings.Deserialize(cluster.ClickHouseBackupSettingsJson, ClickHouseAdvancedSettingsKind.Backup)),
+                ("policy", ClickHouseAdvancedSettings.Deserialize(schedule.Policy.ClickHouseBackupSettingsJson, ClickHouseAdvancedSettingsKind.Backup)));
+
             var backup = new BackupEntity
             {
                 TriggerType = BackupTriggerType.Scheduled,
@@ -168,7 +179,8 @@ public sealed class BackupSchedulerDispatcherBackgroundService(
                 TargetId = schedule.Policy.TargetId,
                 PolicyId = schedule.PolicyId,
                 ScheduleId = schedule.Id,
-                RequestedByName = "system"
+                RequestedByName = "system",
+                ClickHouseBackupSettingsJson = ClickHouseAdvancedSettings.SerializeNormalized(settings.Settings)
             };
             db.Backups.Add(backup);
             await db.SaveChangesAsync(cancellationToken);
@@ -192,4 +204,3 @@ public sealed class BackupSchedulerDispatcherBackgroundService(
         return result;
     }
 }
-

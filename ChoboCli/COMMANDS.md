@@ -49,6 +49,12 @@ Credentials are write-only and are never printed by `clusters list`.
 ChoboServer uses the official `ClickHouse.Driver` ADO.NET package over HTTP(S). Enter the ClickHouse HTTP or HTTPS port that ChoboServer can reach, such as `8123` for standard HTTP deployments.
 
 For `Cluster` mode, `--clickhouse-cluster-name` should match the ClickHouse `system.clusters.cluster` value that describes the shards and replicas. Chobo uses that topology during backup/restore to choose one representative replica per shard. If the option is omitted, Chobo can auto-discover the name only when `system.clusters` contains exactly one cluster definition.
+Cluster-level ClickHouse advanced settings are defaults for every backup or restore that uses the cluster:
+
+```powershell
+ChoboCli clusters update --id <cluster-id> --clickhouse-backup-setting max_backup_bandwidth=104857600 --clickhouse-restore-setting restore_threads=4
+ChoboCli clusters update --id <cluster-id> --clickhouse-backup-settings-file .\backup-settings.json --clickhouse-restore-settings-json '{"restore_threads":4}'
+```
 
 ## Targets
 
@@ -75,6 +81,12 @@ ChoboCli policies remove --id <policy-id>
 ```
 
 The source cluster is configured on the policy itself. Selector files only decide which database tables in that source cluster should be backed up. Use `--schema-only` for policies that store only captured DDL; schema-only policies do not take `--target-id` and do not support incremental backups.
+Policy-level settings override matching cluster defaults and apply to every scheduled or manual run from that policy. Policy restore settings are used as the current default when starting a restore from a backup created by the policy:
+
+```powershell
+ChoboCli policies add --name all --source-cluster-id <cluster-id> --target-id <target-id> --clickhouse-backup-setting backup_threads=4 --clickhouse-restore-setting restore_threads=4
+ChoboCli policies update --id <policy-id> --clickhouse-backup-settings-json '{"max_backup_bandwidth":104857600}' --clickhouse-restore-settings-file .\restore-settings.json
+```
 
 Selector file with ordered include and exclude rules:
 
@@ -189,6 +201,15 @@ ChoboCli restores show --id <restore-id>
 ChoboCli restores wait --id <restore-id> --timeout-seconds 300 --poll-seconds 2
 ```
 
+
+Manual backup and restore commands inherit cluster and policy settings unless you pass any advanced settings option. When you do, the CLI first loads the inherited effective settings, applies your additions and removals, and sends the final dictionary for that run:
+
+```powershell
+ChoboCli backup manual --policy-id <policy-id> --clickhouse-backup-setting max_backup_bandwidth=52428800 --remove-clickhouse-backup-setting backup_threads
+ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-id> --clickhouse-restore-settings-json '{"restore_threads":2}' --remove-clickhouse-restore-setting max_backup_bandwidth
+```
+
+Advanced settings options are `--clickhouse-backup-setting name=value`, `--clickhouse-backup-settings-json`, `--clickhouse-backup-settings-file`, `--remove-clickhouse-backup-setting`, and the matching `restore` variants. Values must be strings, numbers, or booleans. Chobo rejects settings it manages internally, including `base_backup` and `allow_non_empty_tables`. ClickHouse documents supported backup/restore setting names at <https://clickhouse.com/docs/operations/backup/overview#settings>.
 Backup and restore commands return run records immediately. `wait` is a client-side polling helper. Run JSON includes `startedAt` and `endedAt`; `endedAt` is when the actual run process reached a terminal outcome, including success, partial success, failure, or cancellation, not the last metadata update time.
 
 `backups recover` rebuilds SQLite backup metadata from storage-side manifests after local database loss. Use `--scan-root` to scan a bucket/root for manifests, or `--backup-path` for one known backup/table/shard path. The supplied target provides S3 credentials; recovered ClickHouse clusters still need `clusters update-credentials` because manifests do not store ClickHouse credentials.
@@ -244,4 +265,3 @@ ChoboCli config import --file .\chobo-config.json
 ```
 
 `data` exports all restorable Chobo metadata except audit entries and application logs. `config` is configuration-only and does not preserve backup/restore history.
-

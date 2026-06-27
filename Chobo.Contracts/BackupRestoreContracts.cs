@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace Chobo.Contracts;
 
 public enum BackupRunStatus
@@ -56,6 +58,7 @@ public sealed record BackupDto(
     int DeletionAttemptCount,
     int TableCount,
     long? BackupSizeBytes,
+    IReadOnlyDictionary<string, JsonElement> ClickHouseBackupSettings,
     IReadOnlyList<Guid> RelatedFullBackupIds,
     IReadOnlyList<BackupTableDto> Tables);
 
@@ -107,7 +110,8 @@ public sealed record ManualBackupRequest(
     PolicySelector Selector,
     BackupType BackupType = BackupType.Full,
     Guid? PolicyId = null,
-    bool SchemaOnly = false);
+    bool SchemaOnly = false,
+    IReadOnlyDictionary<string, JsonElement>? ClickHouseBackupSettings = null);
 
 public sealed record SchemaBackupSummaryDto(Guid Id, BackupRunStatus Status, BackupContentMode ContentMode, BackupType BackupType, Guid SourceClusterId, string SourceClusterName, Guid? PolicyId, string? PolicyName, DateTimeOffset CreatedAt, DateTimeOffset? EndedAt, int TableCount);
 
@@ -193,6 +197,7 @@ public sealed record RestoreDto(
     DateTimeOffset? EndedAt,
     string? Error,
     string? FailureReason,
+    IReadOnlyDictionary<string, JsonElement> ClickHouseRestoreSettings,
     IReadOnlyList<RestoreTableDto> Tables);
 
 public sealed record RestoreTableDto(
@@ -253,7 +258,8 @@ public sealed record InitiateRestoreRequest(
     bool SchemaOnly = false,
     IReadOnlyList<int>? SourceShards = null,
     IReadOnlyList<int>? TargetShards = null,
-    bool ConfirmDestructive = false);
+    bool ConfirmDestructive = false,
+    IReadOnlyDictionary<string, JsonElement>? ClickHouseRestoreSettings = null);
 
 public sealed record RestoreTableMappingRequest(
     Guid BackupTableId,

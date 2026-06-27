@@ -85,7 +85,9 @@ public sealed class ClusterCommands : CliSubject
             options.Int("--node-maxdop", 1),
             ParseNodeOverrides(options.Optional("--node-maxdop-overrides")),
             options.Int("--shard-maxdop", 1),
-            ParseShardOverrides(options.Optional("--shard-maxdop-overrides")));
+            ParseShardOverrides(options.Optional("--shard-maxdop-overrides")),
+            CommandHelpers.ClickHouseSettingsFromOptions(options, "backup"),
+            CommandHelpers.ClickHouseSettingsFromOptions(options, "restore"));
     }
 
     private static IReadOnlyList<ClusterNodeMaxDopOverrideDto>? ParseNodeOverrides(string? value) =>

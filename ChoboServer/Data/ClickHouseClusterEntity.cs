@@ -18,6 +18,8 @@ public sealed class ClickHouseClusterEntity
     public int ShardMaxDopDefault { get; set; } = 1;
     public string ShardMaxDopOverridesJson { get; set; } = "[]";
     public string? ClickHouseClusterName { get; set; }
+    public string ClickHouseBackupSettingsJson { get; set; } = "{}";
+    public string ClickHouseRestoreSettingsJson { get; set; } = "{}";
     public bool IsDeleted { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? UpdatedAt { get; set; }

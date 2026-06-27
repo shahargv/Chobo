@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
-import type { BackupDto, BackupTableDto, BackupTableShardDto } from "../api/generated";
+import type { BackupDto, BackupPolicyDto, BackupTableDto, BackupTableShardDto } from "../api/generated";
 import { ApiContext } from "../api-context";
 import { Backups, BackupTablesTable, calculateBackupShardCompletion, calculateBackupSizeBytes, calculateTableSizeBytes, summarizeBackupShards } from "./BackupsPage";
 
@@ -317,6 +317,70 @@ describe("Backups destructive delete flow", () => {
     queryClient.clear();
     host.remove();
   });
+  it("manual backup starts from inherited ClickHouse settings and submits the edited final dictionary", async () => {
+    const policy = basePolicy({ clickHouseBackupSettings: { backup_threads: 4 } });
+    const manualBackup = vi.fn(async (request) => baseBackup({ id: "queued-backup", clickHouseBackupSettings: request.clickHouseBackupSettings }));
+    const api = {
+      backups: vi.fn(async () => []),
+      schedules: vi.fn(async () => []),
+      policies: vi.fn(async () => [policy]),
+      backupSettingsPreview: vi.fn(async () => ({
+        settings: { backup_threads: 4, max_backup_bandwidth: 104857600 },
+        sources: [
+          { name: "max_backup_bandwidth", value: 104857600, source: "cluster" },
+          { name: "backup_threads", value: 4, source: "policy" }
+        ]
+      })),
+      manualBackup,
+      deleteBackup: vi.fn(),
+      pinBackup: vi.fn(),
+      unpinBackup: vi.fn(),
+      cancelBackup: vi.fn()
+    };
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={["/backups"]}>
+            <ApiContext.Provider value={{ api: api as never, showToast: vi.fn() }}>
+              <Backups />
+            </ApiContext.Provider>
+          </MemoryRouter>
+        </QueryClientProvider>
+      );
+    });
+    await flushUi();
+
+    const openManual = Array.from(host.querySelectorAll("button")).find((button) => button.textContent?.includes("Manual backup")) as HTMLButtonElement;
+    await act(async () => openManual.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    await flushUi();
+    await flushUi();
+
+    expect(api.backupSettingsPreview).toHaveBeenCalledWith({ clusterId: "source-cluster-id", policyId: "policy-id" });
+    expect(host.textContent).toContain("policy, cluster");
+    const disclosure = Array.from(host.querySelectorAll('button[aria-expanded="false"]')).find((button) => button.textContent?.includes("ClickHouse backup settings")) as HTMLButtonElement;
+    await act(async () => disclosure.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+
+    const removeThreads = host.querySelector('button[aria-label="Remove backup_threads"]') as HTMLButtonElement;
+    await act(async () => removeThreads.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+
+    const queueButton = Array.from(host.querySelectorAll("button")).find((button) => button.textContent?.includes("Queue backup")) as HTMLButtonElement;
+    await act(async () => queueButton.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    await flushUi();
+
+    expect(manualBackup).toHaveBeenCalledWith(expect.objectContaining({
+      policyId: "policy-id",
+      clickHouseBackupSettings: { max_backup_bandwidth: 104857600 }
+    }));
+
+    await act(async () => root.unmount());
+    queryClient.clear();
+    host.remove();
+  });
 });
 
 async function flushUi() {
@@ -331,6 +395,7 @@ function baseBackup(overrides: Partial<BackupDto> = {}): BackupDto {
     status: overrides.status ?? "Succeeded",
     backupType: overrides.backupType ?? "Full",
     contentMode: overrides.contentMode ?? "SchemaAndData",
+    clickHouseBackupSettings: overrides.clickHouseBackupSettings ?? {},
     sourceClusterId: overrides.sourceClusterId ?? "source-cluster-id",
     targetId: overrides.targetId ?? "target-id",
     policyId: overrides.policyId ?? null,
@@ -359,4 +424,22 @@ function baseBackup(overrides: Partial<BackupDto> = {}): BackupDto {
     tables: overrides.tables ?? []
   };
 }
-
+function basePolicy(overrides: Partial<BackupPolicyDto> = {}): BackupPolicyDto {
+  return {
+    id: overrides.id ?? "policy-id",
+    name: overrides.name ?? "Nightly",
+    sourceClusterId: overrides.sourceClusterId ?? "source-cluster-id",
+    targetId: overrides.targetId ?? "target-id",
+    contentMode: overrides.contentMode ?? "SchemaAndData",
+    selectorJsonVersion: overrides.selectorJsonVersion ?? 1,
+    selector: overrides.selector ?? { version: 1, rules: [{ action: "Include", database: { kind: "All", value: "*" }, table: { kind: "All", value: "*" } }] },
+    retention: overrides.retention ?? { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 },
+    failedBackupRetentionMode: overrides.failedBackupRetentionMode ?? "KeepAndExcludeFromMinBackupsToKeep",
+    clickHouseBackupSettings: overrides.clickHouseBackupSettings ?? {},
+    clickHouseRestoreSettings: overrides.clickHouseRestoreSettings ?? {},
+    isSystemDefault: overrides.isSystemDefault ?? false,
+    isDeleted: overrides.isDeleted ?? false,
+    createdAt: overrides.createdAt ?? "2026-06-22T00:00:00Z",
+    updatedAt: overrides.updatedAt ?? null
+  };
+}

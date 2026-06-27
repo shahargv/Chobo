@@ -149,7 +149,7 @@
         @{
             Name = 'update-cluster'
             Type = 'Cli'
-            Args = @('clusters', 'update', '--id', '{cluster.id}', '--name', 'crud-source-new', '--mode', 'Cluster', '--node', 'source-cluster:9000', '--username', 'default', '--password', 'rotated-secret', '--backup-restore-maxdop', '2', '--clickhouse-cluster-name', '{source.ClusterName}')
+            Args = @('clusters', 'update', '--id', '{cluster.id}', '--name', 'crud-source-new', '--mode', 'Cluster', '--node', 'source-cluster:9000', '--username', 'default', '--password', 'rotated-secret', '--backup-restore-maxdop', '2', '--clickhouse-cluster-name', '{source.ClusterName}', '--clickhouse-backup-setting', 'max_backup_bandwidth=104857600', '--clickhouse-restore-setting', 'restore_threads=4')
             ExpectJson = @(
                 @{ Path = 'id'; Equals = '{cluster.id}' }
                 @{ Path = 'name'; Equals = 'crud-source-new' }
@@ -157,6 +157,8 @@
                 @{ Path = 'clickHouseClusterName'; Equals = '{source.ClusterName}' }
                 @{ Path = 'accessNodes[0].host'; Equals = 'source-cluster' }
                 @{ Path = 'accessNodes[0].port'; Equals = 9000 }
+                @{ Path = 'clickHouseBackupSettings.max_backup_bandwidth'; Equals = 104857600 }
+                @{ Path = 'clickHouseRestoreSettings.restore_threads'; Equals = 4 }
             )
             ExpectTextNotContains = @('rotated-secret')
         }
@@ -227,7 +229,7 @@
         @{
             Name = 'update-policy'
             Type = 'Cli'
-            Args = @('policies', 'update', '--id', '{policy.id}', '--name', 'crud-policy-new', '--source-cluster-id', '{cluster.id}', '--target-id', '{target.id}', '--full-retention-minutes', '120', '--incremental-retention-minutes', '60', '--min-backups-to-keep', '2', '--min-full-backups-to-keep', '1')
+            Args = @('policies', 'update', '--id', '{policy.id}', '--name', 'crud-policy-new', '--source-cluster-id', '{cluster.id}', '--target-id', '{target.id}', '--full-retention-minutes', '120', '--incremental-retention-minutes', '60', '--min-backups-to-keep', '2', '--min-full-backups-to-keep', '1', '--clickhouse-backup-setting', 'backup_threads=2', '--clickhouse-restore-setting', 'restore_threads=8')
             ExpectJson = @(
                 @{ Path = 'id'; Equals = '{policy.id}' }
                 @{ Path = 'name'; Equals = 'crud-policy-new' }
@@ -235,6 +237,8 @@
                 @{ Path = 'retention.incrementalRetentionMinutes'; Equals = 60 }
                 @{ Path = 'retention.minBackupsToKeep'; Equals = 2 }
                 @{ Path = 'retention.minFullBackupsToKeep'; Equals = 1 }
+                @{ Path = 'clickHouseBackupSettings.backup_threads'; Equals = 2 }
+                @{ Path = 'clickHouseRestoreSettings.restore_threads'; Equals = 8 }
             )
         }
         @{

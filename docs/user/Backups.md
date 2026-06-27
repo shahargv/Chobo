@@ -150,6 +150,17 @@ ChoboCli backup manual --policy-id <policy-id> --backup-type Incremental
 ChoboCli backup manual --policy-id <schema-only-policy-id>
 ```
 
+Advanced ClickHouse backup settings can be set on the cluster, on the policy, or for this one manual run. Chobo merges them in that order: cluster defaults, policy defaults, then the manual run values. Manual backup in the GUI shows the inherited values before launch so you can edit or remove a setting for that run only.
+
+CLI examples:
+
+```powershell
+ChoboCli clusters update --id <cluster-id> --clickhouse-backup-setting max_backup_bandwidth=104857600
+ChoboCli policies update --id <policy-id> --clickhouse-backup-setting backup_threads=4
+ChoboCli backup manual --policy-id <policy-id> --clickhouse-backup-setting max_backup_bandwidth=52428800 --remove-clickhouse-backup-setting backup_threads
+```
+
+Use ClickHouse `BACKUP ... SETTINGS` names and scalar JSON values only. See the ClickHouse backup/restore settings reference: <https://clickhouse.com/docs/operations/backup/overview#settings>. Chobo-owned settings, including `base_backup`, cannot be overridden.
 The command returns a run record immediately. Wait for completion:
 
 ```powershell

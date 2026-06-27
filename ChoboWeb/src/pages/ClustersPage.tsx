@@ -4,11 +4,12 @@ import { useParams } from "react-router-dom";
 import type { ClusterDto, UpsertClusterRequest } from "../api/generated";
 import { useApi } from "../api-context";
 import { CrudPage, DataTable, Input, Select } from "../components/ui";
+import { ClickHouseAdvancedSettingsEditor } from "../components/ClickHouseAdvancedSettingsEditor";
 
 const defaultAccessNodes: UpsertClusterRequest["accessNodes"] = [{ host: "localhost", port: 9000, useTls: false }];
 
 function defaultDraft(): UpsertClusterRequest {
-  return { name: "", mode: "SingleInstance", accessNodes: defaultAccessNodes, userName: null, password: null, backupRestoreMaxDop: 3, nodeMaxDopDefault: 1, nodeMaxDopOverrides: [], shardMaxDopDefault: 1, shardMaxDopOverrides: [] };
+  return { name: "", mode: "SingleInstance", accessNodes: defaultAccessNodes, userName: null, password: null, backupRestoreMaxDop: 3, nodeMaxDopDefault: 1, nodeMaxDopOverrides: [], shardMaxDopDefault: 1, shardMaxDopOverrides: [], clickHouseBackupSettings: {}, clickHouseRestoreSettings: {} };
 }
 
 export function Clusters() {
@@ -27,7 +28,7 @@ export function Clusters() {
     setShowForm(true);
     setModifyCredentials(false);
     setAccessNodesText(formatNodes(accessNodes));
-    setDraft({ name: cluster.name, mode: cluster.mode, accessNodes, userName: null, password: null, backupRestoreMaxDop: cluster.backupRestoreMaxDop, nodeMaxDopDefault: cluster.nodeMaxDopDefault, nodeMaxDopOverrides: cluster.nodeMaxDopOverrides, shardMaxDopDefault: cluster.shardMaxDopDefault, shardMaxDopOverrides: cluster.shardMaxDopOverrides, clickHouseClusterName: cluster.clickHouseClusterName });
+    setDraft({ name: cluster.name, mode: cluster.mode, accessNodes, userName: null, password: null, backupRestoreMaxDop: cluster.backupRestoreMaxDop, nodeMaxDopDefault: cluster.nodeMaxDopDefault, nodeMaxDopOverrides: cluster.nodeMaxDopOverrides, shardMaxDopDefault: cluster.shardMaxDopDefault, shardMaxDopOverrides: cluster.shardMaxDopOverrides, clickHouseClusterName: cluster.clickHouseClusterName, clickHouseBackupSettings: cluster.clickHouseBackupSettings ?? {}, clickHouseRestoreSettings: cluster.clickHouseRestoreSettings ?? {} });
   };
   useEffect(() => {
     if (!clusterId || !clusters.data) return;
@@ -73,6 +74,8 @@ export function Clusters() {
       {editing && <label className="checkbox-row"><input type="checkbox" checked={modifyCredentials} onChange={(event) => setModifyCredentials(event.target.checked)} /> Modify credentials</label>}
       {(!editing || modifyCredentials) && <Input label="Username" value={draft.userName ?? ""} onChange={(value) => setDraft({ ...draft, userName: value || null })} />}
       {(!editing || modifyCredentials) && <Input label="Password" type="password" value={draft.password ?? ""} onChange={(value) => setDraft({ ...draft, password: value || null })} />}
+      <ClickHouseAdvancedSettingsEditor title="Backup advanced settings" value={(draft.clickHouseBackupSettings ?? {}) as Record<string, string | number | boolean>} onChange={(settings) => setDraft({ ...draft, clickHouseBackupSettings: settings })} />
+      <ClickHouseAdvancedSettingsEditor title="Restore advanced settings" value={(draft.clickHouseRestoreSettings ?? {}) as Record<string, string | number | boolean>} onChange={(settings) => setDraft({ ...draft, clickHouseRestoreSettings: settings })} />
     </>} table={<DataTable headers={["Name", "Mode", "Access nodes", "Max DOP", "Node DOP", "Shard DOP", "Actions"]} isLoading={clusters.isLoading}>{(clusters.data ?? []).map((cluster) => <tr key={cluster.id}><td>{cluster.name}</td><td>{cluster.mode}</td><td>{cluster.accessNodes.map((node) => `${node.host}:${node.port}`).join(", ")}</td><td>{cluster.backupRestoreMaxDop}</td><td>{cluster.nodeMaxDopDefault}</td><td>{cluster.shardMaxDopDefault}</td><td className="actions"><button className="ghost" onClick={() => editCluster(cluster)}>Edit</button><button className="ghost" onClick={() => api.testCluster(cluster.id).then((x) => showToast({ kind: x.succeeded ? "success" : "error", text: x.message }))}>Test</button></td></tr>)}</DataTable>} />
   );
 }

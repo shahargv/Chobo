@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using System.Text.Json;
 
 namespace Chobo.Contracts;
 
@@ -48,6 +49,8 @@ public sealed record BackupPolicyDto(
     PolicySelector Selector,
     BackupRetentionDto? Retention,
     FailedBackupRetentionMode FailedBackupRetentionMode,
+    IReadOnlyDictionary<string, JsonElement> ClickHouseBackupSettings,
+    IReadOnlyDictionary<string, JsonElement> ClickHouseRestoreSettings,
     bool IsSystemDefault,
     bool IsDeleted,
     DateTimeOffset CreatedAt,
@@ -60,7 +63,9 @@ public sealed record UpsertPolicyRequest(
     PolicySelector Selector,
     BackupContentMode ContentMode = BackupContentMode.SchemaAndData,
     BackupRetentionDto? Retention = null,
-    FailedBackupRetentionMode FailedBackupRetentionMode = FailedBackupRetentionMode.KeepAndExcludeFromMinBackupsToKeep);
+    FailedBackupRetentionMode FailedBackupRetentionMode = FailedBackupRetentionMode.KeepAndExcludeFromMinBackupsToKeep,
+    IReadOnlyDictionary<string, JsonElement>? ClickHouseBackupSettings = null,
+    IReadOnlyDictionary<string, JsonElement>? ClickHouseRestoreSettings = null);
 
 public sealed record PolicySelector(int Version, IReadOnlyList<PolicySelectorRule> Rules)
 {
@@ -88,4 +93,3 @@ public sealed record PolicyEvaluationDto(Guid PolicyId, string PolicyName, Guid 
 public sealed record PolicySimulationRequest(Guid SourceClusterId, PolicySelector Selector);
 
 public sealed record PolicySimulationDto(Guid SourceClusterId, PolicySelector Selector, IReadOnlyList<PolicyInventoryTable> Inventory, IReadOnlyList<PolicyInventoryTable> Tables);
-
