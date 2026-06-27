@@ -147,6 +147,8 @@ public sealed class RuntimeSettingsService(
         var overlay = ReadOverlayValue(setting.Key);
         var effectiveValue = FormatValue(setting.Property.PropertyType, setting.EffectiveValue);
         var overlayValue = overlay is null ? null : FormatJsonOverlayValue(setting.Property.PropertyType, overlay);
+        var isClientOverrideEffective = overlay is not null && string.Equals(overlayValue, effectiveValue, StringComparison.Ordinal);
+        var isExternallyOverridden = overlay is not null && !isClientOverrideEffective;
         return new RuntimeSettingDto(
             setting.Key,
             setting.Descriptor.Section,
@@ -156,11 +158,20 @@ public sealed class RuntimeSettingsService(
             IsNullable(setting.Property.PropertyType),
             false,
             overlay is not null,
-            overlay is not null && !string.Equals(overlayValue, effectiveValue, StringComparison.Ordinal),
+            isClientOverrideEffective,
+            isExternallyOverridden,
+            GetOverrideStatus(overlay is not null, isClientOverrideEffective, isExternallyOverridden),
             effectiveValue,
             overlayValue,
             FormatValue(setting.Property.PropertyType, setting.DefaultValue),
             GetWarning(setting));
+    }
+
+    private static string GetOverrideStatus(bool hasOverlayValue, bool isClientOverrideEffective, bool isExternallyOverridden)
+    {
+        if (isClientOverrideEffective) return "Client override active";
+        if (isExternallyOverridden) return "Client override masked by external configuration";
+        return hasOverlayValue ? "Client override saved" : "Default or server configuration";
     }
 
     private static RuntimeSettingApplyMode GetApplyMode(RuntimeSetting setting) =>

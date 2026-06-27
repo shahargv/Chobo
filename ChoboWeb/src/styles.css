@@ -963,9 +963,13 @@ pre, .token-box {
 
 
 .muted { color: var(--muted); font-size: 12px; }
-.settings-panel table { min-width: 1320px; }
+.settings-panel table { min-width: 1400px; }
+.settings-head { align-items: end; }
+.settings-filters { display: flex; align-items: end; gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
 .settings-section-filter { min-width: 220px; color: var(--muted); font-size: 12px; font-weight: 700; }
 .settings-section-filter select { margin-top: 6px; }
+.settings-toggle { min-height: 38px; display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; font-weight: 700; }
+.settings-toggle input { width: auto; margin: 0; }
 .setting-key { display: grid; gap: 3px; min-width: 260px; }
 .setting-key span { color: var(--muted); font-size: 12px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .setting-key em { color: #8a5a00; font-size: 12px; font-style: normal; }

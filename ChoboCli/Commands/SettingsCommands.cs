@@ -7,10 +7,10 @@ public sealed class SettingsCommands : CliSubject
 {
     public SettingsCommands()
     {
-        Verb("list", "List runtime settings. Options: --section <section>", ListAsync);
+        Verb("list", "List runtime settings. Options: --section <section> [--client-overrides-only]", ListAsync);
         Verb("get", "Show one runtime setting. Options: --key <key>", GetAsync);
         Verb("set", "Set a runtime setting overlay value. Options: --key <key> --value <value> [--confirm-restart-required]", SetAsync);
-        Verb("unset", "Remove a runtime setting overlay value. Options: --key <key> [--confirm-restart-required]", UnsetAsync);
+        Verb("unset", "Remove a runtime setting client override and restore the default or server configuration. Options: --key <key> [--confirm-restart-required]", UnsetAsync);
         Verb("reload", "Reload runtime settings from configuration providers.", ReloadAsync);
     }
 
@@ -24,6 +24,10 @@ public sealed class SettingsCommands : CliSubject
             if (context.Command.Options.Optional("--section") is { } section)
             {
                 settings = new RuntimeSettingsListDto(settings.Items.Where(x => string.Equals(x.Section, section, StringComparison.OrdinalIgnoreCase)).ToList());
+            }
+            if (context.Command.Options.Has("--client-overrides-only"))
+            {
+                settings = new RuntimeSettingsListDto(settings.Items.Where(x => x.IsClientOverrideEffective).ToList());
             }
 
             return settings;

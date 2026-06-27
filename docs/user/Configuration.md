@@ -72,7 +72,8 @@ Terminate TLS at your ingress, reverse proxy, load balancer, or hosting platform
       "QueueCapacity": 100,
       "SchedulerInterval": "00:01:00",
       "SchedulerMissedRunGracePeriod": "00:05:00",
-      "PollInterval": "00:00:02"
+      "PollInterval": "00:00:06",
+      "ManifestWriteTimeout": "00:01:30"
     }
   }
 }
@@ -83,6 +84,7 @@ Terminate TLS at your ingress, reverse proxy, load balancer, or hosting platform
 - `SchedulerInterval`: how often the scheduler checks for due schedules.
 - `SchedulerMissedRunGracePeriod`: default maximum lateness for a scheduled run when the schedule itself does not specify one.
 - `PollInterval`: how often Chobo polls ClickHouse `system.backups` for async operation status.
+- `ManifestWriteTimeout`: best-effort timeout for writing backup metadata manifests to S3.
 
 Environment aliases:
 
@@ -250,7 +252,8 @@ ChoboCli logs show --last 500
       "QueueCapacity": 100,
       "SchedulerInterval": "00:01:00",
       "SchedulerMissedRunGracePeriod": "00:05:00",
-      "PollInterval": "00:00:02"
+      "PollInterval": "00:00:06",
+      "ManifestWriteTimeout": "00:01:30"
     },
     "RetentionManagement": {
       "Interval": "01:00:00",

@@ -1382,7 +1382,9 @@ public sealed class ChoboFoundationTests
         var result = JsonSerializer.Deserialize<RuntimeSettingUpdateResult>(text, JsonOptions)!;
         Assert.Equal("00:00:07", result.Setting.EffectiveValue);
         Assert.True(result.Setting.HasOverlayValue);
+        Assert.True(result.Setting.IsClientOverrideEffective);
         Assert.False(result.Setting.IsExternallyOverridden);
+        Assert.Equal("Client override active", result.Setting.OverrideStatus);
 
         var overlay = await File.ReadAllTextAsync(Path.Combine(dataDir, ChoboConfiguration.RuntimeSettingsFileName));
         Assert.Contains("PollInterval", overlay);
@@ -1415,7 +1417,9 @@ public sealed class ChoboFoundationTests
         var result = JsonSerializer.Deserialize<RuntimeSettingUpdateResult>(text, JsonOptions)!;
         Assert.Equal("00:00:09", result.Setting.EffectiveValue);
         Assert.Equal("00:00:05", result.Setting.OverlayValue);
+        Assert.False(result.Setting.IsClientOverrideEffective);
         Assert.True(result.Setting.IsExternallyOverridden);
+        Assert.Equal("Client override masked by external configuration", result.Setting.OverrideStatus);
         Assert.True(result.EffectiveValueUnchanged);
 
         var unset = await client.DeleteAsync("/api/v1/settings/Chobo:BackupRestore:PollInterval");
