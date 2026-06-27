@@ -339,8 +339,25 @@ public sealed class RuntimeSettingsService(
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var temp = path + ".tmp";
         await File.WriteAllTextAsync(temp, root.ToJsonString(JsonOptions), cancellationToken);
-        if (File.Exists(path)) File.Replace(temp, path, null);
-        else File.Move(temp, path);
+        await ReplaceOverlayFileAsync(temp, path, cancellationToken);
+    }
+
+    private static async Task ReplaceOverlayFileAsync(string temp, string path, CancellationToken cancellationToken)
+    {
+        const int maxAttempts = 5;
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                if (File.Exists(path)) File.Replace(temp, path, null);
+                else File.Move(temp, path);
+                return;
+            }
+            catch (IOException) when (attempt < maxAttempts)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(50 * attempt), cancellationToken);
+            }
+        }
     }
 
     private void ReloadConfiguration()
