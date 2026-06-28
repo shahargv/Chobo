@@ -98,6 +98,17 @@ public sealed class UpdateClusterCredentialsRequestValidator : AbstractValidator
     }
 }
 
+public sealed class UpsertBackupTargetRequestValidator : AbstractValidator<UpsertBackupTargetRequest>
+{
+    public UpsertBackupTargetRequestValidator()
+    {
+        RuleFor(x => x.Name).RequiredName(160);
+        RuleFor(x => x.Type).NotEmpty().MaximumLength(128);
+        RuleFor(x => x.Settings).NotNull();
+    }
+}
+
+
 public sealed class UpsertS3TargetRequestValidator : AbstractValidator<UpsertS3TargetRequest>
 {
     public UpsertS3TargetRequestValidator()
@@ -113,9 +124,10 @@ public sealed class UpsertS3TargetRequestValidator : AbstractValidator<UpsertS3T
         RuleFor(x => x.PathPrefix).MaximumLength(1024).When(x => x.PathPrefix is not null);
         RuleFor(x => x.AccessKey).MaximumLength(4096).When(x => x.AccessKey is not null);
         RuleFor(x => x.SecretKey).MaximumLength(4096).When(x => x.SecretKey is not null);
+        RuleFor(x => x).Must(x => (string.IsNullOrWhiteSpace(x.AccessKey) && string.IsNullOrWhiteSpace(x.SecretKey)) || (!string.IsNullOrWhiteSpace(x.AccessKey) && !string.IsNullOrWhiteSpace(x.SecretKey)))
+            .WithMessage("S3 access key and secret key must be provided together.");
     }
 }
-
 public sealed class UpsertPolicyRequestValidator : AbstractValidator<UpsertPolicyRequest>
 {
     public UpsertPolicyRequestValidator()
@@ -435,8 +447,8 @@ public sealed class BackupTargetExportValidator : AbstractValidator<BackupTarget
     {
         RuleFor(x => x.Id).NotEmpty();
         RuleFor(x => x.Name).RequiredName(160);
-        RuleFor(x => x.Type).IsInEnum();
-        RuleFor(x => x.S3).NotNull().SetValidator(new S3TargetSettingsDtoValidator());
+        RuleFor(x => x.Type).NotEmpty().MaximumLength(128);
+        RuleFor(x => x).Must(x => x.Settings is not null || x.S3 is not null).WithMessage("Backup target settings are required.");
         RuleFor(x => x.CreatedAt).NotEqual(default(DateTimeOffset));
     }
 }
@@ -539,7 +551,7 @@ public sealed class BackupTableExportValidator : AbstractValidator<BackupTableEx
         RuleFor(x => x.Table).NotEmpty().MaximumLength(512);
         RuleFor(x => x.Engine).NotEmpty().MaximumLength(2048);
         RuleFor(x => x.SchemaDefinitionId).NotEmpty().When(x => x.SchemaDefinitionId is not null);
-        RuleFor(x => x.S3Path).MaximumLength(4096);
+        RuleFor(x => x.StoragePath).MaximumLength(4096);
         RuleFor(x => x.Status).IsInEnum();
         RuleFor(x => x.ClickHouseOperationId).MaximumLength(512).When(x => x.ClickHouseOperationId is not null);
         RuleFor(x => x.ClickHouseStatus).MaximumLength(128).When(x => x.ClickHouseStatus is not null);
@@ -561,7 +573,7 @@ public sealed class BackupTableShardExportValidator : AbstractValidator<BackupTa
         RuleFor(x => x.ReplicaNumber).GreaterThan(0);
         RuleFor(x => x.Host).NotEmpty().MaximumLength(512);
         RuleFor(x => x.Port).InclusiveBetween(1, 65535);
-        RuleFor(x => x.S3Path).MaximumLength(4096);
+        RuleFor(x => x.StoragePath).MaximumLength(4096);
         RuleFor(x => x.Status).IsInEnum();
         RuleFor(x => x.ClickHouseOperationId).MaximumLength(512).When(x => x.ClickHouseOperationId is not null);
         RuleFor(x => x.ClickHouseStatus).MaximumLength(128).When(x => x.ClickHouseStatus is not null);

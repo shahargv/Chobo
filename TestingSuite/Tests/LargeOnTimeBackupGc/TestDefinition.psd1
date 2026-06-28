@@ -256,7 +256,7 @@
             Name = 'show-gc-logs'
             Type = 'Cli'
             Args = @('logs', 'show', '--last', '2000')
-            ExpectTextContains = @('S3 directory', 'Backup cleanup completed')
+            ExpectTextContains = @('storage directory', 'Backup cleanup completed')
         }
     )
     Verify = @()

@@ -41,7 +41,7 @@ public interface IClickHouseAdapter
     Task KillQueryAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string queryId, CancellationToken cancellationToken);
 }
 
-public sealed class ClickHouseAdapter(ICredentialProtector protector, IEndpointRewriteService endpointRewrites, Serilog.ILogger logger) : IClickHouseAdapter
+public sealed class ClickHouseAdapter(ICredentialProtector protector, IEndpointRewriteService endpointRewrites, IBackupStorageProviderRegistry storageProviders, Serilog.ILogger logger) : IClickHouseAdapter
 {
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan OperationSubmitTimeout = TimeSpan.FromMinutes(2);
@@ -186,44 +186,37 @@ public sealed class ClickHouseAdapter(ICredentialProtector protector, IEndpointR
     public async Task<ClickHouseOperationResult> StartBackupAsync(ClickHouseClusterEntity cluster, BackupTargetEntity target, BackupTableEntity table, string? baseBackupPath, IReadOnlyDictionary<string, JsonElement> settings, CancellationToken cancellationToken)
     {
         var endpoint = ToEndpoint(FirstAccessNode(cluster));
-        var shard = new BackupTableShardEntity { S3Path = table.S3Path, SourceShardNumber = 1, ReplicaNumber = 1, Host = endpoint.Host, Port = endpoint.Port, UseTls = endpoint.UseTls };
+        var shard = new BackupTableShardEntity { StoragePath = table.StoragePath, SourceShardNumber = 1, ReplicaNumber = 1, Host = endpoint.Host, Port = endpoint.Port, UseTls = endpoint.UseTls };
         return await StartBackupShardAsync(endpoint, cluster, target, table, shard, baseBackupPath, settings, cancellationToken);
     }
 
     public async Task<ClickHouseOperationResult> StartBackupShardAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, BackupTargetEntity target, BackupTableEntity table, BackupTableShardEntity shard, string? baseBackupPath, IReadOnlyDictionary<string, JsonElement> settings, CancellationToken cancellationToken)
     {
-        var s3 = S3Endpoint(target, shard.S3Path);
-        var accessKey = await protector.DecryptAsync(target.EncryptedAccessKey, target.EncryptedAccessKeyKeyId, cancellationToken) ?? "";
-        var secretKey = await protector.DecryptAsync(target.EncryptedSecretKey, target.EncryptedSecretKeyKeyId, cancellationToken) ?? "";
-        var choboSettings = string.IsNullOrWhiteSpace(baseBackupPath)
-            ? []
-            : new[] { ("base_backup", ClickHouseSql.S3(S3Endpoint(target, baseBackupPath), accessKey, secretKey)) };
-        var settingsClause = ClickHouseAdvancedSettings.ToSettingsClause(settings, choboSettings);
-        var sql = $"BACKUP TABLE {ClickHouseSql.Qualified(table.Database, table.Table)} TO {ClickHouseSql.S3(s3, accessKey, secretKey)}{settingsClause} ASYNC";
-        _logger.Information("Submitting ClickHouse backup for {Database}.{Table} shard {ShardNumber} on {Host}:{Port} to {S3Path}.", table.Database, table.Table, shard.SourceShardNumber, endpoint.Host, endpoint.Port, shard.S3Path);
-        return await StartOperationAsync(endpoint, cluster, sql, [accessKey, secretKey], cancellationToken);
+        var destination = await storageProviders.Get(target).CreateBackupDestinationAsync(target, shard.StoragePath, baseBackupPath, cancellationToken);
+        var settingsClause = ClickHouseAdvancedSettings.ToSettingsClause(settings, destination.Settings.ToArray());
+        var sql = $"BACKUP TABLE {ClickHouseSql.Qualified(table.Database, table.Table)} TO {destination.Expression}{settingsClause} ASYNC";
+        _logger.Information("Submitting ClickHouse backup for {Database}.{Table} shard {ShardNumber} on {Host}:{Port} to {StoragePath}.", table.Database, table.Table, shard.SourceShardNumber, endpoint.Host, endpoint.Port, shard.StoragePath);
+        return await StartOperationAsync(endpoint, cluster, sql, destination.SensitiveValues, cancellationToken);
     }
 
     public async Task<ClickHouseOperationResult> StartRestoreAsync(ClickHouseClusterEntity cluster, BackupTargetEntity target, RestoreTableEntity table, BackupTableEntity backupTable, IReadOnlyDictionary<string, JsonElement> settings, CancellationToken cancellationToken)
     {
         var endpoint = ToEndpoint(FirstAccessNode(cluster));
-        var backupShard = new BackupTableShardEntity { S3Path = backupTable.S3Path, SourceShardNumber = 1 };
+        var backupShard = new BackupTableShardEntity { StoragePath = backupTable.StoragePath, SourceShardNumber = 1 };
         var shard = new RestoreTableShardEntity { RestoreDatabase = table.TargetDatabase, RestoreTableName = table.TargetTable, SourceShardNumber = 1, TargetHost = endpoint.Host, TargetPort = endpoint.Port, TargetUseTls = endpoint.UseTls };
         return await StartRestoreShardAsync(endpoint, cluster, target, shard, backupTable, backupShard, table.Append, settings, cancellationToken);
     }
 
     public async Task<ClickHouseOperationResult> StartRestoreShardAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, BackupTargetEntity target, RestoreTableShardEntity shard, BackupTableEntity backupTable, BackupTableShardEntity backupShard, bool allowNonEmptyTables, IReadOnlyDictionary<string, JsonElement> settings, CancellationToken cancellationToken)
     {
-        var s3 = S3Endpoint(target, backupShard.S3Path);
+        var destination = await storageProviders.Get(target).CreateRestoreDestinationAsync(target, backupShard.StoragePath, cancellationToken);
         var from = ClickHouseSql.Qualified(backupTable.Database, backupTable.Table);
         var to = ClickHouseSql.Qualified(shard.RestoreDatabase, shard.RestoreTableName);
-        var accessKey = await protector.DecryptAsync(target.EncryptedAccessKey, target.EncryptedAccessKeyKeyId, cancellationToken) ?? "";
-        var secretKey = await protector.DecryptAsync(target.EncryptedSecretKey, target.EncryptedSecretKeyKeyId, cancellationToken) ?? "";
         var choboSettings = allowNonEmptyTables ? new[] { ("allow_non_empty_tables", "1") } : [];
-        var settingsClause = ClickHouseAdvancedSettings.ToSettingsClause(settings, choboSettings);
-        var sql = $"RESTORE TABLE {from} AS {to} FROM {ClickHouseSql.S3(s3, accessKey, secretKey)}{settingsClause} ASYNC";
+        var settingsClause = ClickHouseAdvancedSettings.ToSettingsClause(settings, choboSettings.Concat(destination.Settings).ToArray());
+        var sql = $"RESTORE TABLE {from} AS {to} FROM {destination.Expression}{settingsClause} ASYNC";
         _logger.Information("Submitting ClickHouse restore for {SourceDatabase}.{SourceTable} source shard {SourceShard} to {TargetDatabase}.{TargetTable} on {Host}:{Port}.", backupTable.Database, backupTable.Table, backupShard.SourceShardNumber, shard.RestoreDatabase, shard.RestoreTableName, endpoint.Host, endpoint.Port);
-        return await StartOperationAsync(endpoint, cluster, sql, [accessKey, secretKey], cancellationToken);
+        return await StartOperationAsync(endpoint, cluster, sql, destination.SensitiveValues, cancellationToken);
     }
 
     public async Task<ClickHouseOperationStatus> GetOperationStatusAsync(ClickHouseClusterEntity cluster, string operationId, CancellationToken cancellationToken)
@@ -429,10 +422,6 @@ public sealed class ClickHouseAdapter(ICredentialProtector protector, IEndpointR
         return compact.Length <= 400 ? compact : compact[..400] + "...";
     }
 
-    private string S3Endpoint(BackupTargetEntity target, string path)
-    {
-        return endpointRewrites.RewriteS3EndpointForClickHouse(S3TargetUrlBuilder.BuildObjectUrl(target, path)).ToString();
-    }
 
     private static string Hash(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();

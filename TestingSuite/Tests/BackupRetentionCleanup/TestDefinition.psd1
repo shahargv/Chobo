@@ -1,6 +1,6 @@
 @{
     Name = 'BackupRetentionCleanup'
-    Description = 'Verifies policy retention, pinning, manual deletion, failed cleanup, restart resume, audit, and actual S3 object deletion.'
+    Description = 'Verifies policy retention, pinning, manual deletion, failed cleanup, restart resume, audit, and actual storage object deletion.'
     Resources = @(
         @{ Name = 'server'; Type = 'ChoboServer' }
         @{ Name = 'source'; Type = 'SingleNode' }

@@ -1,15 +1,15 @@
-using ChoboServer.Data;
+using Chobo.Contracts;
 
 namespace ChoboServer.Services;
 
 public static class S3TargetUrlBuilder
 {
-    public static Uri BuildObjectUrl(BackupTargetEntity target, string path)
+    public static Uri BuildObjectUrl(S3TargetSettingsDto settings, string path)
     {
-        var endpoint = new Uri(target.Endpoint.TrimEnd('/') + "/");
-        var bucket = target.Bucket.Trim('/');
-        var objectPath = StoragePath(target, path).TrimStart('/');
-        var urlPath = target.ForcePathStyle
+        var endpoint = new Uri(settings.Endpoint.TrimEnd('/') + "/");
+        var bucket = settings.Bucket.Trim('/');
+        var objectPath = StoragePath(settings, path).TrimStart('/');
+        var urlPath = settings.ForcePathStyle
             ? JoinPath(bucket, objectPath)
             : objectPath;
         var uriBuilder = new UriBuilder(endpoint)
@@ -17,7 +17,7 @@ public static class S3TargetUrlBuilder
             Path = "/" + EncodePath(urlPath)
         };
 
-        if (!target.ForcePathStyle)
+        if (!settings.ForcePathStyle)
         {
             uriBuilder.Host = $"{bucket}.{endpoint.Host}";
         }
@@ -25,9 +25,9 @@ public static class S3TargetUrlBuilder
         return uriBuilder.Uri;
     }
 
-    public static string StoragePath(BackupTargetEntity target, string path)
+    public static string StoragePath(S3TargetSettingsDto settings, string path)
     {
-        var prefix = string.IsNullOrWhiteSpace(target.PathPrefix) ? "" : target.PathPrefix.Trim('/').Trim() + "/";
+        var prefix = string.IsNullOrWhiteSpace(settings.PathPrefix) ? "" : settings.PathPrefix.Trim('/').Trim() + "/";
         return prefix + path.TrimStart('/');
     }
 

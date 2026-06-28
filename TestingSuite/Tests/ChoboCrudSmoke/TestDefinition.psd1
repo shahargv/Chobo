@@ -178,8 +178,8 @@
             SaveJsonAs = 'target'
             ExpectJson = @(
                 @{ Path = 'name'; Equals = 'crud-minio-old' }
-                @{ Path = 'type'; Equals = 'S3' }
-                @{ Path = 's3.bucket'; Equals = '{backupStore.Bucket}' }
+                @{ Path = 'type'; Equals = 's3' }
+                @{ Path = 'settings.bucket'; Equals = '{backupStore.Bucket}' }
             )
             ExpectTextNotContains = @('{backupStore.SecretKey}')
         }
@@ -188,7 +188,7 @@
             Type = 'Cli'
             Args = @('targets', 'list')
             ExpectJson = @(
-                @{ Path = '$'; ContainsObject = @{ name = 'crud-minio-old'; type = 'S3' } }
+                @{ Path = '$'; ContainsObject = @{ name = 'crud-minio-old'; type = 's3' } }
             )
             ExpectTextNotContains = @('{backupStore.SecretKey}')
         }
@@ -199,9 +199,9 @@
             ExpectJson = @(
                 @{ Path = 'id'; Equals = '{target.id}' }
                 @{ Path = 'name'; Equals = 'crud-minio-new' }
-                @{ Path = 's3.region'; Equals = 'eu-west-1' }
-                @{ Path = 's3.pathPrefix'; Equals = 'crud-prefix' }
-                @{ Path = 's3.forcePathStyle'; Equals = $false }
+                @{ Path = 'settings.region'; Equals = 'eu-west-1' }
+                @{ Path = 'settings.pathPrefix'; Equals = 'crud-prefix' }
+                @{ Path = 'settings.forcePathStyle'; Equals = $false }
             )
             ExpectTextNotContains = @('{backupStore.SecretKey}')
         }
@@ -210,7 +210,7 @@
             Type = 'Cli'
             Args = @('targets', 'list')
             ExpectJson = @(
-                @{ Path = '$'; ContainsObject = @{ name = 'crud-minio-new'; type = 'S3' } }
+                @{ Path = '$'; ContainsObject = @{ name = 'crud-minio-new'; type = 's3' } }
             )
             ExpectTextNotContains = @('crud-minio-old', '{backupStore.SecretKey}')
         }

@@ -98,13 +98,19 @@ const optionalProperties = new Set([
   "InitiateRestoreRequest.table",
   "InitiateRestoreRequest.tables",
   "ManualBackupRequest.clickHouseBackupSettings",
+  "BackupTargetExport.settings",
+  "BackupTargetExport.secrets",
+  "BackupTargetExport.s3",
+  "BackupTableExport.s3Path",
+  "BackupTableShardExport.s3Path",
+  "UpsertBackupTargetRequest.settings",
+  "UpsertBackupTargetRequest.secrets",
   "InitiateRestoreRequest.clickHouseRestoreSettings"
 ]);
 
 const scalarSettingsProperties = new Set([
   "clickHouseBackupSettings",
   "clickHouseRestoreSettings",
-  "settings"
 ]);
 
 const scalarSettingProperties = new Set([

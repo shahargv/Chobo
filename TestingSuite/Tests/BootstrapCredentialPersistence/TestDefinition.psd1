@@ -33,7 +33,7 @@
             SaveJsonAs = 'target'
             ExpectJson = @(
                 @{ Path = 'id'; NotEmpty = $true }
-                @{ Path = 's3.bucket'; Equals = '{backupStore.Bucket}' }
+                @{ Path = 'settings.bucket'; Equals = '{backupStore.Bucket}' }
             )
             ExpectTextNotContains = @('{backupStore.SecretKey}')
         }
@@ -54,7 +54,7 @@
             Args = @('targets', 'test-connection', '--id', '{target.id}')
             ExpectJson = @(
                 @{ Path = 'targetId'; Equals = '{target.id}' }
-                @{ Path = 'targetType'; Equals = 'S3' }
+                @{ Path = 'targetType'; Equals = 's3' }
                 @{ Path = 'succeeded'; Equals = $true }
             )
         }

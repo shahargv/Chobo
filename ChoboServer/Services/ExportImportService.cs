@@ -35,7 +35,7 @@ public sealed class ExportImportService(ChoboDbContext db, IActorContext actor) 
             [],
             [],
             clusters.Select(x => new ClusterExport(x.Id, x.Name, x.Mode, x.ClickHouseClusterName, x.AccessNodes.Select(n => new AccessNodeDto(n.Id, n.Host, n.Port, n.UseTls)).ToList(), x.EncryptedUserName, x.EncryptedUserNameKeyId, x.EncryptedPassword, x.EncryptedPasswordKeyId, x.BackupRestoreMaxDop, x.NodeMaxDopDefault, DeserializeNodeOverrides(x.NodeMaxDopOverridesJson), x.ShardMaxDopDefault, DeserializeShardOverrides(x.ShardMaxDopOverridesJson), ClickHouseAdvancedSettings.Deserialize(x.ClickHouseBackupSettingsJson, ClickHouseAdvancedSettingsKind.Backup), ClickHouseAdvancedSettings.Deserialize(x.ClickHouseRestoreSettingsJson, ClickHouseAdvancedSettingsKind.Restore), x.IsDeleted, x.CreatedAt, x.UpdatedAt, x.DeletedAt)).ToList(),
-            targets.Select(x => new BackupTargetExport(x.Id, x.Name, x.Type, new S3TargetSettingsDto(x.Endpoint, x.Region, x.Bucket, x.PathPrefix, x.ForcePathStyle), x.EncryptedAccessKey, x.EncryptedAccessKeyKeyId, x.EncryptedSecretKey, x.EncryptedSecretKeyKeyId, x.IsDeleted, x.CreatedAt, x.UpdatedAt, x.DeletedAt)).ToList(),
+            targets.Select(x => new BackupTargetExport(x.Id, x.Name, x.Type, ReadJsonDictionary(x.SettingsJson), ReadJsonDictionary(x.SecretsJson), x.IsDeleted, x.CreatedAt, x.UpdatedAt, x.DeletedAt)).ToList(),
             policies.Select(x => new BackupPolicyExport(
                 x.Id,
                 x.Name,
@@ -56,8 +56,8 @@ public sealed class ExportImportService(ChoboDbContext db, IActorContext actor) 
             schedules.Select(x => new BackupScheduleExport(x.Id, x.Name, x.PolicyId, x.BackupType, x.CronExpression, x.TimeZoneId, x.IsEnabled, x.MissedRunGracePeriod, x.Description, x.IsSystemDefault, x.IsDeleted, x.CreatedAt, x.UpdatedAt, x.DeletedAt)).ToList(),
             schemaDefinitions.Select(x => new SchemaDefinitionExport(x.Id, x.SchemaHash, x.Database, x.Table, x.Engine, x.CreateTableSql, x.ColumnsJson, x.CreatedAt)).ToList(),
             backups.Select(x => new BackupExport(x.Id, x.TriggerType, x.Status, x.BackupType, x.ContentMode, x.SourceClusterId, x.TargetId, x.PolicyId, x.ScheduleId, x.ManualRequestJson, x.RequestedByUserId, x.RequestedByName, x.CreatedAt, x.QueuedAt, x.StartedAt, x.CompletedAt, x.Error, x.FailureReason, x.IsPinned, x.PinnedAt, x.PinnedByUserId, x.PinnedByName, x.DeletionReason, x.DeletionRequestedAt, x.DeletionStartedAt, x.DeletedAt, x.DeletionError, x.DeletionAttemptCount, ClickHouseAdvancedSettings.Deserialize(x.ClickHouseBackupSettingsJson, ClickHouseAdvancedSettingsKind.Backup))).ToList(),
-            backupTables.Select(x => new BackupTableExport(x.Id, x.BackupId, x.EffectiveBackupType, x.ParentFullBackupId, x.ParentFullBackupTableId, x.Database, x.Table, x.Engine, x.DataBackedUp, x.SchemaDefinitionId, x.S3Path, x.BackupSizeBytes, x.Status, x.ClickHouseOperationId, x.ClickHouseStatus, x.StartedAt, x.CompletedAt, x.Error)).ToList(),
-            backupTableShards.Select(x => new BackupTableShardExport(x.Id, x.BackupTableId, x.EffectiveBackupType, x.ParentFullBackupId, x.ParentFullBackupTableShardId, x.SourceShardNumber, x.SourceShardName, x.ReplicaNumber, x.Host, x.Port, x.UseTls, x.S3Path, x.BackupSizeBytes, x.Status, x.ClickHouseOperationId, x.ClickHouseStatus, x.StartedAt, x.CompletedAt, x.Error)).ToList(),
+            backupTables.Select(x => new BackupTableExport(x.Id, x.BackupId, x.EffectiveBackupType, x.ParentFullBackupId, x.ParentFullBackupTableId, x.Database, x.Table, x.Engine, x.DataBackedUp, x.SchemaDefinitionId, x.StoragePath, x.BackupSizeBytes, x.Status, x.ClickHouseOperationId, x.ClickHouseStatus, x.StartedAt, x.CompletedAt, x.Error)).ToList(),
+            backupTableShards.Select(x => new BackupTableShardExport(x.Id, x.BackupTableId, x.EffectiveBackupType, x.ParentFullBackupId, x.ParentFullBackupTableShardId, x.SourceShardNumber, x.SourceShardName, x.ReplicaNumber, x.Host, x.Port, x.UseTls, x.StoragePath, x.BackupSizeBytes, x.Status, x.ClickHouseOperationId, x.ClickHouseStatus, x.StartedAt, x.CompletedAt, x.Error)).ToList(),
             restores.Select(x => new RestoreExport(x.Id, x.BackupId, x.TargetClusterId, x.Status, x.Append, x.AllowSchemaMismatch, x.Layout, x.SourceShard, x.TargetShard, x.RequestJson, x.RequestedByUserId, x.RequestedByName, x.CreatedAt, x.QueuedAt, x.StartedAt, x.CompletedAt, x.Error, x.FailureReason, ClickHouseAdvancedSettings.Deserialize(x.ClickHouseRestoreSettingsJson, ClickHouseAdvancedSettingsKind.Restore))).ToList(),
             restoreTables.Select(x => new RestoreTableExport(x.Id, x.RestoreId, x.BackupTableId, x.SourceDatabase, x.SourceTable, x.TargetDatabase, x.TargetTable, x.Append, x.AllowSchemaMismatch, x.SchemaOnly, x.Status, x.ClickHouseOperationId, x.ClickHouseStatus, x.Warning, x.StartedAt, x.CompletedAt, x.Error)).ToList(),
             restoreTableShards.Select(x => new RestoreTableShardExport(x.Id, x.RestoreTableId, x.BackupTableShardId, x.SourceShardNumber, x.TargetShardNumber, x.TargetShardName, x.TargetReplicaNumber, x.TargetHost, x.TargetPort, x.TargetUseTls, x.LayoutRole, x.RestoreDatabase, x.RestoreTableName, x.Status, x.ClickHouseOperationId, x.ClickHouseStatus, x.Warning, x.StartedAt, x.CompletedAt, x.Error)).ToList());
@@ -127,7 +127,7 @@ public sealed class ExportImportService(ChoboDbContext db, IActorContext actor) 
                     AccessNodes = cluster.AccessNodes.Select(n => new ClickHouseAccessNodeEntity { Id = n.Id, Host = n.Host, Port = n.Port, UseTls = n.UseTls }).ToList()
                 });
             }
-            db.BackupTargets.AddRange(import.Payload.BackupTargets.Select(x => new BackupTargetEntity { Id = x.Id, Name = x.Name, Type = x.Type, Endpoint = x.S3.Endpoint, Region = x.S3.Region, Bucket = x.S3.Bucket, PathPrefix = x.S3.PathPrefix, ForcePathStyle = x.S3.ForcePathStyle, EncryptedAccessKey = null, EncryptedAccessKeyKeyId = null, EncryptedSecretKey = null, EncryptedSecretKeyKeyId = null, IsDeleted = x.IsDeleted, CreatedAt = x.CreatedAt, UpdatedAt = x.UpdatedAt, DeletedAt = x.DeletedAt }));
+            db.BackupTargets.AddRange(import.Payload.BackupTargets.Select(ToImportedTarget));
             db.BackupPolicies.AddRange(import.Payload.BackupPolicies.Select(x => new BackupPolicyEntity
             {
                 Id = x.Id,
@@ -156,8 +156,8 @@ public sealed class ExportImportService(ChoboDbContext db, IActorContext actor) 
             {
                 db.SchemaDefinitions.AddRange(import.Payload.SchemaDefinitions.Select(x => new SchemaDefinitionEntity { Id = x.Id, SchemaHash = x.SchemaHash, Database = x.Database, Table = x.Table, Engine = x.Engine, CreateTableSql = x.CreateTableSql, ColumnsJson = x.ColumnsJson, CreatedAt = x.CreatedAt }));
                 db.Backups.AddRange(import.Payload.Backups.Select(x => new BackupEntity { Id = x.Id, TriggerType = x.TriggerType, Status = NormalizeBackupRunStatus(x.Status), BackupType = x.BackupType, ContentMode = x.ContentMode, SourceClusterId = x.SourceClusterId, TargetId = x.TargetId, PolicyId = x.PolicyId, ScheduleId = x.ScheduleId, ManualRequestJson = x.ManualRequestJson, ClickHouseBackupSettingsJson = ClickHouseAdvancedSettings.Serialize(x.ClickHouseBackupSettings, ClickHouseAdvancedSettingsKind.Backup), RequestedByUserId = null, RequestedByName = x.RequestedByName, CreatedAt = x.CreatedAt, QueuedAt = x.QueuedAt, StartedAt = x.StartedAt, CompletedAt = NormalizeCompletedAt(x.Status is BackupRunStatus.Queued or BackupRunStatus.Running, x.CompletedAt, importedAt), Error = x.Error, FailureReason = NormalizeFailureReason(x.Status is BackupRunStatus.Queued or BackupRunStatus.Running, x.FailureReason), IsPinned = x.IsPinned, PinnedAt = x.PinnedAt, PinnedByUserId = null, PinnedByName = x.PinnedByName, DeletionReason = x.DeletionReason, DeletionRequestedAt = x.DeletionRequestedAt, DeletionStartedAt = x.DeletionStartedAt, DeletedAt = x.DeletedAt, DeletionError = x.DeletionError, DeletionAttemptCount = x.DeletionAttemptCount }));
-                db.BackupTables.AddRange(import.Payload.BackupTables.Select(x => new BackupTableEntity { Id = x.Id, BackupId = x.BackupId, EffectiveBackupType = x.EffectiveBackupType, ParentFullBackupId = x.ParentFullBackupId, ParentFullBackupTableId = x.ParentFullBackupTableId, Database = x.Database, Table = x.Table, Engine = x.Engine, DataBackedUp = x.DataBackedUp, SchemaDefinitionId = x.SchemaDefinitionId, S3Path = x.S3Path, BackupSizeBytes = x.BackupSizeBytes, Status = NormalizeBackupTableStatus(x.Status), ClickHouseOperationId = x.ClickHouseOperationId, ClickHouseStatus = x.ClickHouseStatus, StartedAt = x.StartedAt, CompletedAt = NormalizeCompletedAt(x.Status is BackupTableStatus.Queued or BackupTableStatus.Running, x.CompletedAt, importedAt), Error = NormalizeError(x.Status is BackupTableStatus.Queued or BackupTableStatus.Running, x.Error) }));
-                db.BackupTableShards.AddRange(import.Payload.BackupTableShards.Select(x => new BackupTableShardEntity { Id = x.Id, BackupTableId = x.BackupTableId, EffectiveBackupType = x.EffectiveBackupType, ParentFullBackupId = x.ParentFullBackupId, ParentFullBackupTableShardId = x.ParentFullBackupTableShardId, SourceShardNumber = x.SourceShardNumber, SourceShardName = x.SourceShardName, ReplicaNumber = x.ReplicaNumber, Host = x.Host, Port = x.Port, UseTls = x.UseTls, S3Path = x.S3Path, BackupSizeBytes = x.BackupSizeBytes, Status = NormalizeBackupTableStatus(x.Status), ClickHouseOperationId = x.ClickHouseOperationId, ClickHouseStatus = x.ClickHouseStatus, StartedAt = x.StartedAt, CompletedAt = NormalizeCompletedAt(x.Status is BackupTableStatus.Queued or BackupTableStatus.Running, x.CompletedAt, importedAt), Error = NormalizeError(x.Status is BackupTableStatus.Queued or BackupTableStatus.Running, x.Error) }));
+                db.BackupTables.AddRange(import.Payload.BackupTables.Select(x => new BackupTableEntity { Id = x.Id, BackupId = x.BackupId, EffectiveBackupType = x.EffectiveBackupType, ParentFullBackupId = x.ParentFullBackupId, ParentFullBackupTableId = x.ParentFullBackupTableId, Database = x.Database, Table = x.Table, Engine = x.Engine, DataBackedUp = x.DataBackedUp, SchemaDefinitionId = x.SchemaDefinitionId, StoragePath = ExportStoragePath(x), BackupSizeBytes = x.BackupSizeBytes, Status = NormalizeBackupTableStatus(x.Status), ClickHouseOperationId = x.ClickHouseOperationId, ClickHouseStatus = x.ClickHouseStatus, StartedAt = x.StartedAt, CompletedAt = NormalizeCompletedAt(x.Status is BackupTableStatus.Queued or BackupTableStatus.Running, x.CompletedAt, importedAt), Error = NormalizeError(x.Status is BackupTableStatus.Queued or BackupTableStatus.Running, x.Error) }));
+                db.BackupTableShards.AddRange(import.Payload.BackupTableShards.Select(x => new BackupTableShardEntity { Id = x.Id, BackupTableId = x.BackupTableId, EffectiveBackupType = x.EffectiveBackupType, ParentFullBackupId = x.ParentFullBackupId, ParentFullBackupTableShardId = x.ParentFullBackupTableShardId, SourceShardNumber = x.SourceShardNumber, SourceShardName = x.SourceShardName, ReplicaNumber = x.ReplicaNumber, Host = x.Host, Port = x.Port, UseTls = x.UseTls, StoragePath = ExportStoragePath(x), BackupSizeBytes = x.BackupSizeBytes, Status = NormalizeBackupTableStatus(x.Status), ClickHouseOperationId = x.ClickHouseOperationId, ClickHouseStatus = x.ClickHouseStatus, StartedAt = x.StartedAt, CompletedAt = NormalizeCompletedAt(x.Status is BackupTableStatus.Queued or BackupTableStatus.Running, x.CompletedAt, importedAt), Error = NormalizeError(x.Status is BackupTableStatus.Queued or BackupTableStatus.Running, x.Error) }));
                 db.Restores.AddRange(import.Payload.Restores.Select(x => new RestoreEntity { Id = x.Id, BackupId = x.BackupId, TargetClusterId = x.TargetClusterId, Status = NormalizeRestoreRunStatus(x.Status), Append = x.Append, AllowSchemaMismatch = x.AllowSchemaMismatch, Layout = x.Layout, SourceShard = x.SourceShard, TargetShard = x.TargetShard, RequestJson = x.RequestJson, ClickHouseRestoreSettingsJson = ClickHouseAdvancedSettings.Serialize(x.ClickHouseRestoreSettings, ClickHouseAdvancedSettingsKind.Restore), RequestedByUserId = null, RequestedByName = x.RequestedByName, CreatedAt = x.CreatedAt, QueuedAt = x.QueuedAt, StartedAt = x.StartedAt, CompletedAt = NormalizeCompletedAt(x.Status is RestoreRunStatus.Queued or RestoreRunStatus.Running, x.CompletedAt, importedAt), Error = x.Error, FailureReason = NormalizeFailureReason(x.Status is RestoreRunStatus.Queued or RestoreRunStatus.Running, x.FailureReason) }));
                 db.RestoreTables.AddRange(import.Payload.RestoreTables.Select(x => new RestoreTableEntity { Id = x.Id, RestoreId = x.RestoreId, BackupTableId = x.BackupTableId, SourceDatabase = x.SourceDatabase, SourceTable = x.SourceTable, TargetDatabase = x.TargetDatabase, TargetTable = x.TargetTable, Append = x.Append, AllowSchemaMismatch = x.AllowSchemaMismatch, SchemaOnly = x.SchemaOnly, Status = NormalizeRestoreTableStatus(x.Status), ClickHouseOperationId = x.ClickHouseOperationId, ClickHouseStatus = x.ClickHouseStatus, Warning = x.Warning, StartedAt = x.StartedAt, CompletedAt = NormalizeCompletedAt(x.Status is RestoreTableStatus.Queued or RestoreTableStatus.Running, x.CompletedAt, importedAt), Error = NormalizeError(x.Status is RestoreTableStatus.Queued or RestoreTableStatus.Running, x.Error) }));
                 db.RestoreTableShards.AddRange(import.Payload.RestoreTableShards.Select(x => new RestoreTableShardEntity { Id = x.Id, RestoreTableId = x.RestoreTableId, BackupTableShardId = x.BackupTableShardId, SourceShardNumber = x.SourceShardNumber, TargetShardNumber = x.TargetShardNumber, TargetShardName = x.TargetShardName, TargetReplicaNumber = x.TargetReplicaNumber, TargetHost = x.TargetHost, TargetPort = x.TargetPort, TargetUseTls = x.TargetUseTls, LayoutRole = x.LayoutRole, RestoreDatabase = x.RestoreDatabase, RestoreTableName = x.RestoreTableName, Status = NormalizeRestoreTableStatus(x.Status), ClickHouseOperationId = x.ClickHouseOperationId, ClickHouseStatus = x.ClickHouseStatus, Warning = x.Warning, StartedAt = x.StartedAt, CompletedAt = NormalizeCompletedAt(x.Status is RestoreTableStatus.Queued or RestoreTableStatus.Running, x.CompletedAt, importedAt), Error = NormalizeError(x.Status is RestoreTableStatus.Queued or RestoreTableStatus.Running, x.Error) }));
@@ -193,6 +193,52 @@ public sealed class ExportImportService(ChoboDbContext db, IActorContext actor) 
         }
     }
 
+
+
+    private static string ExportStoragePath(BackupTableExport table) =>
+        table.StoragePath ?? table.S3Path ?? throw new InvalidOperationException($"Backup table export '{table.Id}' is missing storagePath.");
+
+    private static string ExportStoragePath(BackupTableShardExport shard) =>
+        shard.StoragePath ?? shard.S3Path ?? throw new InvalidOperationException($"Backup table shard export '{shard.Id}' is missing storagePath.");
+    private static BackupTargetEntity ToImportedTarget(BackupTargetExport target) =>
+        new()
+        {
+            Id = target.Id,
+            Name = target.Name,
+            Type = NormalizeTargetType(target.Type),
+            SettingsJson = JsonSerializer.Serialize(TargetSettings(target), JsonOptions),
+            SecretsJson = "{}",
+            IsDeleted = target.IsDeleted,
+            CreatedAt = target.CreatedAt,
+            UpdatedAt = target.UpdatedAt,
+            DeletedAt = target.DeletedAt
+        };
+
+    private static string NormalizeTargetType(string? type) =>
+        string.IsNullOrWhiteSpace(type) || string.Equals(type, "S3", StringComparison.OrdinalIgnoreCase)
+            ? StorageProviderTypes.S3
+            : type;
+
+    private static IReadOnlyDictionary<string, JsonElement> TargetSettings(BackupTargetExport target) =>
+        target.Settings is not null
+            ? CloneDictionary(target.Settings)
+            : target.S3 is not null
+                ? ReadJsonDictionary(JsonSerializer.Serialize(target.S3, JsonOptions))
+                : new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+
+    private static IReadOnlyDictionary<string, JsonElement> ReadJsonDictionary(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+        }
+
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.EnumerateObject().ToDictionary(x => x.Name, x => x.Value.Clone(), StringComparer.Ordinal);
+    }
+
+    private static IReadOnlyDictionary<string, JsonElement> CloneDictionary(IReadOnlyDictionary<string, JsonElement> values) =>
+        values.ToDictionary(x => x.Key, x => x.Value.Clone(), StringComparer.Ordinal);
     private const string ImportedInFlightFailureReason = "Imported in-flight operation was marked failed; credentials and external operation state are local to the source server.";
 
     private static BackupRunStatus NormalizeBackupRunStatus(BackupRunStatus status) =>

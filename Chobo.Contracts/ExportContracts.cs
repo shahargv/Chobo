@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Chobo.Contracts;
 
@@ -30,7 +31,7 @@ public sealed record AccessTokenExport(Guid Id, Guid UserId, string Name, string
 
 public sealed record ClusterExport(Guid Id, string Name, ClusterMode Mode, string? ClickHouseClusterName, IReadOnlyList<AccessNodeDto> AccessNodes, string? EncryptedUserName, Guid? EncryptedUserNameKeyId, string? EncryptedPassword, Guid? EncryptedPasswordKeyId, int? BackupRestoreMaxDop, int NodeMaxDopDefault, IReadOnlyList<ClusterNodeMaxDopOverrideDto> NodeMaxDopOverrides, int ShardMaxDopDefault, IReadOnlyList<ClusterShardMaxDopOverrideDto> ShardMaxDopOverrides, IReadOnlyDictionary<string, JsonElement>? ClickHouseBackupSettings, IReadOnlyDictionary<string, JsonElement>? ClickHouseRestoreSettings, bool IsDeleted, DateTimeOffset CreatedAt, DateTimeOffset? UpdatedAt, DateTimeOffset? DeletedAt);
 
-public sealed record BackupTargetExport(Guid Id, string Name, BackupTargetType Type, S3TargetSettingsDto S3, string? EncryptedAccessKey, Guid? EncryptedAccessKeyKeyId, string? EncryptedSecretKey, Guid? EncryptedSecretKeyKeyId, bool IsDeleted, DateTimeOffset CreatedAt, DateTimeOffset? UpdatedAt, DateTimeOffset? DeletedAt);
+public sealed record BackupTargetExport(Guid Id, string Name, string Type, IReadOnlyDictionary<string, JsonElement>? Settings, IReadOnlyDictionary<string, JsonElement>? Secrets, bool IsDeleted, DateTimeOffset CreatedAt, DateTimeOffset? UpdatedAt, DateTimeOffset? DeletedAt, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] S3TargetSettingsDto? S3 = null, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? EncryptedAccessKey = null, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Guid? EncryptedAccessKeyKeyId = null, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? EncryptedSecretKey = null, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Guid? EncryptedSecretKeyKeyId = null);
 
 public sealed record BackupPolicyExport(Guid Id, string Name, Guid SourceClusterId, Guid? TargetId, BackupContentMode ContentMode, int SelectorJsonVersion, PolicySelector Selector, BackupRetentionDto? Retention, FailedBackupRetentionMode FailedBackupRetentionMode, IReadOnlyDictionary<string, JsonElement>? ClickHouseBackupSettings, IReadOnlyDictionary<string, JsonElement>? ClickHouseRestoreSettings, bool IsSystemDefault, bool IsDeleted, DateTimeOffset CreatedAt, DateTimeOffset? UpdatedAt, DateTimeOffset? DeletedAt);
 
@@ -40,9 +41,19 @@ public sealed record SchemaDefinitionExport(Guid Id, string SchemaHash, string D
 
 public sealed record BackupExport(Guid Id, BackupTriggerType TriggerType, BackupRunStatus Status, BackupType BackupType, BackupContentMode ContentMode, Guid SourceClusterId, Guid? TargetId, Guid? PolicyId, Guid? ScheduleId, string? ManualRequestJson, Guid? RequestedByUserId, string RequestedByName, DateTimeOffset CreatedAt, DateTimeOffset? QueuedAt, DateTimeOffset? StartedAt, DateTimeOffset? CompletedAt, string? Error, string? FailureReason, bool IsPinned, DateTimeOffset? PinnedAt, Guid? PinnedByUserId, string? PinnedByName, string? DeletionReason, DateTimeOffset? DeletionRequestedAt, DateTimeOffset? DeletionStartedAt, DateTimeOffset? DeletedAt, string? DeletionError, int DeletionAttemptCount, IReadOnlyDictionary<string, JsonElement>? ClickHouseBackupSettings);
 
-public sealed record BackupTableExport(Guid Id, Guid BackupId, BackupType EffectiveBackupType, Guid? ParentFullBackupId, Guid? ParentFullBackupTableId, string Database, string Table, string Engine, bool DataBackedUp, Guid? SchemaDefinitionId, string S3Path, long? BackupSizeBytes, BackupTableStatus Status, string? ClickHouseOperationId, string? ClickHouseStatus, DateTimeOffset? StartedAt, DateTimeOffset? CompletedAt, string? Error);
+public sealed record BackupTableExport(Guid Id, Guid BackupId, BackupType EffectiveBackupType, Guid? ParentFullBackupId, Guid? ParentFullBackupTableId, string Database, string Table, string Engine, bool DataBackedUp, Guid? SchemaDefinitionId, string? StoragePath, long? BackupSizeBytes, BackupTableStatus Status, string? ClickHouseOperationId, string? ClickHouseStatus, DateTimeOffset? StartedAt, DateTimeOffset? CompletedAt, string? Error)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? S3Path { get; init; }
+}
 
-public sealed record BackupTableShardExport(Guid Id, Guid BackupTableId, BackupType EffectiveBackupType, Guid? ParentFullBackupId, Guid? ParentFullBackupTableShardId, int SourceShardNumber, string? SourceShardName, int ReplicaNumber, string Host, int Port, bool UseTls, string S3Path, long? BackupSizeBytes, BackupTableStatus Status, string? ClickHouseOperationId, string? ClickHouseStatus, DateTimeOffset? StartedAt, DateTimeOffset? CompletedAt, string? Error);
+
+public sealed record BackupTableShardExport(Guid Id, Guid BackupTableId, BackupType EffectiveBackupType, Guid? ParentFullBackupId, Guid? ParentFullBackupTableShardId, int SourceShardNumber, string? SourceShardName, int ReplicaNumber, string Host, int Port, bool UseTls, string? StoragePath, long? BackupSizeBytes, BackupTableStatus Status, string? ClickHouseOperationId, string? ClickHouseStatus, DateTimeOffset? StartedAt, DateTimeOffset? CompletedAt, string? Error)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? S3Path { get; init; }
+}
+
 
 public sealed record RestoreExport(Guid Id, Guid BackupId, Guid TargetClusterId, RestoreRunStatus Status, bool Append, bool AllowSchemaMismatch, RestoreLayout Layout, int? SourceShard, int? TargetShard, string RequestJson, Guid? RequestedByUserId, string RequestedByName, DateTimeOffset CreatedAt, DateTimeOffset? QueuedAt, DateTimeOffset? StartedAt, DateTimeOffset? CompletedAt, string? Error, string? FailureReason, IReadOnlyDictionary<string, JsonElement>? ClickHouseRestoreSettings);
 

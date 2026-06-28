@@ -2985,6 +2985,132 @@
             }
           }
         }
+      },
+      "post": {
+        "tags": [
+          "Targets"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertBackupTargetRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertBackupTargetRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertBackupTargetRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupTargetDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupTargetDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupTargetDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/targets/{id}": {
+      "put": {
+        "tags": [
+          "Targets"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertBackupTargetRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertBackupTargetRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertBackupTargetRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupTargetDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupTargetDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupTargetDto"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Targets"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
       }
     },
     "/api/v1/targets/s3": {
@@ -3090,29 +3216,6 @@
                 }
               }
             }
-          }
-        }
-      }
-    },
-    "/api/v1/targets/{id}": {
-      "delete": {
-        "tags": [
-          "Targets"
-        ],
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK"
           }
         }
       }
@@ -4544,7 +4647,7 @@
             "format": "uuid",
             "nullable": true
           },
-          "s3Path": {
+          "storagePath": {
             "type": "string",
             "nullable": true
           },
@@ -4632,7 +4735,7 @@
             "format": "uuid",
             "nullable": true
           },
-          "s3Path": {
+          "storagePath": {
             "type": "string",
             "nullable": true
           },
@@ -4663,6 +4766,10 @@
             "nullable": true
           },
           "error": {
+            "type": "string",
+            "nullable": true
+          },
+          "s3Path": {
             "type": "string",
             "nullable": true
           }
@@ -4716,7 +4823,7 @@
           "useTls": {
             "type": "boolean"
           },
-          "s3Path": {
+          "storagePath": {
             "type": "string",
             "nullable": true
           },
@@ -4800,7 +4907,7 @@
           "useTls": {
             "type": "boolean"
           },
-          "s3Path": {
+          "storagePath": {
             "type": "string",
             "nullable": true
           },
@@ -4833,6 +4940,10 @@
           "error": {
             "type": "string",
             "nullable": true
+          },
+          "s3Path": {
+            "type": "string",
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -4860,10 +4971,20 @@
             "nullable": true
           },
           "type": {
-            "$ref": "#/components/schemas/BackupTargetType"
+            "type": "string",
+            "nullable": true
           },
-          "s3": {
-            "$ref": "#/components/schemas/S3TargetSettingsDto"
+          "settings": {
+            "type": "object",
+            "additionalProperties": { },
+            "nullable": true
+          },
+          "secretFields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
           },
           "isDeleted": {
             "type": "boolean"
@@ -4892,7 +5013,35 @@
             "nullable": true
           },
           "type": {
-            "$ref": "#/components/schemas/BackupTargetType"
+            "type": "string",
+            "nullable": true
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": { },
+            "nullable": true
+          },
+          "secrets": {
+            "type": "object",
+            "additionalProperties": { },
+            "nullable": true
+          },
+          "isDeleted": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "deletedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
           },
           "s3": {
             "$ref": "#/components/schemas/S3TargetSettingsDto"
@@ -4914,32 +5063,9 @@
             "type": "string",
             "format": "uuid",
             "nullable": true
-          },
-          "isDeleted": {
-            "type": "boolean"
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "updatedAt": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
-          },
-          "deletedAt": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
           }
         },
         "additionalProperties": false
-      },
-      "BackupTargetType": {
-        "enum": [
-          "S3"
-        ],
-        "type": "string"
       },
       "BackupTriggerType": {
         "enum": [
@@ -7025,7 +7151,8 @@
             "format": "uuid"
           },
           "targetType": {
-            "$ref": "#/components/schemas/BackupTargetType"
+            "type": "string",
+            "nullable": true
           },
           "succeeded": {
             "type": "boolean"
@@ -7073,6 +7200,33 @@
             "format": "int32"
           },
           "useTls": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "UpsertBackupTargetRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "type": {
+            "type": "string",
+            "nullable": true
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": { },
+            "nullable": true
+          },
+          "secrets": {
+            "type": "object",
+            "additionalProperties": { },
+            "nullable": true
+          },
+          "updateSecrets": {
             "type": "boolean"
           }
         },

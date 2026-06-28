@@ -317,17 +317,11 @@ public sealed class ChoboFoundationTests
     [Fact]
     public void S3_target_address_uses_configured_path_style_mode()
     {
-        var target = new BackupTargetEntity
-        {
-            Endpoint = "https://s3.example.com",
-            Bucket = "backup-bucket",
-            PathPrefix = "prod/backups",
-            ForcePathStyle = true
-        };
+        var pathStyleSettings = new S3TargetSettingsDto("https://s3.example.com", "us-east-1", "backup-bucket", "prod/backups", true);
+        var virtualHostSettings = pathStyleSettings with { ForcePathStyle = false };
 
-        var pathStyle = S3TargetUrlBuilder.BuildObjectUrl(target, "db/table/file name.bin");
-        target.ForcePathStyle = false;
-        var virtualHost = S3TargetUrlBuilder.BuildObjectUrl(target, "db/table/file name.bin");
+        var pathStyle = S3TargetUrlBuilder.BuildObjectUrl(pathStyleSettings, "db/table/file name.bin");
+        var virtualHost = S3TargetUrlBuilder.BuildObjectUrl(virtualHostSettings, "db/table/file name.bin");
 
         Assert.Equal("https://s3.example.com/backup-bucket/prod/backups/db/table/file%20name.bin", pathStyle.AbsoluteUri);
         Assert.Equal("https://backup-bucket.s3.example.com/prod/backups/db/table/file%20name.bin", virtualHost.AbsoluteUri);
@@ -439,10 +433,10 @@ public sealed class ChoboFoundationTests
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
         var stored = await db.BackupTargets.SingleAsync(x => x.Id == created.Id);
-        Assert.NotEqual("raw-access-token", stored.EncryptedAccessKey);
-        Assert.NotEqual("raw-secret-token", stored.EncryptedSecretKey);
-        Assert.NotNull(stored.EncryptedAccessKeyKeyId);
-        Assert.NotNull(stored.EncryptedSecretKeyKeyId);
+        Assert.DoesNotContain("raw-access-token", stored.SecretsJson);
+        Assert.DoesNotContain("raw-secret-token", stored.SecretsJson);
+        Assert.Contains("ciphertext", stored.SecretsJson);
+        Assert.Contains("keyId", stored.SecretsJson);
 
         var export = await client.GetFromJsonAsync<ExportEnvelope>("/api/v1/config/export", JsonOptions);
         var exportJson = JsonSerializer.Serialize(export, JsonOptions);
@@ -452,6 +446,38 @@ public sealed class ChoboFoundationTests
         Assert.DoesNotContain(keyFileContents, exportJson);
     }
 
+
+    [Fact]
+    public async Task S3_target_facade_requires_credential_pair_and_preserves_credentials_when_omitted_on_update()
+    {
+        await using var factory = CreateFactory();
+        var client = AuthenticatedClient(factory);
+
+        var missingCredentials = await client.PostAsJsonAsync("/api/v1/targets/s3", new UpsertS3TargetRequest("minio", "http://minio:9000", "us-east-1", "bucket", null, true, null, null), JsonOptions);
+        Assert.Equal(HttpStatusCode.BadRequest, missingCredentials.StatusCode);
+
+        var partialCredentials = await client.PostAsJsonAsync("/api/v1/targets/s3", new UpsertS3TargetRequest("minio", "http://minio:9000", "us-east-1", "bucket", null, true, "access", null), JsonOptions);
+        Assert.Equal(HttpStatusCode.BadRequest, partialCredentials.StatusCode);
+
+        var created = await Post<BackupTargetDto>(client, "/api/v1/targets/s3", new UpsertS3TargetRequest("minio", "http://minio:9000", "us-east-1", "bucket", null, true, "access", "secret"));
+        string originalSecrets;
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+            originalSecrets = (await db.BackupTargets.SingleAsync(x => x.Id == created.Id)).SecretsJson;
+        }
+
+        var update = await client.PutAsJsonAsync($"/api/v1/targets/{created.Id}/s3", new UpsertS3TargetRequest("minio-updated", "http://minio:9000", "us-east-1", "bucket", "prefix", true, "new-access", null), JsonOptions);
+        Assert.Equal(HttpStatusCode.BadRequest, update.StatusCode);
+
+        var updated = await Put<BackupTargetDto>(client, $"/api/v1/targets/{created.Id}/s3", new UpsertS3TargetRequest("minio-updated", "http://minio:9000", "us-east-1", "bucket", "prefix", true, null, null));
+        Assert.Equal("prefix", updated.Settings["pathPrefix"].GetString());
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+            Assert.Equal(originalSecrets, (await db.BackupTargets.SingleAsync(x => x.Id == created.Id)).SecretsJson);
+        }
+    }
     [Fact]
     public async Task Cluster_credentials_can_be_updated_without_changing_topology()
     {
@@ -585,12 +611,12 @@ public sealed class ChoboFoundationTests
                 Table = "tbl",
                 Engine = "MergeTree",
                 DataBackedUp = true,
-                S3Path = "s3://bucket/db/tbl",
+                StoragePath = "s3://bucket/db/tbl",
                 Status = BackupTableStatus.Queued
             });
             db.BackupTableShards.AddRange(
-                new BackupTableShardEntity { Id = shard1, BackupTableId = tableId, EffectiveBackupType = BackupType.Full, SourceShardNumber = 1, SourceShardName = "s1", ReplicaNumber = 1, Host = "node1", Port = 9000, S3Path = "s3://bucket/db/tbl/1", Status = BackupTableStatus.Queued },
-                new BackupTableShardEntity { Id = shard2, BackupTableId = tableId, EffectiveBackupType = BackupType.Full, SourceShardNumber = 2, SourceShardName = "s2", ReplicaNumber = 1, Host = "node2", Port = 9000, S3Path = "s3://bucket/db/tbl/2", Status = BackupTableStatus.Queued });
+                new BackupTableShardEntity { Id = shard1, BackupTableId = tableId, EffectiveBackupType = BackupType.Full, SourceShardNumber = 1, SourceShardName = "s1", ReplicaNumber = 1, Host = "node1", Port = 9000, StoragePath = "s3://bucket/db/tbl/1", Status = BackupTableStatus.Queued },
+                new BackupTableShardEntity { Id = shard2, BackupTableId = tableId, EffectiveBackupType = BackupType.Full, SourceShardNumber = 2, SourceShardName = "s2", ReplicaNumber = 1, Host = "node2", Port = 9000, StoragePath = "s3://bucket/db/tbl/2", Status = BackupTableStatus.Queued });
             await db.SaveChangesAsync();
             var queue = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
             await queue.EnsureBackupQueueItemsAsync(backupId);
@@ -688,7 +714,7 @@ public sealed class ChoboFoundationTests
             null,
             null,
             3));
-        var target = await Post<BackupTargetDto>(client, "/api/v1/targets/s3", new UpsertS3TargetRequest("s3", "http://minio:9000", "us-east-1", "bucket", null, true, null, null));
+        var target = await Post<BackupTargetDto>(client, "/api/v1/targets/s3", new UpsertS3TargetRequest("s3", "http://minio:9000", "us-east-1", "bucket", null, true, "access", "secret"));
         var created = await Post<BackupPolicyDto>(client, "/api/v1/policies", new UpsertPolicyRequest(
             "policy-settings",
             cluster.Id,
@@ -808,7 +834,7 @@ public sealed class ChoboFoundationTests
         var export = await sourceClient.GetFromJsonAsync<ExportEnvelope>("/api/v1/config/export", JsonOptions);
         Assert.NotNull(export);
         Assert.NotNull(Assert.Single(export!.Data.Clusters).EncryptedPassword);
-        Assert.NotNull(Assert.Single(export.Data.BackupTargets).EncryptedSecretKey);
+        Assert.NotEmpty(Assert.Single(export.Data.BackupTargets).Secrets ?? new Dictionary<string, JsonElement>());
 
         await using var targetFactory = CreateFactory();
         var targetClient = AuthenticatedClient(targetFactory);
@@ -824,10 +850,7 @@ public sealed class ChoboFoundationTests
         Assert.Null(cluster.EncryptedUserNameKeyId);
         Assert.Null(cluster.EncryptedPassword);
         Assert.Null(cluster.EncryptedPasswordKeyId);
-        Assert.Null(target.EncryptedAccessKey);
-        Assert.Null(target.EncryptedAccessKeyKeyId);
-        Assert.Null(target.EncryptedSecretKey);
-        Assert.Null(target.EncryptedSecretKeyKeyId);
+        Assert.Equal("{}", target.SecretsJson);
         Assert.Empty(await db.Backups.ToListAsync());
         var audit = await db.AuditEntries.SingleAsync(x => x.Action == "import" && x.EntityType == "config");
         Assert.Contains("\"credentialsImportedAsEmpty\":true", audit.Details);
@@ -857,6 +880,9 @@ public sealed class ChoboFoundationTests
         Assert.Single(export.Data.RestoreTables);
         Assert.Single(export.Data.RestoreTableShards);
         Assert.Equal("prod_cluster", Assert.Single(export.Data.Clusters, x => x.Id == ids.ClusterId).ClickHouseClusterName);
+        var legacyExportJson = JsonSerializer.Serialize(export, JsonOptions).Replace("\"storagePath\":", "\"s3Path\":");
+        export = JsonSerializer.Deserialize<ExportEnvelope>(legacyExportJson, JsonOptions);
+        Assert.NotNull(export);
 
         await using var targetFactory = CreateFactory();
         var targetClient = AuthenticatedClient(targetFactory);
@@ -881,10 +907,7 @@ public sealed class ChoboFoundationTests
         Assert.Null(cluster.EncryptedUserNameKeyId);
         Assert.Null(cluster.EncryptedPassword);
         Assert.Null(cluster.EncryptedPasswordKeyId);
-        Assert.Null(target.EncryptedAccessKey);
-        Assert.Null(target.EncryptedAccessKeyKeyId);
-        Assert.Null(target.EncryptedSecretKey);
-        Assert.Null(target.EncryptedSecretKeyKeyId);
+        Assert.Equal("{}", target.SecretsJson);
         Assert.True(await imported.BackupPolicies.AnyAsync(x => x.Id == ids.PolicyId));
         Assert.True(await imported.BackupSchedules.AnyAsync(x => x.Id == ids.ScheduleId));
         Assert.True(await imported.SchemaDefinitions.AnyAsync(x => x.Id == ids.SchemaDefinitionId));
@@ -1044,8 +1067,8 @@ public sealed class ChoboFoundationTests
             "bucket-a",
             null,
             true,
-            "access",
-            "secret"));
+            "raw-audit-access-token",
+            "raw-audit-secret-token"));
 
         var updated = await Put<BackupTargetDto>(client, $"/api/v1/targets/{created.Id}/s3", new UpsertS3TargetRequest(
             "minio-renamed",
@@ -1063,11 +1086,12 @@ public sealed class ChoboFoundationTests
         var audits = await client.GetFromJsonAsync<PagedResultDto<AuditEntryDto>>("/api/v1/audit?last=20", JsonOptions) ?? throw new InvalidOperationException("Audit query returned no data.");
         var updateAudit = audits.Items.First(x => x.Action == "update" && x.EntityType == "backup-target" && x.EntityId == created.Id.ToString());
         Assert.Equal("minio", updateAudit.Details.GetProperty("previous").GetProperty("name").GetString());
-        Assert.Equal("bucket-a", updateAudit.Details.GetProperty("previous").GetProperty("s3").GetProperty("bucket").GetString());
+        Assert.Equal("bucket-a", updateAudit.Details.GetProperty("previous").GetProperty("settings").GetProperty("bucket").GetString());
         Assert.Equal("minio-renamed", updateAudit.Details.GetProperty("current").GetProperty("name").GetString());
-        Assert.Equal("bucket-b", updateAudit.Details.GetProperty("current").GetProperty("s3").GetProperty("bucket").GetString());
+        Assert.Equal("bucket-b", updateAudit.Details.GetProperty("current").GetProperty("settings").GetProperty("bucket").GetString());
         Assert.Equal(updated.Id.ToString(), updateAudit.Details.GetProperty("current").GetProperty("id").GetString());
-        Assert.False(updateAudit.Details.GetRawText().Contains("secret", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain("raw-audit-access-token", updateAudit.Details.GetRawText(), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("raw-audit-secret-token", updateAudit.Details.GetRawText(), StringComparison.OrdinalIgnoreCase);
 
         var deactivateAudit = audits.Items.First(x => x.Action == "deactivate" && x.EntityType == "user" && x.EntityId == user.UserId.ToString());
         Assert.Equal("operator", deactivateAudit.Details.GetProperty("deactivated").GetProperty("userName").GetString());
@@ -1113,7 +1137,7 @@ public sealed class ChoboFoundationTests
                     Status = BackupTableStatus.Succeeded,
                     ClickHouseStatus = "SCHEMA_ONLY",
                     CompletedAt = backup.CompletedAt,
-                    S3Path = $"schema-only/large_schema/{tableName}",
+                    StoragePath = $"schema-only/large_schema/{tableName}",
                     SchemaDefinition = new SchemaDefinitionEntity
                     {
                         SchemaHash = $"large_schema.{tableName}.schema",
@@ -1164,8 +1188,8 @@ public sealed class ChoboFoundationTests
             "bucket",
             null,
             true,
-            "access",
-            "secret"));
+            "raw-audit-access-token",
+            "raw-audit-secret-token"));
         var now = DateTimeOffset.UtcNow;
         var recent = new BackupEntity
         {
@@ -1222,8 +1246,8 @@ public sealed class ChoboFoundationTests
             "bucket",
             null,
             true,
-            "access",
-            "secret"));
+            "raw-audit-access-token",
+            "raw-audit-secret-token"));
         var policy = await Post<BackupPolicyDto>(client, "/api/v1/policies", new UpsertPolicyRequest("all", cluster.Id, target.Id, PolicySelector.Empty));
         var eval = await Post<PolicyEvaluationDto>(client, $"/api/v1/policies/{policy.Id}/evaluate", new PolicyEvaluationRequest(new PolicyInventory([new PolicyInventoryTable("sales", "orders")])));
         Assert.Equal(policy.Id, eval.PolicyId);
@@ -1631,22 +1655,7 @@ public sealed class ChoboFoundationTests
                 new ClickHouseAccessNodeEntity { Id = Guid.NewGuid(), Host = "clickhouse-2", Port = 9440, UseTls = true }
             ]
         });
-        db.BackupTargets.Add(new BackupTargetEntity
-        {
-            Id = targetId,
-            Name = "minio",
-            Type = BackupTargetType.S3,
-            Endpoint = "http://minio:9000",
-            Region = "us-east-1",
-            Bucket = "backups",
-            PathPrefix = "prod",
-            ForcePathStyle = true,
-            EncryptedAccessKey = includeCredentials ? "encrypted-access" : null,
-            EncryptedAccessKeyKeyId = includeCredentials ? Guid.NewGuid() : null,
-            EncryptedSecretKey = includeCredentials ? "encrypted-secret" : null,
-            EncryptedSecretKeyKeyId = includeCredentials ? Guid.NewGuid() : null,
-            CreatedAt = now
-        });
+        db.BackupTargets.Add(CreateS3TargetEntity(targetId, "minio", "http://minio:9000", "us-east-1", "backups", "prod", true, includeCredentials, now));
         db.BackupPolicies.Add(new BackupPolicyEntity
         {
             Id = policyId,
@@ -1715,7 +1724,7 @@ public sealed class ChoboFoundationTests
             Engine = "MergeTree",
             DataBackedUp = true,
             SchemaDefinitionId = schemaDefinitionId,
-            S3Path = "s3://backups/sales/orders",
+            StoragePath = "s3://backups/sales/orders",
             Status = BackupTableStatus.Succeeded,
             ClickHouseOperationId = "backup-op-table",
             ClickHouseStatus = "success",
@@ -1733,7 +1742,7 @@ public sealed class ChoboFoundationTests
             Host = "clickhouse-1",
             Port = 9000,
             UseTls = false,
-            S3Path = "s3://backups/sales/orders/shard1",
+            StoragePath = "s3://backups/sales/orders/shard1",
             Status = BackupTableStatus.Succeeded,
             ClickHouseOperationId = "backup-op-shard",
             ClickHouseStatus = "success",
@@ -1855,6 +1864,23 @@ public sealed class ChoboFoundationTests
         return client;
     }
 
+
+    private static BackupTargetEntity CreateS3TargetEntity(Guid id, string name, string endpoint, string region, string bucket, string? pathPrefix, bool forcePathStyle, bool includeCredentials, DateTimeOffset? createdAt = null) =>
+        new()
+        {
+            Id = id,
+            Name = name,
+            Type = StorageProviderTypes.S3,
+            SettingsJson = JsonSerializer.Serialize(new S3TargetSettingsDto(endpoint, region, bucket, pathPrefix, forcePathStyle), JsonOptions),
+            SecretsJson = includeCredentials
+                ? JsonSerializer.Serialize(new
+                {
+                    accessKey = new { ciphertext = "encrypted-access", keyId = Guid.NewGuid() },
+                    secretKey = new { ciphertext = "encrypted-secret", keyId = Guid.NewGuid() }
+                }, JsonOptions)
+                : "{}",
+            CreatedAt = createdAt ?? DateTimeOffset.UtcNow
+        };
     private static IReadOnlyDictionary<string, JsonElement> Settings(params (string Name, object Value)[] settings)
     {
         var result = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);

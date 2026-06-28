@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Chobo.Contracts;
 using ChoboServer.Data;
 using ChoboServer.Repositories;
@@ -8,31 +9,21 @@ namespace ChoboServer.Application;
 public sealed class TargetApplicationService(
     ITargetRepository targets,
     IUnitOfWork unitOfWork,
-    ICredentialProtector protector,
-    IBackupStorageOperations storageOperations,
+    IBackupStorageProviderRegistry storageProviders,
     IAuditService audit)
 {
     public async Task<IReadOnlyList<BackupTargetDto>> ListAsync() =>
         (await targets.ListActiveAsync()).Select(ToDto).ToList();
 
-    public async Task<BackupTargetDto> AddS3Async(UpsertS3TargetRequest request)
+    public async Task<BackupTargetDto> AddAsync(UpsertBackupTargetRequest request, CancellationToken cancellationToken = default)
     {
-        Validate(request);
-        var accessKey = await protector.EncryptAsync(request.AccessKey);
-        var secretKey = await protector.EncryptAsync(request.SecretKey);
+        var provider = storageProviders.Get(request.Type);
         var target = new BackupTargetEntity
         {
-            Name = request.Name.Trim(),
-            Endpoint = request.Endpoint,
-            Region = request.Region,
-            Bucket = request.Bucket,
-            PathPrefix = request.PathPrefix,
-            ForcePathStyle = request.ForcePathStyle,
-            EncryptedAccessKey = accessKey?.Ciphertext,
-            EncryptedAccessKeyKeyId = accessKey?.KeyId,
-            EncryptedSecretKey = secretKey?.Ciphertext,
-            EncryptedSecretKeyKeyId = secretKey?.KeyId
+            Name = NormalizeName(request.Name),
+            Type = provider.Type
         };
+        await provider.ConfigureNewTargetAsync(target, request, cancellationToken);
 
         await targets.AddAsync(target);
         await unitOfWork.SaveChangesAsync();
@@ -42,7 +33,7 @@ public sealed class TargetApplicationService(
         return current;
     }
 
-    public async Task<BackupTargetDto?> UpdateS3Async(Guid id, UpsertS3TargetRequest request)
+    public async Task<BackupTargetDto?> UpdateAsync(Guid id, UpsertBackupTargetRequest request, CancellationToken cancellationToken = default)
     {
         var target = await targets.FindActiveAsync(id);
         if (target is null)
@@ -50,27 +41,16 @@ public sealed class TargetApplicationService(
             return null;
         }
 
-        Validate(request);
+        if (!string.Equals(target.Type, request.Type, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("Backup target storage type cannot be changed.");
+        }
+
+        var provider = storageProviders.Get(target);
         var previous = ToDto(target);
-        target.Name = request.Name.Trim();
-        target.Endpoint = request.Endpoint;
-        target.Region = request.Region;
-        target.Bucket = request.Bucket;
-        target.PathPrefix = request.PathPrefix;
-        target.ForcePathStyle = request.ForcePathStyle;
+        target.Name = NormalizeName(request.Name);
         target.UpdatedAt = DateTimeOffset.UtcNow;
-        if (request.AccessKey is not null)
-        {
-            var accessKey = await protector.EncryptAsync(request.AccessKey);
-            target.EncryptedAccessKey = accessKey?.Ciphertext;
-            target.EncryptedAccessKeyKeyId = accessKey?.KeyId;
-        }
-        if (request.SecretKey is not null)
-        {
-            var secretKey = await protector.EncryptAsync(request.SecretKey);
-            target.EncryptedSecretKey = secretKey?.Ciphertext;
-            target.EncryptedSecretKeyKeyId = secretKey?.KeyId;
-        }
+        await provider.ConfigureExistingTargetAsync(target, request, cancellationToken);
 
         await unitOfWork.SaveChangesAsync();
         var current = ToDto(target);
@@ -78,6 +58,12 @@ public sealed class TargetApplicationService(
         return current;
     }
 
+
+    public Task<BackupTargetDto> AddS3Async(UpsertS3TargetRequest request, CancellationToken cancellationToken = default) =>
+        AddAsync(ToGenericS3Request(request), cancellationToken);
+
+    public Task<BackupTargetDto?> UpdateS3Async(Guid id, UpsertS3TargetRequest request, bool updateSecrets = true, CancellationToken cancellationToken = default) =>
+        UpdateAsync(id, ToGenericS3Request(request, updateSecrets), cancellationToken);
     public async Task<bool> RemoveAsync(Guid id)
     {
         var target = await targets.FindAsync(id);
@@ -103,32 +89,32 @@ public sealed class TargetApplicationService(
             return null;
         }
 
-        return await storageOperations.TestConnectionAsync(target, cancellationToken);
+        return await storageProviders.Get(target).TestConnectionAsync(target, cancellationToken);
     }
 
-    private static void Validate(UpsertS3TargetRequest request)
+    private BackupTargetDto ToDto(BackupTargetEntity target) => storageProviders.Get(target).ToDto(target);
+
+
+    private static UpsertBackupTargetRequest ToGenericS3Request(UpsertS3TargetRequest request, bool updateSecrets = true) =>
+        new(
+            request.Name,
+            StorageProviderTypes.S3,
+            ToDictionary(new S3TargetSettingsDto(request.Endpoint, request.Region, request.Bucket, request.PathPrefix, request.ForcePathStyle)),
+            ToDictionary(new S3TargetSecretsDto(request.AccessKey, request.SecretKey)),
+            updateSecrets);
+
+    private static IReadOnlyDictionary<string, JsonElement> ToDictionary<T>(T value)
     {
-        if (string.IsNullOrWhiteSpace(request.Name))
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(value, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+        return document.RootElement.EnumerateObject().ToDictionary(x => x.Name, x => x.Value.Clone(), StringComparer.Ordinal);
+    }
+    private static string NormalizeName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
         {
             throw new ArgumentException("Name is required.");
         }
-        if (string.IsNullOrWhiteSpace(request.Endpoint))
-        {
-            throw new ArgumentException("Endpoint is required.");
-        }
-        if (string.IsNullOrWhiteSpace(request.Bucket))
-        {
-            throw new ArgumentException("Bucket is required.");
-        }
-    }
 
-    private static BackupTargetDto ToDto(BackupTargetEntity x) =>
-        new(
-            x.Id,
-            x.Name,
-            x.Type,
-            new S3TargetSettingsDto(x.Endpoint, x.Region, x.Bucket, x.PathPrefix, x.ForcePathStyle),
-            x.IsDeleted,
-            x.CreatedAt,
-            x.UpdatedAt);
+        return name.Trim();
+    }
 }
