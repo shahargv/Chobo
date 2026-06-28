@@ -440,19 +440,31 @@ public sealed class BackupsGarbageCollectorBackgroundService(
         var deletedStatuses = DeletedStatuses;
         return db.BackupTables
             .Where(x => x.EffectiveBackupType == BackupType.Incremental &&
-                        (x.ParentFullBackupTable == null || deletedStatuses.Contains(x.ParentFullBackupTable.Backup!.Status)))
+                        (x.ParentFullBackupId == null ||
+                         !db.Backups.Any(parent => parent.Id == x.ParentFullBackupId.Value && !deletedStatuses.Contains(parent.Status))))
             .Select(x => x.BackupId)
             .Concat(db.BackupTableShards
                 .Where(x => x.EffectiveBackupType == BackupType.Incremental &&
-                            (x.ParentFullBackupTableShard == null || deletedStatuses.Contains(x.ParentFullBackupTableShard.BackupTable!.Backup!.Status)))
+                            (x.ParentFullBackupId == null ||
+                             !db.Backups.Any(parent => parent.Id == x.ParentFullBackupId.Value && !deletedStatuses.Contains(parent.Status))))
                 .Select(x => x.BackupTable!.BackupId))
             .Distinct()
             .ToListAsync(cancellationToken);
     }
 
     private static async Task<bool> IsOrphanIncrementalAsync(ChoboDbContext db, Guid backupId, CancellationToken cancellationToken) =>
-        await db.BackupTables.AnyAsync(x => x.BackupId == backupId && x.EffectiveBackupType == BackupType.Incremental && (x.ParentFullBackupTable == null || DeletedStatuses.Contains(x.ParentFullBackupTable.Backup!.Status)), cancellationToken) ||
-        await db.BackupTableShards.AnyAsync(x => x.BackupTable!.BackupId == backupId && x.EffectiveBackupType == BackupType.Incremental && (x.ParentFullBackupTableShard == null || DeletedStatuses.Contains(x.ParentFullBackupTableShard.BackupTable!.Backup!.Status)), cancellationToken);
+        await db.BackupTables.AnyAsync(x =>
+            x.BackupId == backupId &&
+            x.EffectiveBackupType == BackupType.Incremental &&
+            (x.ParentFullBackupId == null ||
+             !db.Backups.Any(parent => parent.Id == x.ParentFullBackupId.Value && !DeletedStatuses.Contains(parent.Status))),
+            cancellationToken) ||
+        await db.BackupTableShards.AnyAsync(x =>
+            x.BackupTable!.BackupId == backupId &&
+            x.EffectiveBackupType == BackupType.Incremental &&
+            (x.ParentFullBackupId == null ||
+             !db.Backups.Any(parent => parent.Id == x.ParentFullBackupId.Value && !DeletedStatuses.Contains(parent.Status))),
+            cancellationToken);
 
     private static void MarkBackupForGarbageCollection(BackupEntity backup, DateTimeOffset now, string reason)
     {
