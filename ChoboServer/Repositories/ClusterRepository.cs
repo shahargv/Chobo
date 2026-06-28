@@ -12,6 +12,13 @@ public sealed class ClusterRepository(ChoboDbContext db) : IClusterRepository
             .OrderBy(x => x.Name)
             .ToListAsync();
 
+    public Task<List<ClickHouseClusterEntity>> ListAsync(bool includeDeleted) =>
+        db.ClickHouseClusters
+            .Include(x => x.AccessNodes)
+            .Where(x => includeDeleted || !x.IsDeleted)
+            .OrderBy(x => x.Name)
+            .ToListAsync();
+
     public Task<ClickHouseClusterEntity?> FindActiveAsync(Guid id) =>
         db.ClickHouseClusters
             .Include(x => x.AccessNodes)

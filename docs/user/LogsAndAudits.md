@@ -143,10 +143,11 @@ Chobo can remove old log and audit entries through configuration:
     "DataRetention": {
       "Interval": "01:00:00",
       "LogsBefore": null,
-      "AuditsBefore": null
+      "AuditsBefore": null,
+      "DeletedBackupRestoreRecordRetention": "90.00:00:00"
     }
   }
 }
 ```
 
-For production, keep enough history to investigate backup failures, restore decisions, and access-token changes.
+For production, keep enough history to investigate backup failures, restore decisions, and access-token changes. Chobo also hard-deletes backup and restore history for backups that completed deletion successfully after `DeletedBackupRestoreRecordRetention`, defaulting to 90 days after `deletedAt`.

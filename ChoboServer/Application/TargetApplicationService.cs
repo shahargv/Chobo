@@ -12,8 +12,8 @@ public sealed class TargetApplicationService(
     IBackupStorageProviderRegistry storageProviders,
     IAuditService audit)
 {
-    public async Task<IReadOnlyList<BackupTargetDto>> ListAsync() =>
-        (await targets.ListActiveAsync()).Select(ToDto).ToList();
+    public async Task<IReadOnlyList<BackupTargetDto>> ListAsync(bool includeDeleted = false) =>
+        (await targets.ListAsync(includeDeleted)).Select(ToDto).ToList();
 
     public async Task<BackupTargetDto> AddAsync(UpsertBackupTargetRequest request, CancellationToken cancellationToken = default)
     {
@@ -58,7 +58,6 @@ public sealed class TargetApplicationService(
         return current;
     }
 
-
     public Task<BackupTargetDto> AddS3Async(UpsertS3TargetRequest request, CancellationToken cancellationToken = default) =>
         AddAsync(ToGenericS3Request(request), cancellationToken);
 
@@ -93,7 +92,6 @@ public sealed class TargetApplicationService(
     }
 
     private BackupTargetDto ToDto(BackupTargetEntity target) => storageProviders.Get(target).ToDto(target);
-
 
     private static UpsertBackupTargetRequest ToGenericS3Request(UpsertS3TargetRequest request, bool updateSecrets = true) =>
         new(

@@ -1682,7 +1682,6 @@ public sealed class BackupRestoreExecutionTests
         Assert.Empty(fixture.ClickHouse.RestoreStartTables);
     }
 
-
     [Fact]
     public async Task Restore_list_includes_shard_details()
     {
@@ -1726,6 +1725,30 @@ public sealed class BackupRestoreExecutionTests
         Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "schedule-skip-active" && x.EntityId == schedule.Id.ToString()));
     }
 
+    [Fact]
+    public async Task Policy_delete_soft_deletes_related_schedules_and_include_deleted_lists_them()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var schedule = await fixture.SeedPolicyAndScheduleAsync();
+        var service = fixture.Services.GetRequiredService<PolicyApplicationService>();
+
+        Assert.True(await service.RemoveAsync(schedule.PolicyId));
+
+        fixture.Db.ChangeTracker.Clear();
+        var policy = await fixture.Db.BackupPolicies.SingleAsync(x => x.Id == schedule.PolicyId);
+        var deletedSchedule = await fixture.Db.BackupSchedules.SingleAsync(x => x.Id == schedule.Id);
+        Assert.True(policy.IsDeleted);
+        Assert.NotNull(policy.DeletedAt);
+        Assert.True(deletedSchedule.IsDeleted);
+        Assert.NotNull(deletedSchedule.DeletedAt);
+        Assert.DoesNotContain(await service.ListAsync(), x => x.Id == schedule.PolicyId);
+        Assert.Contains(await service.ListAsync(includeDeleted: true), x => x.Id == schedule.PolicyId && x.IsDeleted);
+        var scheduleService = fixture.Services.GetRequiredService<ScheduleApplicationService>();
+        Assert.DoesNotContain(await scheduleService.ListAsync(), x => x.Id == schedule.Id);
+        Assert.Contains(await scheduleService.ListAsync(includeDeleted: true), x => x.Id == schedule.Id && x.IsDeleted);
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "delete" && x.EntityType == "backup-policy" && x.EntityId == schedule.PolicyId.ToString()));
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "delete" && x.EntityType == "backup-schedule" && x.EntityId == schedule.Id.ToString()));
+    }
     [Fact]
     public async Task Scheduled_backup_runner_skips_duplicate_active_policy_backup_but_allows_manual()
     {
@@ -1867,6 +1890,23 @@ public sealed class BackupRestoreExecutionTests
         Assert.Equal(1, fixture.ClickHouse.GetTablesCallCount);
     }
 
+    [Fact]
+    public async Task Scheduler_skips_and_audits_stale_active_schedule_with_deleted_policy()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var schedule = await fixture.SeedPolicyAndScheduleAsync();
+        schedule.CronExpression = "0/1 * * * * ?";
+        schedule.Policy!.IsDeleted = true;
+        schedule.Policy.DeletedAt = DateTimeOffset.UtcNow;
+        await fixture.Db.SaveChangesAsync();
+
+        await fixture.Services.GetRequiredService<BackupSchedulerDispatcherBackgroundService>().DispatchOnceAsync();
+
+        Assert.False(await fixture.Db.Backups.AnyAsync(x => x.ScheduleId == schedule.Id));
+        var audit = await fixture.Db.AuditEntries.SingleAsync(x => x.Action == "schedule-skip-inactive-policy" && x.EntityId == schedule.Id.ToString());
+        Assert.Contains(schedule.PolicyId.ToString(), audit.Details);
+        Assert.Contains("error", audit.Details);
+    }
     [Fact]
     public async Task Scheduler_enqueues_due_cron_schedule()
     {
@@ -2692,7 +2732,6 @@ public sealed class BackupRestoreExecutionTests
         Assert.Empty(await fixture.Db.BackupRestoreQueueItems.Where(x => x.Kind == BackupRestoreQueueKind.Restore && x.OperationId == restore.Id && x.CompletedAt == null).ToListAsync());
         Assert.False(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "shard-succeeded" && x.EntityType == "restore-table-shard"));
     }
-
 
     [Fact]
     public async Task Restore_rejects_deleted_or_delete_pending_backups()
@@ -3672,7 +3711,6 @@ public sealed class BackupRestoreExecutionTests
 
             return Task.FromResult<IReadOnlyList<ClickHouseTableInfo>>(Inventory.ToList());
         }
-
 
         public Task<IReadOnlyList<ClickHouseTableInfo>> GetTablesAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, CancellationToken cancellationToken)
         {

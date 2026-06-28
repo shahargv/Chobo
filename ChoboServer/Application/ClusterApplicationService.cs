@@ -14,8 +14,8 @@ public sealed class ClusterApplicationService(
     IAuditService audit,
     SystemDefaultBackupPolicyService systemDefaults)
 {
-    public async Task<IReadOnlyList<ClusterDto>> ListAsync() =>
-        (await clusters.ListActiveAsync()).Select(ToDto).ToList();
+    public async Task<IReadOnlyList<ClusterDto>> ListAsync(bool includeDeleted = false) =>
+        (await clusters.ListAsync(includeDeleted)).Select(ToDto).ToList();
 
     public async Task<ClickHouseClusterNamesDto?> ListClickHouseClusterNamesAsync(Guid id, CancellationToken cancellationToken = default)
     {

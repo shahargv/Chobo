@@ -9,7 +9,7 @@ namespace ChoboServer.Controllers;
 public sealed class ClustersController(ClusterApplicationService clusters) : ControllerBase
 {
     [HttpGet]
-    public Task<IReadOnlyList<ClusterDto>> List() => clusters.ListAsync();
+    public Task<IReadOnlyList<ClusterDto>> List([FromQuery] bool includeDeleted = false) => clusters.ListAsync(includeDeleted);
 
     [HttpGet("{id:guid}/clickhouse-cluster-names")]
     public async Task<ActionResult<ClickHouseClusterNamesDto>> ListClickHouseClusterNames(Guid id, CancellationToken cancellationToken)

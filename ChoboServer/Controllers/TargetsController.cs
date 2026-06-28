@@ -9,7 +9,7 @@ namespace ChoboServer.Controllers;
 public sealed class TargetsController(TargetApplicationService targets) : ControllerBase
 {
     [HttpGet]
-    public Task<IReadOnlyList<BackupTargetDto>> List() => targets.ListAsync();
+    public Task<IReadOnlyList<BackupTargetDto>> List([FromQuery] bool includeDeleted = false) => targets.ListAsync(includeDeleted);
 
     [HttpPost]
     public async Task<ActionResult<BackupTargetDto>> Add(UpsertBackupTargetRequest request, CancellationToken cancellationToken)
@@ -30,7 +30,6 @@ public sealed class TargetsController(TargetApplicationService targets) : Contro
         catch (ArgumentException ex) { return BadRequest(new ErrorResponse(ex.Message)); }
         catch (NotSupportedException ex) { return BadRequest(new ErrorResponse(ex.Message)); }
     }
-
 
     [HttpPost("s3")]
     public async Task<ActionResult<BackupTargetDto>> AddS3(UpsertS3TargetRequest request, CancellationToken cancellationToken)

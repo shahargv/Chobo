@@ -18,7 +18,7 @@ public sealed class PolicyCommands : CliSubject
     public override string Description => "Backup policy configuration.";
 
     private static Task<object?> ListAsync(CommandContext context) =>
-        CommandHelpers.WithClient(context, client => client.GetAsync("policies"));
+        CommandHelpers.WithClient(context, client => client.GetAsync("policies" + IncludeDeletedQuery(context)));
 
     private static Task<object?> AddAsync(CommandContext context)
     {
@@ -78,4 +78,6 @@ public sealed class PolicyCommands : CliSubject
             options.Optional("--min-backups-to-keep") is { } minBackupsToKeep ? int.Parse(minBackupsToKeep) : 0,
             options.Optional("--min-full-backups-to-keep") is { } minFullBackupsToKeep ? int.Parse(minFullBackupsToKeep) : 0);
     }
+    private static string IncludeDeletedQuery(CommandContext context) =>
+        context.Command.Options.Has("--include-deleted") ? "?includeDeleted=true" : "";
 }

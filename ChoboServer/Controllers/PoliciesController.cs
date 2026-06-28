@@ -9,7 +9,7 @@ namespace ChoboServer.Controllers;
 public sealed class PoliciesController(PolicyApplicationService policies) : ControllerBase
 {
     [HttpGet]
-    public Task<IReadOnlyList<BackupPolicyDto>> List() => policies.ListAsync();
+    public Task<IReadOnlyList<BackupPolicyDto>> List([FromQuery] bool includeDeleted = false) => policies.ListAsync(includeDeleted);
 
     [HttpGet("inventory")]
     public async Task<ActionResult<PolicyInventory>> Inventory([FromQuery] Guid sourceClusterId, CancellationToken cancellationToken)

@@ -19,7 +19,7 @@ public sealed class ScheduleCommands : CliSubject
     public override string Description => "Backup schedule configuration.";
 
     private static Task<object?> ListAsync(CommandContext context) =>
-        CommandHelpers.WithClient(context, client => client.GetAsync("schedules"));
+        CommandHelpers.WithClient(context, client => client.GetAsync("schedules" + IncludeDeletedQuery(context)));
 
     private static Task<object?> AddAsync(CommandContext context)
     {
@@ -56,4 +56,6 @@ public sealed class ScheduleCommands : CliSubject
             options.Optional("--missed-run-grace-period") is { } gracePeriod ? TimeSpan.Parse(gracePeriod) : null,
             options.Optional("--description"));
     }
+    private static string IncludeDeletedQuery(CommandContext context) =>
+        context.Command.Options.Has("--include-deleted") ? "?includeDeleted=true" : "";
 }

@@ -60,6 +60,7 @@ public static class ChoboConfiguration
         AddAlias(values, "CHOBO_DATA_RETENTION_INTERVAL", "Chobo:DataRetention:Interval");
         AddAlias(values, "CHOBO_DATA_RETENTION_LOGS_BEFORE", "Chobo:DataRetention:LogsBefore");
         AddAlias(values, "CHOBO_DATA_RETENTION_AUDITS_BEFORE", "Chobo:DataRetention:AuditsBefore");
+        AddAlias(values, "CHOBO_DATA_RETENTION_DELETED_BACKUP_RESTORE_RECORD_RETENTION", "Chobo:DataRetention:DeletedBackupRestoreRecordRetention");
         AddAlias(values, "CHOBO_SQLITE_SELF_BACKUP_ENABLED", "Chobo:SqliteSelfBackup:Enabled");
         AddAlias(values, "CHOBO_SQLITE_SELF_BACKUP_DIRECTORY", "Chobo:SqliteSelfBackup:Directory");
         AddAlias(values, "CHOBO_SQLITE_SELF_BACKUP_INTERVAL", "Chobo:SqliteSelfBackup:BackupInterval");

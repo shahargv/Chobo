@@ -5,6 +5,7 @@ namespace ChoboServer.Repositories;
 public interface IClusterRepository
 {
     Task<List<ClickHouseClusterEntity>> ListActiveAsync();
+    Task<List<ClickHouseClusterEntity>> ListAsync(bool includeDeleted);
     Task<ClickHouseClusterEntity?> FindActiveAsync(Guid id);
     Task<ClickHouseClusterEntity?> FindAsync(Guid id);
     Task AddAsync(ClickHouseClusterEntity cluster);

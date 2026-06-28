@@ -19,7 +19,7 @@ public sealed class ClusterCommands : CliSubject
     public override string Description => "ClickHouse cluster configuration.";
 
     private static Task<object?> ListAsync(CommandContext context) =>
-        CommandHelpers.WithClient(context, client => client.GetAsync("clusters"));
+        CommandHelpers.WithClient(context, client => client.GetAsync("clusters" + IncludeDeletedQuery(context)));
 
     private static Task<object?> AddAsync(CommandContext context)
     {
@@ -113,4 +113,7 @@ public sealed class ClusterCommands : CliSubject
                     return new ClusterShardMaxDopOverrideDto(shardNumber, null, int.Parse(parts[1]));
                 })
                 .ToList();
+
+    private static string IncludeDeletedQuery(CommandContext context) =>
+        context.Command.Options.Has("--include-deleted") ? "?includeDeleted=true" : "";
 }
