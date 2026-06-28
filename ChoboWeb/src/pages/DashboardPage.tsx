@@ -72,9 +72,10 @@ export function Dashboard() {
       </section>
       <section className="panel">
         <h2>Running backups</h2>
-        <DataTable headers={["Status", "Policy", "Started", "Tables", "Table-shards", "Failure"]} isLoading={dashboard.isLoading}>
+        <DataTable headers={["Backup", "Status", "Policy", "Started", "Tables", "Table-shards", "Failure"]} isLoading={dashboard.isLoading}>
           {running.map((backup) => (
             <tr key={backup.backupId}>
+              <td><button type="button" className="link-button mono" onClick={() => setSelectedBackupId(backup.backupId)}>{backup.backupId}</button></td>
               <td><Status value={backup.status} /></td>
               <td>{backup.policyName ?? backup.policyId ?? "manual"}</td>
               <td>{formatTime(backup.startedAt)}</td>
@@ -88,9 +89,10 @@ export function Dashboard() {
       <section className="panel two-col">
         <div>
           <h2>Latest backups</h2>
-          <DataTable headers={["Status", "Created", "Completed", "Type", "Tables", "Failure"]} isLoading={backups.isLoading}>
+          <DataTable headers={["Backup", "Status", "Created", "Completed", "Type", "Tables", "Failure"]} isLoading={backups.isLoading}>
             {latestBackups.map((backup) => (
               <tr key={backup.id}>
+                <td><button type="button" className="link-button mono" onClick={() => setSelectedBackupId(backup.id)}>{backup.id}</button></td>
                 <td><Status value={backup.status} /></td>
                 <td>{formatTime(backup.createdAt)}</td>
                 <td>{formatCompletionTime(backup.endedAt ?? backup.deletedAt, backup.startedAt, backup.createdAt)}</td>

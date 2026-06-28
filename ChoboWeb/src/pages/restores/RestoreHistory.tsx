@@ -1,7 +1,8 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { RotateCcw } from "lucide-react";
+import { BackupDrawer } from "../BackupsPage";
 import { useApi } from "../../api-context";
 import { DataTable, Page, Status } from "../../components/ui";
 import { formatCompletionTime, formatTime } from "../../utils/format";
@@ -9,6 +10,7 @@ import { formatRestoreLayout } from "./restoreUtils";
 
 export function RestoreHistory() {
   const { api } = useApi();
+  const [selectedBackupId, setSelectedBackupId] = useState<string | null>(null);
   const restores = useQuery({ queryKey: ["restores"], queryFn: () => api.restores() });
   const clusters = useQuery({ queryKey: ["clusters"], queryFn: () => api.clusters() });
   const clusterById = useMemo(() => new Map((clusters.data ?? []).map((cluster) => [cluster.id, cluster])), [clusters.data]);
@@ -29,7 +31,7 @@ export function RestoreHistory() {
               <td>{formatCompletionTime(restore.endedAt, restore.startedAt, restore.createdAt)}</td>
               <td>{restore.requestedByName}</td>
               <td>{formatTime(restore.createdAt)}</td>
-              <td><Link to={`/backups/${restore.backupId}`}>{restore.backupId}</Link></td>
+              <td><button type="button" className="link-button mono" onClick={() => setSelectedBackupId(restore.backupId)}>{restore.backupId}</button></td>
               <td><Link to={`/clusters/${restore.targetClusterId}`}>{clusterById.get(restore.targetClusterId)?.name ?? restore.targetClusterId}</Link></td>
               <td>{formatRestoreLayout(restore.layout)}</td>
               <td>{restore.tables.length}</td>
@@ -39,6 +41,7 @@ export function RestoreHistory() {
           ))}
         </DataTable>
       </section>
+      {selectedBackupId && <BackupDrawer backupId={selectedBackupId} onClose={() => setSelectedBackupId(null)} onOpenBackup={setSelectedBackupId} />}
     </Page>
   );
 }
