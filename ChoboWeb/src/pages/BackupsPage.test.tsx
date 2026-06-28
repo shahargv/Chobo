@@ -437,6 +437,8 @@ function basePolicy(overrides: Partial<BackupPolicyDto> = {}): BackupPolicyDto {
     failedBackupRetentionMode: overrides.failedBackupRetentionMode ?? "KeepAndExcludeFromMinBackupsToKeep",
     clickHouseBackupSettings: overrides.clickHouseBackupSettings ?? {},
     clickHouseRestoreSettings: overrides.clickHouseRestoreSettings ?? {},
+    maxAgeHoursForBaseBackup: overrides.maxAgeHoursForBaseBackup ?? null,
+    effectiveMaxAgeHoursForBaseBackup: overrides.effectiveMaxAgeHoursForBaseBackup ?? 168,
     isSystemDefault: overrides.isSystemDefault ?? false,
     isDeleted: overrides.isDeleted ?? false,
     createdAt: overrides.createdAt ?? "2026-06-22T00:00:00Z",

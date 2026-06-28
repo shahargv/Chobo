@@ -4250,6 +4250,15 @@
             "type": "string",
             "format": "date-time",
             "nullable": true
+          },
+          "maxAgeHoursForBaseBackup": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "effectiveMaxAgeHoursForBaseBackup": {
+            "type": "integer",
+            "format": "int32"
           }
         },
         "additionalProperties": false
@@ -4318,6 +4327,11 @@
           "deletedAt": {
             "type": "string",
             "format": "date-time",
+            "nullable": true
+          },
+          "maxAgeHoursForBaseBackup": {
+            "type": "integer",
+            "format": "int32",
             "nullable": true
           }
         },
@@ -7380,6 +7394,11 @@
           "clickHouseRestoreSettings": {
             "type": "object",
             "additionalProperties": { },
+            "nullable": true
+          },
+          "maxAgeHoursForBaseBackup": {
+            "type": "integer",
+            "format": "int32",
             "nullable": true
           }
         },

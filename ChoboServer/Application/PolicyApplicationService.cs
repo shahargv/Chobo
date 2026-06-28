@@ -5,7 +5,9 @@ using Chobo.Contracts;
 using ChoboServer.Data;
 using ChoboServer.Repositories;
 using ChoboServer.Services;
+using ChoboServer.Options;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Options;
 
 namespace ChoboServer.Application;
 
@@ -18,7 +20,8 @@ public sealed class PolicyApplicationService(
     IMemoryCache memoryCache,
     IUnitOfWork unitOfWork,
     IAuditService audit,
-    PolicySelectorEvaluationService selectorEvaluation)
+    PolicySelectorEvaluationService selectorEvaluation,
+    IOptionsMonitor<ChoboBackupRestoreOptions> backupRestoreOptions)
 {
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
     private static readonly TimeSpan InventoryCacheDuration = TimeSpan.FromMinutes(5);
@@ -42,6 +45,7 @@ public sealed class PolicyApplicationService(
             MinBackupsToKeep = request.Retention?.MinBackupsToKeep ?? 0,
             MinFullBackupsToKeep = request.Retention?.MinFullBackupsToKeep ?? 0,
             FailedBackupRetentionMode = request.FailedBackupRetentionMode,
+            MaxAgeHoursForBaseBackup = request.MaxAgeHoursForBaseBackup,
             ClickHouseBackupSettingsJson = ClickHouseAdvancedSettings.Serialize(request.ClickHouseBackupSettings, ClickHouseAdvancedSettingsKind.Backup),
             ClickHouseRestoreSettingsJson = ClickHouseAdvancedSettings.Serialize(request.ClickHouseRestoreSettings, ClickHouseAdvancedSettingsKind.Restore)
         };
@@ -75,6 +79,7 @@ public sealed class PolicyApplicationService(
         policy.MinBackupsToKeep = request.Retention?.MinBackupsToKeep ?? 0;
         policy.MinFullBackupsToKeep = request.Retention?.MinFullBackupsToKeep ?? 0;
         policy.FailedBackupRetentionMode = request.FailedBackupRetentionMode;
+        policy.MaxAgeHoursForBaseBackup = request.MaxAgeHoursForBaseBackup;
         if (request.ClickHouseBackupSettings is not null)
         {
             policy.ClickHouseBackupSettingsJson = ClickHouseAdvancedSettings.Serialize(request.ClickHouseBackupSettings, ClickHouseAdvancedSettingsKind.Backup);
@@ -212,6 +217,14 @@ public sealed class PolicyApplicationService(
         {
             throw new ArgumentException("Only selector version 1 is supported.");
         }
+        if (request.MaxAgeHoursForBaseBackup is not null and <= 0)
+        {
+            throw new ArgumentException("Max age hours for base backup must be greater than zero.");
+        }
+        if (backupRestoreOptions.CurrentValue.DefaultMaxAgeHoursForBaseBackup <= 0)
+        {
+            throw new ArgumentException("Default max age hours for base backup must be greater than zero.");
+        }
         if (request.Retention is not null)
         {
             if (request.Retention.FullRetentionMinutes is not null and <= 0)
@@ -261,7 +274,7 @@ public sealed class PolicyApplicationService(
     private static PolicySelector Deserialize(string json) =>
         JsonSerializer.Deserialize<PolicySelector>(json, JsonOptions) ?? PolicySelector.Empty;
 
-    private static BackupPolicyDto ToDto(BackupPolicyEntity x) =>
+    private BackupPolicyDto ToDto(BackupPolicyEntity x) =>
         new(
             x.Id,
             x.Name,
@@ -279,7 +292,9 @@ public sealed class PolicyApplicationService(
             x.IsSystemDefault,
             x.IsDeleted,
             x.CreatedAt,
-            x.UpdatedAt);
+            x.UpdatedAt,
+            x.MaxAgeHoursForBaseBackup,
+            x.MaxAgeHoursForBaseBackup ?? backupRestoreOptions.CurrentValue.DefaultMaxAgeHoursForBaseBackup);
 
     private static void ValidatePattern(SelectorPattern pattern, string name)
     {

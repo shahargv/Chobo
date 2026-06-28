@@ -54,6 +54,7 @@ const nullableProperties = new Set([
   "lastSuccessfulRunCompletedAt",
   "layout",
   "manualRequestJson",
+  "maxAgeHoursForBaseBackup",
   "missedRunGracePeriod",
   "parentFullBackupId",
   "parentFullBackupTableId",

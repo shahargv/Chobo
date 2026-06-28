@@ -279,6 +279,7 @@ public sealed class BackupStorageManifestService(
                 policy.MinBackupsToKeep = policyManifest.Retention?.MinBackupsToKeep ?? 0;
                 policy.MinFullBackupsToKeep = policyManifest.Retention?.MinFullBackupsToKeep ?? 0;
                 policy.FailedBackupRetentionMode = policyManifest.FailedBackupRetentionMode;
+                policy.MaxAgeHoursForBaseBackup = policyManifest.MaxAgeHoursForBaseBackup;
                 policy.IsDeleted = policyManifest.IsDeleted;
                 policy.CreatedAt = policyManifest.CreatedAt;
                 policy.UpdatedAt = policyManifest.UpdatedAt;
@@ -607,7 +608,8 @@ public sealed class BackupStorageManifestService(
             policy.IsDeleted,
             policy.CreatedAt,
             policy.UpdatedAt,
-            policy.DeletedAt);
+            policy.DeletedAt,
+            policy.MaxAgeHoursForBaseBackup);
 
     private static BackupStorageManifestScheduleV1 ToManifestSchedule(BackupScheduleEntity schedule) =>
         new(schedule.Id, schedule.Name, schedule.PolicyId, schedule.BackupType, schedule.CronExpression, schedule.TimeZoneId, schedule.IsEnabled, schedule.MissedRunGracePeriod, schedule.Description, schedule.IsSystemDefault, schedule.IsDeleted, schedule.CreatedAt, schedule.UpdatedAt, schedule.DeletedAt);
