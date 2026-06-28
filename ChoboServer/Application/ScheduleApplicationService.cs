@@ -10,8 +10,8 @@ public sealed class ScheduleApplicationService(
     IUnitOfWork unitOfWork,
     IAuditService audit)
 {
-    public async Task<IReadOnlyList<BackupScheduleDto>> ListAsync() =>
-        (await schedules.ListActiveAsync()).Select(ToDto).ToList();
+    public async Task<IReadOnlyList<BackupScheduleDto>> ListAsync(bool includeDeleted = false) =>
+        (await schedules.ListAsync(includeDeleted)).Select(ToDto).ToList();
 
     public async Task<BackupScheduleDto> AddAsync(UpsertScheduleRequest request)
     {
@@ -184,6 +184,4 @@ public sealed class ScheduleApplicationService(
             x.CreatedAt,
             x.UpdatedAt);
 }
-
-
 

@@ -5,13 +5,12 @@ namespace ChoboServer.Repositories;
 public interface IScheduleRepository
 {
     Task<List<BackupScheduleEntity>> ListActiveAsync();
+    Task<List<BackupScheduleEntity>> ListAsync(bool includeDeleted);
+    Task<List<BackupScheduleEntity>> ListActiveByPolicyAsync(Guid policyId);
     Task<BackupScheduleEntity?> FindActiveAsync(Guid id);
     Task<BackupScheduleEntity?> FindAsync(Guid id);
     Task<BackupPolicyEntity?> FindActivePolicyAsync(Guid policyId);
     Task<bool> PolicyExistsAsync(Guid policyId);
     Task AddAsync(BackupScheduleEntity schedule);
 }
-
-
-
 

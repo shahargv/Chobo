@@ -146,7 +146,8 @@ Chobo__BackupStorageOperations__S3DeleteBatchSize=1000
     "DataRetention": {
       "Interval": "01:00:00",
       "LogsBefore": null,
-      "AuditsBefore": null
+      "AuditsBefore": null,
+      "DeletedBackupRestoreRecordRetention": "90.00:00:00"
     }
   }
 }
@@ -155,6 +156,7 @@ Chobo__BackupStorageOperations__S3DeleteBatchSize=1000
 - `Interval`: how often the data-retention background service runs.
 - `LogsBefore`: when set, application log entries before this timestamp are removed.
 - `AuditsBefore`: when set, audit entries before this timestamp are removed.
+- `DeletedBackupRestoreRecordRetention`: how long completed deleted/expired backup and related restore records stay in SQLite after `deletedAt`. Defaults to 90 days. Set to `00:00:00` to disable this hard-delete retention.
 
 Environment aliases:
 
@@ -162,6 +164,7 @@ Environment aliases:
 CHOBO_DATA_RETENTION_INTERVAL
 CHOBO_DATA_RETENTION_LOGS_BEFORE
 CHOBO_DATA_RETENTION_AUDITS_BEFORE
+CHOBO_DATA_RETENTION_DELETED_BACKUP_RESTORE_RECORD_RETENTION
 ```
 
 CLI commands are also available:
@@ -271,7 +274,8 @@ ChoboCli logs show --last 500
     "DataRetention": {
       "Interval": "01:00:00",
       "LogsBefore": null,
-      "AuditsBefore": null
+      "AuditsBefore": null,
+      "DeletedBackupRestoreRecordRetention": "90.00:00:00"
     },
     "SqliteSelfBackup": {
       "Enabled": true,
@@ -282,4 +286,3 @@ ChoboCli logs show --last 500
   }
 }
 ```
-

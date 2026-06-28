@@ -41,6 +41,7 @@ public sealed class ChoboFoundationTests
             ["CHOBO_DATA_RETENTION_INTERVAL"] = "00:10:00",
             ["Chobo__DataRetention__LogsBefore"] = "2026-05-14T10:00:00+00:00",
             ["CHOBO_DATA_RETENTION_AUDITS_BEFORE"] = "2026-05-14T11:00:00+00:00",
+            ["CHOBO_DATA_RETENTION_DELETED_BACKUP_RESTORE_RECORD_RETENTION"] = "30.00:00:00",
             ["CHOBO_SQLITE_SELF_BACKUP_ENABLED"] = "true",
             ["CHOBO_SQLITE_SELF_BACKUP_DIRECTORY"] = "env-sqlite-backups",
             ["CHOBO_SQLITE_SELF_BACKUP_INTERVAL"] = "12:00:00",
@@ -84,6 +85,7 @@ public sealed class ChoboFoundationTests
         Assert.Equal(TimeSpan.FromMinutes(10), retention.Interval);
         Assert.Equal(DateTimeOffset.Parse("2026-05-14T10:00:00+00:00"), retention.LogsBefore);
         Assert.Equal(DateTimeOffset.Parse("2026-05-14T11:00:00+00:00"), retention.AuditsBefore);
+        Assert.Equal(TimeSpan.FromDays(30), retention.DeletedBackupRestoreRecordRetention);
         Assert.True(selfBackup.Enabled);
         Assert.Equal("env-sqlite-backups", selfBackup.Directory);
         Assert.Equal(TimeSpan.FromHours(12), selfBackup.BackupInterval);
@@ -184,7 +186,6 @@ public sealed class ChoboFoundationTests
         Assert.True(await db.AccessTokens.AnyAsync());
         Assert.True(await db.AuditEntries.AnyAsync(x => x.Action == "initialize" && x.EntityType == "server"));
     }
-
 
     [Fact]
     public async Task Unconfigured_first_startup_requires_one_time_install_before_authenticated_use()
@@ -327,7 +328,6 @@ public sealed class ChoboFoundationTests
         Assert.Equal("https://backup-bucket.s3.example.com/prod/backups/db/table/file%20name.bin", virtualHost.AbsoluteUri);
     }
 
-
     [Fact]
     public void Endpoint_rewrites_map_each_clickhouse_node_for_local_server_access()
     {
@@ -446,7 +446,6 @@ public sealed class ChoboFoundationTests
         Assert.DoesNotContain(keyFileContents, exportJson);
     }
 
-
     [Fact]
     public async Task S3_target_facade_requires_credential_pair_and_preserves_credentials_when_omitted_on_update()
     {
@@ -478,6 +477,7 @@ public sealed class ChoboFoundationTests
             Assert.Equal(originalSecrets, (await db.BackupTargets.SingleAsync(x => x.Id == created.Id)).SecretsJson);
         }
     }
+
     [Fact]
     public async Task Cluster_credentials_can_be_updated_without_changing_topology()
     {
@@ -636,6 +636,7 @@ public sealed class ChoboFoundationTests
         Assert.True(forced.IsForced);
         Assert.NotNull(forced.ForcedAt);
     }
+
     [Fact]
     public async Task Cluster_update_replaces_nodes_without_concurrency_errors()
     {
@@ -743,6 +744,7 @@ public sealed class ChoboFoundationTests
         Assert.Empty(cleared.ClickHouseBackupSettings);
         Assert.Empty(cleared.ClickHouseRestoreSettings);
     }
+
     [Fact]
     public async Task Users_can_add_list_and_deactivate_named_access_tokens()
     {
@@ -855,12 +857,49 @@ public sealed class ChoboFoundationTests
         var audit = await db.AuditEntries.SingleAsync(x => x.Action == "import" && x.EntityType == "config");
         Assert.Contains("\"credentialsImportedAsEmpty\":true", audit.Details);
     }
+
+    [Fact]
+    public async Task Config_import_export_preserves_soft_deleted_configuration_entities()
+    {
+        await using var sourceFactory = CreateFactory();
+        var ids = await SeedFullExportGraphAsync(sourceFactory, includeCredentials: false, softDeletedConfig: true);
+        var sourceClient = AuthenticatedClient(sourceFactory);
+        var export = await sourceClient.GetFromJsonAsync<ExportEnvelope>("/api/v1/config/export", JsonOptions);
+        Assert.NotNull(export);
+
+        var exportedCluster = Assert.Single(export!.Data.Clusters, x => x.Id == ids.ClusterId);
+        var exportedTarget = Assert.Single(export.Data.BackupTargets, x => x.Id == ids.TargetId);
+        var exportedPolicy = Assert.Single(export.Data.BackupPolicies, x => x.Id == ids.PolicyId);
+        var exportedSchedule = Assert.Single(export.Data.BackupSchedules, x => x.Id == ids.ScheduleId);
+        Assert.True(exportedCluster.IsDeleted);
+        Assert.True(exportedTarget.IsDeleted);
+        Assert.True(exportedPolicy.IsDeleted);
+        Assert.True(exportedSchedule.IsDeleted);
+        Assert.NotNull(exportedCluster.DeletedAt);
+        Assert.NotNull(exportedTarget.DeletedAt);
+        Assert.NotNull(exportedPolicy.DeletedAt);
+        Assert.NotNull(exportedSchedule.DeletedAt);
+
+        await using var targetFactory = CreateFactory();
+        var targetClient = AuthenticatedClient(targetFactory);
+        var response = await targetClient.PostAsJsonAsync("/api/v1/config/import", export, JsonOptions);
+        var responseText = await response.Content.ReadAsStringAsync();
+        Assert.True(response.StatusCode == HttpStatusCode.NoContent, responseText);
+
+        using var scope = targetFactory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+        Assert.True(await db.ClickHouseClusters.AnyAsync(x => x.Id == ids.ClusterId && x.IsDeleted && x.DeletedAt == exportedCluster.DeletedAt));
+        Assert.True(await db.BackupTargets.AnyAsync(x => x.Id == ids.TargetId && x.IsDeleted && x.DeletedAt == exportedTarget.DeletedAt));
+        Assert.True(await db.BackupPolicies.AnyAsync(x => x.Id == ids.PolicyId && x.IsDeleted && x.DeletedAt == exportedPolicy.DeletedAt));
+        Assert.True(await db.BackupSchedules.AnyAsync(x => x.Id == ids.ScheduleId && x.IsDeleted && x.DeletedAt == exportedSchedule.DeletedAt));
+    }
+
     [Fact]
     public async Task Data_import_export_round_trips_operational_metadata_without_audits_logs_or_credentials()
     {
         await using var sourceFactory = CreateFactory();
         var sourceClient = AuthenticatedClient(sourceFactory);
-        var ids = await SeedFullExportGraphAsync(sourceFactory, includeCredentials: true);
+        var ids = await SeedFullExportGraphAsync(sourceFactory, includeCredentials: true, softDeletedConfig: true);
 
         using (var sourceScope = sourceFactory.Services.CreateScope())
         {
@@ -879,7 +918,15 @@ public sealed class ChoboFoundationTests
         Assert.Single(export.Data.Restores);
         Assert.Single(export.Data.RestoreTables);
         Assert.Single(export.Data.RestoreTableShards);
-        Assert.Equal("prod_cluster", Assert.Single(export.Data.Clusters, x => x.Id == ids.ClusterId).ClickHouseClusterName);
+        var exportedCluster = Assert.Single(export.Data.Clusters, x => x.Id == ids.ClusterId);
+        var exportedTarget = Assert.Single(export.Data.BackupTargets, x => x.Id == ids.TargetId);
+        var exportedPolicy = Assert.Single(export.Data.BackupPolicies, x => x.Id == ids.PolicyId);
+        var exportedSchedule = Assert.Single(export.Data.BackupSchedules, x => x.Id == ids.ScheduleId);
+        Assert.Equal("prod_cluster", exportedCluster.ClickHouseClusterName);
+        Assert.True(exportedCluster.IsDeleted);
+        Assert.True(exportedTarget.IsDeleted);
+        Assert.True(exportedPolicy.IsDeleted);
+        Assert.True(exportedSchedule.IsDeleted);
         var legacyExportJson = JsonSerializer.Serialize(export, JsonOptions).Replace("\"storagePath\":", "\"s3Path\":");
         export = JsonSerializer.Deserialize<ExportEnvelope>(legacyExportJson, JsonOptions);
         Assert.NotNull(export);
@@ -903,13 +950,17 @@ public sealed class ChoboFoundationTests
         var cluster = await imported.ClickHouseClusters.SingleAsync(x => x.Id == ids.ClusterId);
         var target = await imported.BackupTargets.SingleAsync(x => x.Id == ids.TargetId);
         Assert.Equal("prod_cluster", cluster.ClickHouseClusterName);
+        Assert.True(cluster.IsDeleted);
+        Assert.Equal(exportedCluster.DeletedAt, cluster.DeletedAt);
+        Assert.True(target.IsDeleted);
+        Assert.Equal(exportedTarget.DeletedAt, target.DeletedAt);
         Assert.Null(cluster.EncryptedUserName);
         Assert.Null(cluster.EncryptedUserNameKeyId);
         Assert.Null(cluster.EncryptedPassword);
         Assert.Null(cluster.EncryptedPasswordKeyId);
         Assert.Equal("{}", target.SecretsJson);
-        Assert.True(await imported.BackupPolicies.AnyAsync(x => x.Id == ids.PolicyId));
-        Assert.True(await imported.BackupSchedules.AnyAsync(x => x.Id == ids.ScheduleId));
+        Assert.True(await imported.BackupPolicies.AnyAsync(x => x.Id == ids.PolicyId && x.IsDeleted && x.DeletedAt == exportedPolicy.DeletedAt));
+        Assert.True(await imported.BackupSchedules.AnyAsync(x => x.Id == ids.ScheduleId && x.IsDeleted && x.DeletedAt == exportedSchedule.DeletedAt));
         Assert.True(await imported.SchemaDefinitions.AnyAsync(x => x.Id == ids.SchemaDefinitionId));
         Assert.True(await imported.Backups.AnyAsync(x => x.Id == ids.BackupId && x.Status == BackupRunStatus.Succeeded));
         Assert.True(await imported.BackupTables.AnyAsync(x => x.Id == ids.BackupTableId && x.SchemaDefinitionId == ids.SchemaDefinitionId));
@@ -955,6 +1006,7 @@ public sealed class ChoboFoundationTests
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Contains(expectedMessage, text);
     }
+
     [Fact]
     public async Task Data_import_marks_in_flight_backup_and_restore_rows_failed()
     {
@@ -1169,6 +1221,7 @@ public sealed class ChoboFoundationTests
         Assert.Equal(1000, detail!.TableCount);
         Assert.Equal(1000, detail.Tables.Count);
     }
+
     [Fact]
     public async Task Backup_api_filters_by_created_time_window()
     {
@@ -1227,6 +1280,7 @@ public sealed class ChoboFoundationTests
         Assert.Contains(list!, x => x.Id == recent.Id);
         Assert.DoesNotContain(list!, x => x.Id == old.Id);
     }
+
     [Fact]
     public async Task Policy_schedule_logs_and_clear_paths_work()
     {
@@ -1263,6 +1317,53 @@ public sealed class ChoboFoundationTests
         Assert.NotNull(logs);
         var clear = await client.PostAsJsonAsync("/api/v1/logs/clear", new ClearApplicationLogsRequest(DateTimeOffset.UtcNow.AddDays(1)), JsonOptions);
         Assert.True(clear.IsSuccessStatusCode);
+    }
+
+    [Fact]
+    public async Task List_endpoints_can_include_soft_deleted_configuration_entities()
+    {
+        await using var factory = CreateFactory();
+        var client = AuthenticatedClient(factory);
+        var cluster = await Post<ClusterDto>(client, "/api/v1/clusters", new UpsertClusterRequest(
+            "deleted-prod",
+            ClusterMode.SingleInstance,
+            [new UpsertAccessNodeRequest("localhost")],
+            null,
+            null,
+            3));
+        var target = await Post<BackupTargetDto>(client, "/api/v1/targets/s3", new UpsertS3TargetRequest(
+            "deleted-minio",
+            "http://minio:9000",
+            "us-east-1",
+            "bucket",
+            null,
+            true,
+            "access",
+            "secret"));
+        var policy = await Post<BackupPolicyDto>(client, "/api/v1/policies", new UpsertPolicyRequest("deleted-all", cluster.Id, target.Id, PolicySelector.Empty));
+        var schedule = await Post<BackupScheduleDto>(client, "/api/v1/schedules", new UpsertScheduleRequest("deleted-nightly", policy.Id, BackupType.Full, "0 0 2 * * ?", "UTC", true, null, null));
+
+        Assert.Equal(HttpStatusCode.NoContent, (await client.DeleteAsync($"/api/v1/policies/{policy.Id}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await client.DeleteAsync($"/api/v1/targets/{target.Id}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await client.DeleteAsync($"/api/v1/clusters/{cluster.Id}")).StatusCode);
+
+        var activePolicies = await client.GetFromJsonAsync<List<BackupPolicyDto>>("/api/v1/policies", JsonOptions);
+        var allPolicies = await client.GetFromJsonAsync<List<BackupPolicyDto>>("/api/v1/policies?includeDeleted=true", JsonOptions);
+        var activeSchedules = await client.GetFromJsonAsync<List<BackupScheduleDto>>("/api/v1/schedules", JsonOptions);
+        var allSchedules = await client.GetFromJsonAsync<List<BackupScheduleDto>>("/api/v1/schedules?includeDeleted=true", JsonOptions);
+        var activeTargets = await client.GetFromJsonAsync<List<BackupTargetDto>>("/api/v1/targets", JsonOptions);
+        var allTargets = await client.GetFromJsonAsync<List<BackupTargetDto>>("/api/v1/targets?includeDeleted=true", JsonOptions);
+        var activeClusters = await client.GetFromJsonAsync<List<ClusterDto>>("/api/v1/clusters", JsonOptions);
+        var allClusters = await client.GetFromJsonAsync<List<ClusterDto>>("/api/v1/clusters?includeDeleted=true", JsonOptions);
+
+        Assert.DoesNotContain(activePolicies!, x => x.Id == policy.Id);
+        Assert.Contains(allPolicies!, x => x.Id == policy.Id && x.IsDeleted);
+        Assert.DoesNotContain(activeSchedules!, x => x.Id == schedule.Id);
+        Assert.Contains(allSchedules!, x => x.Id == schedule.Id && x.IsDeleted);
+        Assert.DoesNotContain(activeTargets!, x => x.Id == target.Id);
+        Assert.Contains(allTargets!, x => x.Id == target.Id && x.IsDeleted);
+        Assert.DoesNotContain(activeClusters!, x => x.Id == cluster.Id);
+        Assert.Contains(allClusters!, x => x.Id == cluster.Id && x.IsDeleted);
     }
 
     [Fact]
@@ -1357,6 +1458,7 @@ public sealed class ChoboFoundationTests
                 LogsBefore = cutoff,
                 AuditsBefore = cutoff
             }),
+            TimeProvider.System,
             Serilog.Core.Logger.None);
 
         var deleted = await service.PurgeOnceAsync();
@@ -1368,6 +1470,165 @@ public sealed class ChoboFoundationTests
         Assert.False(await db.AuditEntries.AnyAsync(x => x.Action == "old"));
         Assert.True(await db.AuditEntries.AnyAsync(x => x.Action == "new"));
         Assert.True(await db.AuditEntries.AnyAsync(x => x.Action == "retention-purge" && x.EntityType == "data-retention"));
+    }
+
+    [Fact]
+    public async Task Data_retention_background_service_hard_deletes_old_successfully_deleted_backup_and_restore_records()
+    {
+        await using var factory = CreateFactory();
+        _ = AuthenticatedClient(factory);
+        var now = DateTimeOffset.Parse("2026-05-15T10:00:00+00:00");
+        var oldDeletedAt = now.AddDays(-91);
+        var recentDeletedAt = now.AddDays(-10);
+        var clusterId = Guid.NewGuid();
+        var oldBackupId = Guid.NewGuid();
+        var oldBackupTableId = Guid.NewGuid();
+        var oldBackupShardId = Guid.NewGuid();
+        var restoreId = Guid.NewGuid();
+        var restoreTableId = Guid.NewGuid();
+        var restoreShardId = Guid.NewGuid();
+        var recentBackupId = Guid.NewGuid();
+        var failedCleanupBackupId = Guid.NewGuid();
+
+        using var seedScope = factory.Services.CreateScope();
+        var db = seedScope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+        db.ClickHouseClusters.Add(new ClickHouseClusterEntity
+        {
+            Id = clusterId,
+            Name = "retention-source",
+            Mode = ClusterMode.SingleInstance,
+            BackupRestoreMaxDop = 1,
+            AccessNodes = [new ClickHouseAccessNodeEntity { Host = "localhost", Port = 9000 }]
+        });
+        db.Backups.AddRange(
+            new BackupEntity
+            {
+                Id = oldBackupId,
+                TriggerType = BackupTriggerType.Manual,
+                Status = BackupRunStatus.BackupExpiredDeleted,
+                BackupType = BackupType.Full,
+                ContentMode = BackupContentMode.SchemaOnly,
+                SourceClusterId = clusterId,
+                RequestedByName = "operator",
+                CreatedAt = oldDeletedAt.AddDays(-1),
+                CompletedAt = oldDeletedAt.AddHours(-1),
+                DeletedAt = oldDeletedAt,
+                DeletionStartedAt = oldDeletedAt.AddMinutes(-1),
+                DeletionAttemptCount = 1
+            },
+            new BackupEntity
+            {
+                Id = recentBackupId,
+                TriggerType = BackupTriggerType.Manual,
+                Status = BackupRunStatus.BackupExpiredDeleted,
+                BackupType = BackupType.Full,
+                ContentMode = BackupContentMode.SchemaOnly,
+                SourceClusterId = clusterId,
+                RequestedByName = "operator",
+                CreatedAt = recentDeletedAt.AddDays(-1),
+                CompletedAt = recentDeletedAt.AddHours(-1),
+                DeletedAt = recentDeletedAt,
+                DeletionStartedAt = recentDeletedAt.AddMinutes(-1),
+                DeletionAttemptCount = 1
+            },
+            new BackupEntity
+            {
+                Id = failedCleanupBackupId,
+                TriggerType = BackupTriggerType.Manual,
+                Status = BackupRunStatus.BackupExpiredDeleted,
+                BackupType = BackupType.Full,
+                ContentMode = BackupContentMode.SchemaOnly,
+                SourceClusterId = clusterId,
+                RequestedByName = "operator",
+                CreatedAt = oldDeletedAt.AddDays(-1),
+                CompletedAt = oldDeletedAt.AddHours(-1),
+                DeletedAt = oldDeletedAt,
+                DeletionStartedAt = oldDeletedAt.AddMinutes(-1),
+                DeletionError = "storage delete failed",
+                DeletionAttemptCount = 1
+            });
+        db.BackupTables.Add(new BackupTableEntity
+        {
+            Id = oldBackupTableId,
+            BackupId = oldBackupId,
+            EffectiveBackupType = BackupType.Full,
+            Database = "sales",
+            Table = "orders",
+            Engine = "MergeTree",
+            Status = BackupTableStatus.Succeeded,
+            StoragePath = "backups/old/orders"
+        });
+        db.BackupTableShards.Add(new BackupTableShardEntity
+        {
+            Id = oldBackupShardId,
+            BackupTableId = oldBackupTableId,
+            EffectiveBackupType = BackupType.Full,
+            SourceShardNumber = 1,
+            ReplicaNumber = 1,
+            Host = "localhost",
+            Port = 9000,
+            StoragePath = "backups/old/orders/shard-1",
+            Status = BackupTableStatus.Succeeded
+        });
+        db.Restores.Add(new RestoreEntity
+        {
+            Id = restoreId,
+            BackupId = oldBackupId,
+            TargetClusterId = clusterId,
+            Status = RestoreRunStatus.Succeeded,
+            RequestedByName = "operator",
+            CreatedAt = oldDeletedAt.AddMinutes(10),
+            CompletedAt = oldDeletedAt.AddMinutes(20)
+        });
+        db.RestoreTables.Add(new RestoreTableEntity
+        {
+            Id = restoreTableId,
+            RestoreId = restoreId,
+            BackupTableId = oldBackupTableId,
+            SourceDatabase = "sales",
+            SourceTable = "orders",
+            TargetDatabase = "sales_restore",
+            TargetTable = "orders",
+            Status = RestoreTableStatus.Succeeded
+        });
+        db.RestoreTableShards.Add(new RestoreTableShardEntity
+        {
+            Id = restoreShardId,
+            RestoreTableId = restoreTableId,
+            BackupTableShardId = oldBackupShardId,
+            SourceShardNumber = 1,
+            TargetShardNumber = 1,
+            TargetReplicaNumber = 1,
+            TargetHost = "localhost",
+            TargetPort = 9000,
+            LayoutRole = "primary",
+            RestoreDatabase = "sales_restore",
+            RestoreTableName = "orders",
+            Status = RestoreTableStatus.Succeeded
+        });
+        await db.SaveChangesAsync();
+
+        var service = new DataRetentionBackgroundService(
+            factory.Services,
+            TestOptionsMonitor.Create(new ChoboDataRetentionOptions { DeletedBackupRestoreRecordRetention = TimeSpan.FromDays(90) }),
+            new MutableTimeProvider(now),
+            Serilog.Core.Logger.None);
+
+        var deleted = await service.PurgeOnceAsync();
+
+        Assert.Equal(1, deleted.BackupRecordsDeleted);
+        Assert.Equal(1, deleted.RestoreRecordsDeleted);
+        Assert.False(await db.Backups.AnyAsync(x => x.Id == oldBackupId));
+        Assert.False(await db.BackupTables.AnyAsync(x => x.Id == oldBackupTableId));
+        Assert.False(await db.BackupTableShards.AnyAsync(x => x.Id == oldBackupShardId));
+        Assert.False(await db.Restores.AnyAsync(x => x.Id == restoreId));
+        Assert.False(await db.RestoreTables.AnyAsync(x => x.Id == restoreTableId));
+        Assert.False(await db.RestoreTableShards.AnyAsync(x => x.Id == restoreShardId));
+        Assert.True(await db.Backups.AnyAsync(x => x.Id == recentBackupId));
+        Assert.True(await db.Backups.AnyAsync(x => x.Id == failedCleanupBackupId));
+        var audit = await db.AuditEntries.SingleAsync(x => x.Action == "retention-purge" && x.EntityType == "data-retention");
+        Assert.Contains("\"backupRecordsDeleted\":1", audit.Details);
+        Assert.Contains("\"restoreRecordsDeleted\":1", audit.Details);
     }
 
     [Fact]
@@ -1466,7 +1727,6 @@ public sealed class ChoboFoundationTests
         Assert.Contains("+00:00", rawAuditJson);
         Assert.DoesNotContain("\\u002B", rawAuditJson);
     }
-
 
     [Fact]
     public async Task Runtime_settings_api_lists_non_hidden_settings_and_persists_overlay_edits()
@@ -1619,12 +1879,13 @@ public sealed class ChoboFoundationTests
         Assert.DoesNotContain(audits.Items, x => x.Action == "old-time-window-audit");
     }
 
-    private static async Task<FullExportGraphIds> SeedFullExportGraphAsync(WebApplicationFactory<Program> factory, bool includeCredentials)
+    private static async Task<FullExportGraphIds> SeedFullExportGraphAsync(WebApplicationFactory<Program> factory, bool includeCredentials, bool softDeletedConfig = false)
     {
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
         var user = await db.Users.SingleAsync(x => x.UserName == "admin");
         var now = DateTimeOffset.Parse("2026-05-15T10:00:00+00:00");
+        var deletedAt = softDeletedConfig ? now.AddMinutes(5) : (DateTimeOffset?)null;
         var clusterId = Guid.NewGuid();
         var targetId = Guid.NewGuid();
         var policyId = Guid.NewGuid();
@@ -1648,14 +1909,19 @@ public sealed class ChoboFoundationTests
             EncryptedUserNameKeyId = includeCredentials ? Guid.NewGuid() : null,
             EncryptedPassword = includeCredentials ? "encrypted-password" : null,
             EncryptedPasswordKeyId = includeCredentials ? Guid.NewGuid() : null,
+            IsDeleted = softDeletedConfig,
             CreatedAt = now,
+            DeletedAt = deletedAt,
             AccessNodes =
             [
                 new ClickHouseAccessNodeEntity { Id = Guid.NewGuid(), Host = "clickhouse-1", Port = 9000, UseTls = false },
                 new ClickHouseAccessNodeEntity { Id = Guid.NewGuid(), Host = "clickhouse-2", Port = 9440, UseTls = true }
             ]
         });
-        db.BackupTargets.Add(CreateS3TargetEntity(targetId, "minio", "http://minio:9000", "us-east-1", "backups", "prod", true, includeCredentials, now));
+        var target = CreateS3TargetEntity(targetId, "minio", "http://minio:9000", "us-east-1", "backups", "prod", true, includeCredentials, now);
+        target.IsDeleted = softDeletedConfig;
+        target.DeletedAt = deletedAt;
+        db.BackupTargets.Add(target);
         db.BackupPolicies.Add(new BackupPolicyEntity
         {
             Id = policyId,
@@ -1668,7 +1934,9 @@ public sealed class ChoboFoundationTests
             IncrementalRetentionMinutes = 240,
             MinBackupsToKeep = 2,
             MinFullBackupsToKeep = 1,
-            CreatedAt = now
+            IsDeleted = softDeletedConfig,
+            CreatedAt = now,
+            DeletedAt = deletedAt
         });
         db.BackupSchedules.Add(new BackupScheduleEntity
         {
@@ -1680,7 +1948,9 @@ public sealed class ChoboFoundationTests
             TimeZoneId = "UTC",
             MissedRunGracePeriod = TimeSpan.FromMinutes(30),
             Description = "Nightly backup",
-            CreatedAt = now
+            IsDeleted = softDeletedConfig,
+            CreatedAt = now,
+            DeletedAt = deletedAt
         });
         db.SchemaDefinitions.Add(new SchemaDefinitionEntity
         {
@@ -1863,7 +2133,6 @@ public sealed class ChoboFoundationTests
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Token);
         return client;
     }
-
 
     private static BackupTargetEntity CreateS3TargetEntity(Guid id, string name, string endpoint, string region, string bucket, string? pathPrefix, bool forcePathStyle, bool includeCredentials, DateTimeOffset? createdAt = null) =>
         new()

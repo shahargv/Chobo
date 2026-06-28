@@ -11,6 +11,12 @@ public sealed class TargetRepository(ChoboDbContext db) : ITargetRepository
             .OrderBy(x => x.Name)
             .ToListAsync();
 
+    public Task<List<BackupTargetEntity>> ListAsync(bool includeDeleted) =>
+        db.BackupTargets
+            .Where(x => includeDeleted || !x.IsDeleted)
+            .OrderBy(x => x.Name)
+            .ToListAsync();
+
     public Task<BackupTargetEntity?> FindActiveAsync(Guid id) =>
         db.BackupTargets.FirstOrDefaultAsync(x => x.Id == id && !x.IsDeleted);
 

@@ -18,7 +18,7 @@ public sealed class TargetCommands : CliSubject
     public override string Description => "Backup target configuration.";
 
     private static Task<object?> ListAsync(CommandContext context) =>
-        CommandHelpers.WithClient(context, client => client.GetAsync("targets"));
+        CommandHelpers.WithClient(context, client => client.GetAsync("targets" + IncludeDeletedQuery(context)));
 
     private static Task<object?> AddS3Async(CommandContext context)
     {
@@ -52,4 +52,6 @@ public sealed class TargetCommands : CliSubject
             options.Optional("--access-key"),
             options.Optional("--secret-key"));
     }
+    private static string IncludeDeletedQuery(CommandContext context) =>
+        context.Command.Options.Has("--include-deleted") ? "?includeDeleted=true" : "";
 }

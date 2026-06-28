@@ -11,6 +11,12 @@ public sealed class PolicyRepository(ChoboDbContext db) : IPolicyRepository
             .OrderBy(x => x.Name)
             .ToListAsync();
 
+    public Task<List<BackupPolicyEntity>> ListAsync(bool includeDeleted) =>
+        db.BackupPolicies
+            .Where(x => includeDeleted || !x.IsDeleted)
+            .OrderBy(x => x.Name)
+            .ToListAsync();
+
     public Task<BackupPolicyEntity?> FindActiveAsync(Guid id) =>
         db.BackupPolicies.FirstOrDefaultAsync(x => x.Id == id && !x.IsDeleted);
 

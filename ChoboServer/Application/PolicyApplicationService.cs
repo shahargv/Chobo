@@ -11,6 +11,7 @@ namespace ChoboServer.Application;
 
 public sealed class PolicyApplicationService(
     IPolicyRepository policies,
+    IScheduleRepository schedules,
     IClusterRepository clusters,
     ITargetRepository targets,
     IClickHouseAdapter clickHouse,
@@ -22,8 +23,8 @@ public sealed class PolicyApplicationService(
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
     private static readonly TimeSpan InventoryCacheDuration = TimeSpan.FromMinutes(5);
 
-    public async Task<IReadOnlyList<BackupPolicyDto>> ListAsync() =>
-        (await policies.ListActiveAsync()).Select(ToDto).ToList();
+    public async Task<IReadOnlyList<BackupPolicyDto>> ListAsync(bool includeDeleted = false) =>
+        (await policies.ListAsync(includeDeleted)).Select(ToDto).ToList();
 
     public async Task<BackupPolicyDto> AddAsync(UpsertPolicyRequest request)
     {
@@ -149,12 +150,33 @@ public sealed class PolicyApplicationService(
             return false;
         }
 
+        var now = DateTimeOffset.UtcNow;
         var previous = ToDto(policy);
+        var relatedSchedules = await schedules.ListActiveByPolicyAsync(id);
+        var previousSchedules = relatedSchedules.Select(ToScheduleAuditDto).ToList();
         policy.IsDeleted = true;
-        policy.DeletedAt = DateTimeOffset.UtcNow;
+        policy.DeletedAt = now;
+        foreach (var schedule in relatedSchedules)
+        {
+            schedule.IsDeleted = true;
+            schedule.DeletedAt = now;
+        }
         await unitOfWork.SaveChangesAsync();
 
-        await audit.RecordAsync("delete", AuditEntityType.BackupPolicy, id.ToString(), AuditDetails.Deactivation(previous, ToDto(policy)));
+        await audit.RecordAsync("delete", AuditEntityType.BackupPolicy, id.ToString(), new
+        {
+            change = AuditDetails.Deactivation(previous, ToDto(policy)),
+            softDeletedScheduleIds = relatedSchedules.Select(x => x.Id).ToList()
+        });
+        foreach (var schedule in relatedSchedules.Zip(previousSchedules))
+        {
+            await audit.RecordAsync("delete", AuditEntityType.BackupSchedule, schedule.First.Id.ToString(), new
+            {
+                reason = "policy-deleted",
+                policyId = id,
+                change = AuditDetails.Deactivation(schedule.Second, ToScheduleAuditDto(schedule.First))
+            });
+        }
         return true;
     }
 
@@ -217,6 +239,24 @@ public sealed class PolicyApplicationService(
             ValidatePattern(rule.Table, "Table");
         }
     }
+
+    private static object ToScheduleAuditDto(BackupScheduleEntity x) =>
+        new
+        {
+            x.Id,
+            x.Name,
+            x.PolicyId,
+            x.BackupType,
+            x.CronExpression,
+            x.TimeZoneId,
+            x.IsEnabled,
+            x.MissedRunGracePeriod,
+            x.Description,
+            x.IsSystemDefault,
+            x.IsDeleted,
+            x.CreatedAt,
+            x.UpdatedAt
+        };
 
     private static PolicySelector Deserialize(string json) =>
         JsonSerializer.Deserialize<PolicySelector>(json, JsonOptions) ?? PolicySelector.Empty;

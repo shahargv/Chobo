@@ -9,7 +9,7 @@ namespace ChoboServer.Controllers;
 public sealed class SchedulesController(ScheduleApplicationService schedules) : ControllerBase
 {
     [HttpGet]
-    public Task<IReadOnlyList<BackupScheduleDto>> List() => schedules.ListAsync();
+    public Task<IReadOnlyList<BackupScheduleDto>> List([FromQuery] bool includeDeleted = false) => schedules.ListAsync(includeDeleted);
 
     [HttpPost("validate-cron")]
     public ActionResult<ValidateScheduleCronResponse> ValidateCron(ValidateScheduleCronRequest request) =>

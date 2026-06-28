@@ -146,7 +146,9 @@ For S3-compatible deletion, ChoboServer needs access to the target endpoint and 
 
 If a backup has shard paths, Chobo deletes each shard path. If a backup table has no shard paths, Chobo deletes the table path. Schema-only backups have no S3 paths, so cleanup skips object deletion for them.
 
-Cleanup never removes the backup run record itself. For every deleted or expired backup, including schema+data and schema-only backups, Chobo clears the backup table schema references and deletes schema definition rows that are no longer referenced by any retained backup. Cleanup audit details include deleted S3 path count, cleared schema reference count, and deleted schema definition count.
+Cleanup first leaves the backup run record in SQLite so operators can see what was deleted. For every deleted or expired backup, including schema+data and schema-only backups, Chobo clears the backup table schema references and deletes schema definition rows that are no longer referenced by any retained backup. Cleanup audit details include deleted S3 path count, cleared schema reference count, and deleted schema definition count.
+
+After cleanup succeeds and `deletedAt` is older than `Chobo:DataRetention:DeletedBackupRestoreRecordRetention`, Chobo hard-deletes the backup record and related restore records from SQLite. The default retention is 90 days. Records with cleanup errors are retained until a later cleanup pass succeeds.
 
 ## Auditing
 

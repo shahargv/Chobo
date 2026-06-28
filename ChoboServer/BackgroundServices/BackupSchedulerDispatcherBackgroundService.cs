@@ -23,6 +23,7 @@ public sealed class BackupSchedulerDispatcherBackgroundService(
         "schedule-skip-active",
         "schedule-skip-active-policy",
         "schedule-skip-missing-policy",
+        "schedule-skip-inactive-policy",
         "schedule-skip-missing-cluster"
     ];
 
@@ -155,7 +156,15 @@ public sealed class BackupSchedulerDispatcherBackgroundService(
 
             if (schedule.Policy is null)
             {
-                await audit.RecordAsync("schedule-skip-missing-policy", AuditEntityType.BackupSchedule, schedule.Id.ToString(), new { plannedRunAt = latestOccurrence });
+                _logger.Error("Skipping schedule {ScheduleId} ({ScheduleName}) because policy {PolicyId} is missing.", schedule.Id, schedule.Name, schedule.PolicyId);
+                await audit.RecordAsync("schedule-skip-missing-policy", AuditEntityType.BackupSchedule, schedule.Id.ToString(), new { plannedRunAt = latestOccurrence, schedule.PolicyId, severity = "error" });
+                continue;
+            }
+
+            if (schedule.Policy.IsDeleted)
+            {
+                _logger.Error("Skipping schedule {ScheduleId} ({ScheduleName}) because policy {PolicyId} is soft-deleted.", schedule.Id, schedule.Name, schedule.PolicyId);
+                await audit.RecordAsync("schedule-skip-inactive-policy", AuditEntityType.BackupSchedule, schedule.Id.ToString(), new { plannedRunAt = latestOccurrence, schedule.PolicyId, severity = "error" });
                 continue;
             }
 
