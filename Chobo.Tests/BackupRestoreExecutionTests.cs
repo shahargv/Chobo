@@ -2921,6 +2921,90 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Restore_table_mapping_create_table_override_is_stored_and_audited_without_full_sql()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Succeeded, "backup-op", true)
+        ]);
+        backup.Status = BackupRunStatus.Succeeded;
+        await fixture.Db.SaveChangesAsync();
+        var table = backup.Tables.Single();
+        var overrideSql = "CREATE TABLE sales.orders (id UInt64, updated_at DateTime) ENGINE = MergeTree ORDER BY (id, updated_at)";
+
+        var restore = await fixture.Services.GetRequiredService<RestoreApplicationService>().InitiateAsync(new InitiateRestoreRequest(
+            backup.Id,
+            fixture.TargetClusterId,
+            null,
+            null,
+            null,
+            null,
+            false,
+            false,
+            Tables: [new RestoreTableMappingRequest(table.Id, "restored", "orders_copy", CreateTableSqlOverride: overrideSql)]));
+
+        Assert.Contains(overrideSql, restore.RequestJson);
+        var audit = await fixture.Db.AuditEntries.SingleAsync(x => x.Action == "created" && x.EntityType == "restore" && x.EntityId == restore.Id.ToString());
+        Assert.Contains("createTableSqlOverride", audit.Details, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("sha256", audit.Details, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(overrideSql, audit.Details, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Restore_rejects_multi_statement_create_table_override()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Succeeded, "backup-op", true)
+        ]);
+        backup.Status = BackupRunStatus.Succeeded;
+        await fixture.Db.SaveChangesAsync();
+        var table = backup.Tables.Single();
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(() => fixture.Services.GetRequiredService<RestoreApplicationService>().InitiateAsync(new InitiateRestoreRequest(
+            backup.Id,
+            fixture.TargetClusterId,
+            null,
+            null,
+            null,
+            null,
+            false,
+            false,
+            Tables: [new RestoreTableMappingRequest(table.Id, "restored", "orders_copy", CreateTableSqlOverride: "CREATE TABLE sales.orders (id UInt64) ENGINE = MergeTree ORDER BY id; DROP TABLE sales.orders")])));
+
+        Assert.Contains("single CREATE TABLE", error.Message);
+    }
+
+    [Fact]
+    public async Task Restore_uses_create_table_override_when_creating_missing_target_table()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Succeeded, "backup-op", true)
+        ]);
+        backup.Status = BackupRunStatus.Succeeded;
+        await fixture.Db.SaveChangesAsync();
+        var table = backup.Tables.Single();
+        var overrideSql = "CREATE TABLE sales.orders (id UInt64, updated_at DateTime) ENGINE = MergeTree ORDER BY (id, updated_at)";
+
+        var restore = await fixture.Services.GetRequiredService<RestoreApplicationService>().InitiateAsync(new InitiateRestoreRequest(
+            backup.Id,
+            fixture.TargetClusterId,
+            null,
+            null,
+            null,
+            null,
+            false,
+            false,
+            Tables: [new RestoreTableMappingRequest(table.Id, "restored", "orders_copy", CreateTableSqlOverride: overrideSql)]));
+
+        await fixture.RunRestoreAsync(restore.Id);
+
+        Assert.Contains(fixture.ClickHouse.ExecuteSql, sql => sql == "CREATE TABLE IF NOT EXISTS `restored`.`orders_copy` (id UInt64, updated_at DateTime) ENGINE = MergeTree ORDER BY (id, updated_at)");
+        Assert.DoesNotContain(fixture.ClickHouse.ExecuteSql, sql => sql.Contains("CREATE TABLE IF NOT EXISTS `restored`.`orders_copy` (id UInt64) ENGINE = MergeTree ORDER BY id", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Restore_can_select_multiple_source_shards()
     {
         await using var fixture = await TestFixture.CreateAsync();

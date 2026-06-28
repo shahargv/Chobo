@@ -6642,6 +6642,10 @@
           "schemaOnly": {
             "type": "boolean",
             "nullable": true
+          },
+          "createTableSqlOverride": {
+            "type": "string",
+            "nullable": true
           }
         },
         "additionalProperties": false

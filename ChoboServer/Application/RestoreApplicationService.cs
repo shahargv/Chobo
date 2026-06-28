@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -66,6 +68,7 @@ public sealed class RestoreApplicationService(
             throw new ArgumentException("Target cluster was not found.");
         }
 
+        ValidateCreateTableSqlOverrides(request);
         var selected = SelectTables(backup.Tables, request);
         if (selected.Count == 0)
         {
@@ -214,7 +217,7 @@ public sealed class RestoreApplicationService(
         await db.SaveChangesAsync(cancellationToken);
         await queueItems.EnsureRestoreQueueItemsAsync(restore.Id, cancellationToken);
         _logger.Information("Restore {RestoreId} created by {ActorName} for backup {BackupId} into cluster {TargetClusterId} with {TableCount} table(s).", restore.Id, actor.ActorName, restore.BackupId, restore.TargetClusterId, restore.Tables.Count);
-        await audit.RecordAsync("created", AuditEntityType.Restore, restore.Id.ToString(), new { operationId = restore.Id, restore.BackupId, restore.TargetClusterId, tableCount = restore.Tables.Count, shardCount = restore.Tables.Sum(x => x.Shards.Count), layout, request.SourceShard, request.SourceShards, request.TargetShard, request.TargetShards, request.SchemaOnly, tableOptions = restore.Tables.Select(x => new { x.SourceDatabase, x.SourceTable, x.TargetDatabase, x.TargetTable, x.Append, x.AllowSchemaMismatch, x.SchemaOnly }).ToList() });
+        await audit.RecordAsync("created", AuditEntityType.Restore, restore.Id.ToString(), new { operationId = restore.Id, restore.BackupId, restore.TargetClusterId, tableCount = restore.Tables.Count, shardCount = restore.Tables.Sum(x => x.Shards.Count), layout, request.SourceShard, request.SourceShards, request.TargetShard, request.TargetShards, request.SchemaOnly, tableOptions = restore.Tables.Select(x => new { x.SourceDatabase, x.SourceTable, x.TargetDatabase, x.TargetTable, x.Append, x.AllowSchemaMismatch, x.SchemaOnly, CreateTableSqlOverride = BuildCreateTableSqlOverrideAuditDetail(request, x.BackupTableId) }).ToList() });
         await queues.QueueRestoreAsync(restore.Id, cancellationToken);
         _logger.Information("Restore {RestoreId} queued.", restore.Id);
         await audit.RecordAsync("queued", AuditEntityType.Restore, restore.Id.ToString(), new { operationId = restore.Id, reason = "user" });
@@ -356,6 +359,54 @@ public sealed class RestoreApplicationService(
     private Task<RestoreEntity?> LoadAsync(Guid id, CancellationToken cancellationToken) =>
         db.Restores.Include(x => x.Tables).ThenInclude(x => x.Shards).FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
 
+    private static void ValidateCreateTableSqlOverrides(InitiateRestoreRequest request)
+    {
+        foreach (var mapping in request.Tables ?? [])
+        {
+            if (mapping.CreateTableSqlOverride is null)
+            {
+                continue;
+            }
+
+            var sql = mapping.CreateTableSqlOverride.Trim();
+            if (sql.Length == 0)
+            {
+                throw new ArgumentException("CreateTableSqlOverride must not be empty when provided.");
+            }
+            if (!IsSingleCreateTableStatement(sql))
+            {
+                throw new ArgumentException("CreateTableSqlOverride must be a single CREATE TABLE statement.");
+            }
+        }
+    }
+
+    private static bool IsSingleCreateTableStatement(string sql)
+    {
+        if (!sql.StartsWith("CREATE TABLE ", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var withoutTrailingSemicolon = sql.EndsWith(';') ? sql[..^1].TrimEnd() : sql;
+        return !withoutTrailingSemicolon.Contains(';');
+    }
+
+    private static object? BuildCreateTableSqlOverrideAuditDetail(InitiateRestoreRequest request, Guid backupTableId)
+    {
+        var sql = request.Tables?.FirstOrDefault(x => x.BackupTableId == backupTableId)?.CreateTableSqlOverride;
+        if (string.IsNullOrWhiteSpace(sql))
+        {
+            return null;
+        }
+
+        var normalized = sql.Trim();
+        return new
+        {
+            present = true,
+            length = normalized.Length,
+            sha256 = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized))).ToLowerInvariant()
+        };
+    }
     private static IReadOnlyList<(BackupTableEntity Table, RestoreTableMappingRequest? Mapping)> SelectTables(IEnumerable<BackupTableEntity> tables, InitiateRestoreRequest request)
     {
         var available = tables.ToDictionary(x => x.Id);

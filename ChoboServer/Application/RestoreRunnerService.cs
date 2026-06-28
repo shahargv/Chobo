@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 using Chobo.Contracts;
 using ChoboServer.Data;
 using ChoboServer.Options;
@@ -246,14 +247,14 @@ public sealed class RestoreRunnerService(
             }
             if (!hasSubmittedOperations && existing is null && !table.Append && restore.Layout != RestoreLayout.Redistribute)
             {
-                await EnsureTargetTableExistsOnAllShardsAsync(scopedClickHouse, restore.TargetCluster!, backupTable, table, cancellationToken);
+                await EnsureTargetTableExistsOnAllShardsAsync(scopedClickHouse, restore, backupTable, table, cancellationToken);
             }
 
             if (!backupTable.DataBackedUp || orderedShards.Count == 0)
             {
                 if (existing is null)
                 {
-                    await scopedClickHouse.ExecuteAsync(firstEndpoint, restore.TargetCluster!, ClickHouseSql.RewriteCreateTableNameIfNotExists(backupTable.SchemaDefinition!.CreateTableSql, table.TargetDatabase, table.TargetTable), cancellationToken);
+                    await scopedClickHouse.ExecuteAsync(firstEndpoint, restore.TargetCluster!, BuildCreateTableSql(restore, backupTable, table), cancellationToken);
                 }
                 table.Status = RestoreTableStatus.Succeeded;
                 table.ClickHouseStatus = "SCHEMA_ONLY";
@@ -273,7 +274,7 @@ public sealed class RestoreRunnerService(
             var usesTemporaryShardTables = orderedShards.Any(x => !string.Equals(x.RestoreTableName, table.TargetTable, StringComparison.Ordinal));
             if (!hasSubmittedOperations && existing is null && usesTemporaryShardTables)
             {
-                await scopedClickHouse.ExecuteAsync(firstEndpoint, restore.TargetCluster!, ClickHouseSql.RewriteCreateTableNameIfNotExists(backupTable.SchemaDefinition!.CreateTableSql, table.TargetDatabase, table.TargetTable), cancellationToken);
+                await scopedClickHouse.ExecuteAsync(firstEndpoint, restore.TargetCluster!, BuildCreateTableSql(restore, backupTable, table), cancellationToken);
             }
             await scopedDb.SaveChangesAsync(cancellationToken);
         }
@@ -431,7 +432,7 @@ public sealed class RestoreRunnerService(
             await scopedClickHouse.ExecuteAsync(endpoint, restore.TargetCluster!, $"CREATE DATABASE IF NOT EXISTS {ClickHouseSql.Identifier(shard.RestoreDatabase)}", cancellationToken);
             if (usesTemporaryShardTables || (!table.Append && table.Shards.Count > 1))
             {
-                await scopedClickHouse.ExecuteAsync(endpoint, restore.TargetCluster!, ClickHouseSql.RewriteCreateTableNameIfNotExists(backupTable.SchemaDefinition!.CreateTableSql, table.TargetDatabase, table.TargetTable), cancellationToken);
+                await scopedClickHouse.ExecuteAsync(endpoint, restore.TargetCluster!, BuildCreateTableSql(restore, backupTable, table), cancellationToken);
             }
 
             shard.Status = RestoreTableStatus.Running;
@@ -553,8 +554,9 @@ public sealed class RestoreRunnerService(
         }
         await scopedDb.SaveChangesAsync(cancellationToken);
     }
-    private static async Task EnsureTargetTableExistsOnAllShardsAsync(IClickHouseAdapter adapter, ClickHouseClusterEntity cluster, BackupTableEntity backupTable, RestoreTableEntity table, CancellationToken cancellationToken)
+    private static async Task EnsureTargetTableExistsOnAllShardsAsync(IClickHouseAdapter adapter, RestoreEntity restore, BackupTableEntity backupTable, RestoreTableEntity table, CancellationToken cancellationToken)
     {
+        var cluster = restore.TargetCluster!;
         var topology = await adapter.GetTopologyAsync(cluster, cancellationToken);
         var endpoints = SelectShardRepresentativeEndpoints(topology);
         if (endpoints.Count == 0 && cluster.AccessNodes.Count > 0)
@@ -564,7 +566,7 @@ public sealed class RestoreRunnerService(
                 .ToList();
         }
 
-        var createTableSql = ClickHouseSql.RewriteCreateTableNameIfNotExists(backupTable.SchemaDefinition!.CreateTableSql, table.TargetDatabase, table.TargetTable);
+        var createTableSql = BuildCreateTableSql(restore, backupTable, table);
         foreach (var endpoint in endpoints)
         {
             await adapter.ExecuteAsync(endpoint, cluster, $"CREATE DATABASE IF NOT EXISTS {ClickHouseSql.Identifier(table.TargetDatabase)}", cancellationToken);
@@ -572,6 +574,64 @@ public sealed class RestoreRunnerService(
         }
     }
 
+    private static string BuildCreateTableSql(RestoreEntity restore, BackupTableEntity backupTable, RestoreTableEntity table)
+    {
+        var createTableSql = GetCreateTableSqlOverride(restore.RequestJson, table.BackupTableId) ?? backupTable.SchemaDefinition!.CreateTableSql;
+        return ClickHouseSql.RewriteCreateTableNameIfNotExists(createTableSql, table.TargetDatabase, table.TargetTable);
+    }
+
+    private static string? GetCreateTableSqlOverride(string requestJson, Guid backupTableId)
+    {
+        if (string.IsNullOrWhiteSpace(requestJson))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(requestJson);
+            if (!TryGetProperty(document.RootElement, "tables", out var tables) || tables.ValueKind != JsonValueKind.Array)
+            {
+                return null;
+            }
+
+            foreach (var table in tables.EnumerateArray())
+            {
+                if (!TryGetProperty(table, "backupTableId", out var idElement) || idElement.ValueKind != JsonValueKind.String)
+                {
+                    continue;
+                }
+                if (!Guid.TryParse(idElement.GetString(), out var id) || id != backupTableId)
+                {
+                    continue;
+                }
+                if (!TryGetProperty(table, "createTableSqlOverride", out var sqlElement) || sqlElement.ValueKind != JsonValueKind.String)
+                {
+                    return null;
+                }
+
+                var sql = sqlElement.GetString();
+                return string.IsNullOrWhiteSpace(sql) ? null : sql.Trim();
+            }
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+
+        return null;
+    }
+
+    private static bool TryGetProperty(JsonElement element, string camelCaseName, out JsonElement value)
+    {
+        if (element.TryGetProperty(camelCaseName, out value))
+        {
+            return true;
+        }
+
+        var pascalCaseName = char.ToUpperInvariant(camelCaseName[0]) + camelCaseName[1..];
+        return element.TryGetProperty(pascalCaseName, out value);
+    }
     private static List<ClickHouseNodeEndpoint> SelectShardRepresentativeEndpoints(IReadOnlyList<ClickHouseShardReplicaInfo> topology) =>
         topology
             .GroupBy(x => x.ShardNumber)

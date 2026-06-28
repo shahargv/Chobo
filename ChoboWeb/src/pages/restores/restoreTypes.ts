@@ -1,6 +1,6 @@
 import type { RestoreTableMappingRequest } from "../../api/generated";
 
-export type RestoreMappingDraft = RestoreTableMappingRequest & { selected: boolean };
+export type RestoreMappingDraft = RestoreTableMappingRequest & { selected: boolean; createTableSqlOverride?: string | null };
 export type SourceShardOption = { value: number; label: string };
 export type TargetShardOption = SourceShardOption;
 export type RestoreStep = 0 | 1 | 2 | 3;

@@ -31,10 +31,20 @@ export function validateRestoreRequest(request: InitiateRestoreRequest, mappings
     if (mapping.schemaOnly && mapping.append) {
       errors.push("Schema-only table restores cannot append data.");
     }
+    if (mapping.createTableSqlOverride != null) {
+      const sql = mapping.createTableSqlOverride.trim();
+      if (!sql) errors.push("Custom CREATE TABLE SQL must not be empty.");
+      if (sql && !isSingleCreateTableStatement(sql)) errors.push("Custom CREATE TABLE SQL must be a single CREATE TABLE statement.");
+    }
   });
   return [...new Set(errors)];
 }
 
+function isSingleCreateTableStatement(sql: string) {
+  if (!sql.toLowerCase().startsWith("create table ")) return false;
+  const withoutTrailingSemicolon = sql.endsWith(";") ? sql.slice(0, -1).trimEnd() : sql;
+  return !withoutTrailingSemicolon.includes(";");
+}
 export function getSourceShardOptions(backup: BackupDto | null): SourceShardOption[] {
   const shards = new Map<number, string>();
   backup?.tables.forEach((table) => {
