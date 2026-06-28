@@ -4,6 +4,32 @@
 
 ChoboWeb is a Vite + React + TypeScript single page app.
 
+Architecture overview:
+
+- `src/main.tsx` boots React, React Router, and React Query.
+- `src/App.tsx` is the application composition root: setup/install/login state, `ChoboApiClient` creation, API context, logout cleanup, and routes.
+- `src/components/AppShell.tsx` is the persistent operations shell with navigation, top bar, toast placement, and main content frame.
+- `src/pages/` contains route-level screens. Search here first for user-visible workflows: dashboard, backups, restores, policies, schedules, schema browser, clusters, targets, users, logs, audit, import/export, monitoring, queue, settings, and garbage collection.
+- `src/pages/restores/` contains the restore workflow split into wizard, history, detail, types, and pure helpers because restore UX is larger than a single page.
+- `src/components/` contains shared or cross-page components, plus a few focused editors/screens. Keep page-private components inside their page until reuse is real.
+- `src/components/ui.tsx` is the local design-system layer: page shells, CRUD layout, drawers, tables, status badges, form controls, empty states, and details.
+- `src/api/` contains API access. `client.ts` is the handwritten wrapper used by pages; `generated.ts` is generated/maintained from OpenAPI contract shapes.
+- `src/api-context.ts` exposes the API client and toast hook through `useApi`.
+- `src/auth.ts` owns token persistence.
+- `src/policies.ts`, `src/schedule.ts`, and `src/utils/` contain pure helpers with targeted tests where behavior is non-trivial.
+- `src/styles.css` is the global stylesheet and visual system for the operational UI.
+
+Route map:
+
+- `/` -> `pages/DashboardPage.tsx`
+- `/backups` and `/backups/:backupId` -> `pages/BackupsPage.tsx`
+- `/restores`, `/restores/start`, and `/restores/:restoreId` -> `pages/RestoresPage.tsx` re-exporting `pages/restores/*`
+- `/policies` and `/policies/:policyId` -> `pages/PoliciesPage.tsx`
+- `/schedules` and `/schedules/:scheduleId` -> `pages/SchedulesPage.tsx`
+- `/clusters` and `/clusters/:clusterId` -> `pages/ClustersPage.tsx`
+- `/targets`, `/users`, `/settings`, `/schema`, `/queue`, `/monitoring`, `/gc`, and `/import-export` -> same-named page modules under `src/pages`
+- `/logs` and `/audit` -> `pages/EntriesPages.tsx`
+
 - `src/App.tsx` is intentionally small. It owns auth state, `ChoboApiClient` creation, `ApiContext.Provider`, logout cleanup, and route registration only.
 - `src/components/AppShell.tsx` owns the sidebar navigation, top bar, toast placement, and main layout shell.
 - `src/components/LoginScreen.tsx` owns the token login form.
