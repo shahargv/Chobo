@@ -4,7 +4,9 @@ using System.Text.Json.Serialization;
 using Chobo.Contracts;
 using ChoboServer.Data;
 using ChoboServer.Services;
+using ChoboServer.Options;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace ChoboServer.Application;
 
@@ -14,7 +16,8 @@ public sealed class BackupPreparationService(
     PolicySelectorEvaluationService selectorEvaluation,
     BackupRestoreQueueApplicationService queue,
     IAuditService audit,
-    Serilog.ILogger logger)
+    Serilog.ILogger logger,
+    IOptionsMonitor<ChoboBackupRestoreOptions> backupRestoreOptions)
 {
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
     private readonly Serilog.ILogger _logger = logger.ForContext<BackupPreparationService>();
@@ -110,11 +113,14 @@ public sealed class BackupPreparationService(
         var schemasByHash = await db.SchemaDefinitions
             .Where(x => selectedSchemaHashes.Contains(x.SchemaHash))
             .ToDictionaryAsync(x => x.SchemaHash, StringComparer.Ordinal, cancellationToken);
+        var baseBackupCutoff = backup.BackupType == BackupType.Incremental && backup.Policy is not null
+            ? backup.CreatedAt.Subtract(TimeSpan.FromHours(ResolveMaxAgeHoursForBaseBackup(backup.Policy)))
+            : (DateTimeOffset?)null;
         var parentTablesByIdentity = backup.BackupType == BackupType.Incremental && backup.PolicyId is not null
-            ? await FindParentFullTablesAsync(backup.PolicyId.Value, selectedTables, cancellationToken)
+            ? await FindParentFullTablesAsync(backup.PolicyId.Value, selectedTables, baseBackupCutoff, cancellationToken)
             : [];
         var parentShardsByIdentity = backup.BackupType == BackupType.Incremental && backup.PolicyId is not null
-            ? await FindParentFullShardsAsync(backup.PolicyId.Value, selectedTables, cancellationToken)
+            ? await FindParentFullShardsAsync(backup.PolicyId.Value, selectedTables, baseBackupCutoff, cancellationToken)
             : [];
 
         foreach (var table in selectedTables)
@@ -261,7 +267,7 @@ public sealed class BackupPreparationService(
         string.Equals(database, "information_schema", StringComparison.Ordinal) ||
         string.Equals(database, "INFORMATION_SCHEMA", StringComparison.Ordinal);
 
-    private async Task<Dictionary<string, BackupTableEntity>> FindParentFullTablesAsync(Guid policyId, IReadOnlyList<ClickHouseTableInfo> selectedTables, CancellationToken cancellationToken)
+    private async Task<Dictionary<string, BackupTableEntity>> FindParentFullTablesAsync(Guid policyId, IReadOnlyList<ClickHouseTableInfo> selectedTables, DateTimeOffset? baseBackupCutoff, CancellationToken cancellationToken)
     {
         var selectedIdentities = selectedTables
             .Select(x => ClickHouseBackupIdentity.Table(x.Database, x.Table))
@@ -285,7 +291,8 @@ public sealed class BackupPreparationService(
                         x.Status == BackupTableStatus.Succeeded &&
                         x.EffectiveBackupType == BackupType.Full &&
                         databases.Contains(x.Database) &&
-                        tables.Contains(x.Table))
+                        tables.Contains(x.Table) &&
+                        (baseBackupCutoff == null || (x.Backup.CompletedAt ?? x.Backup.CreatedAt) >= baseBackupCutoff))
             .OrderByDescending(x => x.Backup!.CompletedAt ?? x.Backup.CreatedAt)
             .ToListAsync(cancellationToken);
 
@@ -295,7 +302,7 @@ public sealed class BackupPreparationService(
             .ToDictionary(x => x.Key, x => x.First(), StringComparer.Ordinal);
     }
 
-    private async Task<Dictionary<string, BackupTableShardEntity>> FindParentFullShardsAsync(Guid policyId, IReadOnlyList<ClickHouseTableInfo> selectedTables, CancellationToken cancellationToken)
+    private async Task<Dictionary<string, BackupTableShardEntity>> FindParentFullShardsAsync(Guid policyId, IReadOnlyList<ClickHouseTableInfo> selectedTables, DateTimeOffset? baseBackupCutoff, CancellationToken cancellationToken)
     {
         var selectedIdentities = selectedTables
             .Select(x => ClickHouseBackupIdentity.Table(x.Database, x.Table))
@@ -319,7 +326,8 @@ public sealed class BackupPreparationService(
                         x.Status == BackupTableStatus.Succeeded &&
                         x.EffectiveBackupType == BackupType.Full &&
                         databases.Contains(x.BackupTable.Database) &&
-                        tables.Contains(x.BackupTable.Table))
+                        tables.Contains(x.BackupTable.Table) &&
+                        (baseBackupCutoff == null || (x.BackupTable.Backup.CompletedAt ?? x.BackupTable.Backup.CreatedAt) >= baseBackupCutoff))
             .OrderByDescending(x => x.BackupTable!.Backup!.CompletedAt ?? x.BackupTable.Backup.CreatedAt)
             .ToListAsync(cancellationToken);
 
@@ -329,6 +337,16 @@ public sealed class BackupPreparationService(
             .ToDictionary(x => x.Key, x => x.First(), StringComparer.Ordinal);
     }
 
+    private int ResolveMaxAgeHoursForBaseBackup(BackupPolicyEntity policy)
+    {
+        var maxAgeHours = policy.MaxAgeHoursForBaseBackup ?? backupRestoreOptions.CurrentValue.DefaultMaxAgeHoursForBaseBackup;
+        if (maxAgeHours <= 0)
+        {
+            throw new InvalidOperationException("Max age hours for base backup must be greater than zero.");
+        }
+
+        return maxAgeHours;
+    }
     private static string BuildStoragePath(BackupEntity backup, string database, string table, BackupType effectiveType, Guid? parentFullBackupId)
     {
         var source = backup.PolicyId is { } policyId ? $"policy-{policyId:N}" : "manual";

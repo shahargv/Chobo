@@ -20,12 +20,12 @@ export function Policies() {
   const [editing, setEditing] = useState<BackupPolicyDto | null>(null);
   const [createdPolicy, setCreatedPolicy] = useState<BackupPolicyDto | null>(null);
   const [runPolicyTarget, setRunPolicyTarget] = useState<BackupPolicyDto | null>(null);
-  const defaultPolicyDraft = (): UpsertPolicyRequest => ({ name: "", sourceClusterId: "", targetId: "", selector: emptySelector, contentMode: "SchemaAndData", retention: { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 }, failedBackupRetentionMode: "KeepAndExcludeFromMinBackupsToKeep", clickHouseBackupSettings: {}, clickHouseRestoreSettings: {} });
+  const defaultPolicyDraft = (): UpsertPolicyRequest => ({ name: "", sourceClusterId: "", targetId: "", selector: emptySelector, contentMode: "SchemaAndData", retention: { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 }, maxAgeHoursForBaseBackup: null, failedBackupRetentionMode: "KeepAndExcludeFromMinBackupsToKeep", clickHouseBackupSettings: {}, clickHouseRestoreSettings: {} });
   const [draft, setDraft] = useState<UpsertPolicyRequest>(() => defaultPolicyDraft());
   const editPolicy = (policy: BackupPolicyDto) => {
     setEditing(policy);
     setCreatedPolicy(null);
-    setDraft({ name: policy.name, sourceClusterId: policy.sourceClusterId, targetId: policy.targetId ?? "", selector: policy.selector, contentMode: policy.contentMode, retention: policy.retention ?? { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 }, failedBackupRetentionMode: policy.failedBackupRetentionMode, clickHouseBackupSettings: policy.clickHouseBackupSettings ?? {}, clickHouseRestoreSettings: policy.clickHouseRestoreSettings ?? {} });
+    setDraft({ name: policy.name, sourceClusterId: policy.sourceClusterId, targetId: policy.targetId ?? "", selector: policy.selector, contentMode: policy.contentMode, retention: policy.retention ?? { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 }, maxAgeHoursForBaseBackup: policy.maxAgeHoursForBaseBackup ?? null, failedBackupRetentionMode: policy.failedBackupRetentionMode, clickHouseBackupSettings: policy.clickHouseBackupSettings ?? {}, clickHouseRestoreSettings: policy.clickHouseRestoreSettings ?? {} });
     setShowForm(true);
   };
   useEffect(() => {
@@ -92,7 +92,7 @@ export function Policies() {
               <td>{nameOf(clusters.data, policy.sourceClusterId)}</td>
               <td>{policy.targetId ? nameOf(targets.data, policy.targetId) : "none"}</td>
               <td>{policy.selector.rules.length}</td>
-              <td>{policy.retention ? `${policy.retention.minBackupsToKeep} backups` : "default"}</td>
+              <td>{policy.retention ? `${policy.retention.minBackupsToKeep} backups` : "default"}<br /><span className="muted">Base age {policy.effectiveMaxAgeHoursForBaseBackup}h{policy.maxAgeHoursForBaseBackup == null ? " inherited" : ""}</span></td>
               <td className="actions"><button className="ghost" onClick={() => editPolicy(policy)}>Edit</button><button className="ghost" disabled={executePolicy.isPending} onClick={() => setRunPolicyTarget(policy)}><Play size={14} /> Run now</button></td>
             </tr>
           ))}
@@ -122,7 +122,7 @@ export function Policies() {
           <Select label="Failed backups" value={draft.failedBackupRetentionMode} onChange={(value) => setDraft({ ...draft, failedBackupRetentionMode: value as FailedBackupRetentionMode })} options={[["KeepAndExcludeFromMinBackupsToKeep", "Keep"], ["DeleteByGarbageCollectorAfterFailure", "Garbage collect failed backups"]]} />
         </div>
         <SelectorBuilder selector={draft.selector} hasSource={draft.sourceClusterId.length > 0} inventory={simulation.data?.inventory ?? []} selected={simulation.data?.tables ?? []} isLoading={simulation.isFetching} error={simulation.error ? String(simulation.error) : null} onChange={(selector) => setDraft({ ...draft, selector })} />
-        <RetentionEditor value={draft.retention ?? { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 }} onChange={(retention) => setDraft({ ...draft, retention })} />
+        <RetentionEditor value={draft.retention ?? { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 }} maxAgeHoursForBaseBackup={draft.maxAgeHoursForBaseBackup ?? null} onChange={(retention) => setDraft({ ...draft, retention })} onMaxAgeChange={(maxAgeHoursForBaseBackup) => setDraft({ ...draft, maxAgeHoursForBaseBackup })} />
         <ClickHouseAdvancedSettingsEditor title="Backup advanced settings" value={(draft.clickHouseBackupSettings ?? {}) as Record<string, string | number | boolean>} onChange={(settings) => setDraft({ ...draft, clickHouseBackupSettings: settings })} />
         <ClickHouseAdvancedSettingsEditor title="Default restore advanced settings" value={(draft.clickHouseRestoreSettings ?? {}) as Record<string, string | number | boolean>} onChange={(settings) => setDraft({ ...draft, clickHouseRestoreSettings: settings })} />
         {policyErrors.map((error) => <span className="field-error" key={error}>{error}</span>)}
@@ -261,7 +261,7 @@ function PatternEditor({ label, pattern, onChange }: { label: string; pattern: {
   );
 }
 
-function RetentionEditor({ value, onChange }: { value: NonNullable<UpsertPolicyRequest["retention"]>; onChange: (value: NonNullable<UpsertPolicyRequest["retention"]>) => void }) {
+function RetentionEditor({ value, maxAgeHoursForBaseBackup, onChange, onMaxAgeChange }: { value: NonNullable<UpsertPolicyRequest["retention"]>; maxAgeHoursForBaseBackup: number | null; onChange: (value: NonNullable<UpsertPolicyRequest["retention"]>) => void; onMaxAgeChange: (value: number | null) => void }) {
   const retention = value;
   return (
     <div className="retention-editor">
@@ -272,6 +272,7 @@ function RetentionEditor({ value, onChange }: { value: NonNullable<UpsertPolicyR
         <Input label="Incremental retention minutes (empty = no retention)" type="number" value={retention.incrementalRetentionMinutes?.toString() ?? ""} onChange={(value) => onChange({ ...retention, incrementalRetentionMinutes: value ? Number(value) : null })} />
         <Input label="Min backups to keep" type="number" value={`${retention.minBackupsToKeep}`} onChange={(value) => onChange({ ...retention, minBackupsToKeep: Number(value) || 0 })} />
         <Input label="Min full backups" type="number" value={`${retention.minFullBackupsToKeep}`} onChange={(value) => onChange({ ...retention, minFullBackupsToKeep: Number(value) || 0 })} />
+        <Input label="Max base backup age hours (empty = app default)" type="number" value={maxAgeHoursForBaseBackup?.toString() ?? ""} onChange={(value) => onMaxAgeChange(value ? Number(value) : null)} />
       </div>
     </div>
   );
@@ -289,5 +290,6 @@ function validatePolicyDraft(draft: UpsertPolicyRequest) {
   if (!draft.sourceClusterId) errors.push("Choose a source cluster.");
   if (draft.contentMode === "SchemaAndData" && !draft.targetId) errors.push("Choose backup storage.");
   if (draft.selector.rules.length === 0) errors.push("Add at least one selector rule.");
+  if (draft.maxAgeHoursForBaseBackup != null && draft.maxAgeHoursForBaseBackup <= 0) errors.push("Max base backup age hours must be greater than zero.");
   return errors;
 }

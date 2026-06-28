@@ -17,6 +17,7 @@ public sealed class BackupPolicyEntity
     public int? IncrementalRetentionMinutes { get; set; }
     public int MinBackupsToKeep { get; set; }
     public int MinFullBackupsToKeep { get; set; }
+    public int? MaxAgeHoursForBaseBackup { get; set; }
     public FailedBackupRetentionMode FailedBackupRetentionMode { get; set; } = FailedBackupRetentionMode.KeepAndExcludeFromMinBackupsToKeep;
     public string ClickHouseBackupSettingsJson { get; set; } = "{}";
     public string ClickHouseRestoreSettingsJson { get; set; } = "{}";

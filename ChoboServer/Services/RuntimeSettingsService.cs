@@ -70,6 +70,7 @@ public sealed class RuntimeSettingsService(
         var before = Get(key);
         var setting = FindSetting(key);
         var jsonValue = ConvertToJsonValue(setting.Property.PropertyType, value);
+        ValidateSettingValue(setting, jsonValue);
         await WriteOverlayValueAsync(setting.Key, jsonValue, cancellationToken);
         ReloadConfiguration();
         var after = Get(key);
@@ -266,6 +267,14 @@ public sealed class RuntimeSettingsService(
         return current?.DeepClone();
     }
 
+    private static void ValidateSettingValue(RuntimeSetting setting, JsonNode? value)
+    {
+        if (string.Equals(setting.Key, "Chobo:BackupRestore:DefaultMaxAgeHoursForBaseBackup", StringComparison.OrdinalIgnoreCase) &&
+            (value is null || value.GetValue<int>() <= 0))
+        {
+            throw new InvalidOperationException("Default max age hours for base backup must be greater than zero.");
+        }
+    }
     private async Task WriteOverlayValueAsync(string key, JsonNode? value, CancellationToken cancellationToken)
     {
         var root = ReadOverlayRoot();

@@ -60,7 +60,8 @@ public sealed class PolicyCommands : CliSubject
                 ? Enum.Parse<FailedBackupRetentionMode>(mode, ignoreCase: true)
                 : FailedBackupRetentionMode.KeepAndExcludeFromMinBackupsToKeep,
             CommandHelpers.ClickHouseSettingsFromOptions(options, "backup"),
-            CommandHelpers.ClickHouseSettingsFromOptions(options, "restore"));
+            CommandHelpers.ClickHouseSettingsFromOptions(options, "restore"),
+            options.Optional("--max-age-hours-for-base-backup") is { } maxAgeHours ? int.Parse(maxAgeHours) : null);
     }
 
     private static BackupRetentionDto? Retention(OptionBag options)

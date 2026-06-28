@@ -139,6 +139,7 @@ public sealed class UpsertPolicyRequestValidator : AbstractValidator<UpsertPolic
         RuleFor(x => x.Retention).SetValidator(new BackupRetentionDtoValidator()!).When(x => x.Retention is not null);
         RuleFor(x => x.ContentMode).IsInEnum();
         RuleFor(x => x.FailedBackupRetentionMode).IsInEnum();
+        RuleFor(x => x.MaxAgeHoursForBaseBackup).GreaterThan(0).When(x => x.MaxAgeHoursForBaseBackup is not null);
     }
 }
 
@@ -501,6 +502,7 @@ public sealed class BackupPolicyExportValidator : AbstractValidator<BackupPolicy
         RuleFor(x => x.Retention).SetValidator(new BackupRetentionDtoValidator()!).When(x => x.Retention is not null);
         RuleFor(x => x.ContentMode).IsInEnum();
         RuleFor(x => x.FailedBackupRetentionMode).IsInEnum();
+        RuleFor(x => x.MaxAgeHoursForBaseBackup).GreaterThan(0).When(x => x.MaxAgeHoursForBaseBackup is not null);
         RuleFor(x => x.CreatedAt).NotEqual(default(DateTimeOffset));
     }
 }
@@ -701,8 +703,3 @@ internal static class ValidationRuleExtensions
     public static IRuleBuilderOptions<T, string> ValidTimeZone<T>(this IRuleBuilder<T, string> rule) =>
         rule.NotEmpty().Must(value => TimeZoneInfo.TryFindSystemTimeZoneById(value, out _)).WithMessage("TimeZoneId is invalid.");
 }
-
-
-
-
-

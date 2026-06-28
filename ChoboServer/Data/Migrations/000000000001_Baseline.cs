@@ -126,6 +126,7 @@ public sealed class Baseline : Migration
                 IncrementalRetentionMinutes INTEGER NULL,
                 MinBackupsToKeep INTEGER NOT NULL,
                 MinFullBackupsToKeep INTEGER NOT NULL,
+                MaxAgeHoursForBaseBackup INTEGER NULL,
                 FailedBackupRetentionMode INTEGER NOT NULL,
                 ClickHouseBackupSettingsJson TEXT NOT NULL DEFAULT '{}',
                 ClickHouseRestoreSettingsJson TEXT NOT NULL DEFAULT '{}',

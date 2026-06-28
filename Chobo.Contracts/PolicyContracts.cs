@@ -54,7 +54,9 @@ public sealed record BackupPolicyDto(
     bool IsSystemDefault,
     bool IsDeleted,
     DateTimeOffset CreatedAt,
-    DateTimeOffset? UpdatedAt);
+    DateTimeOffset? UpdatedAt,
+    int? MaxAgeHoursForBaseBackup = null,
+    int EffectiveMaxAgeHoursForBaseBackup = 0);
 
 public sealed record UpsertPolicyRequest(
     string Name,
@@ -65,7 +67,8 @@ public sealed record UpsertPolicyRequest(
     BackupRetentionDto? Retention = null,
     FailedBackupRetentionMode FailedBackupRetentionMode = FailedBackupRetentionMode.KeepAndExcludeFromMinBackupsToKeep,
     IReadOnlyDictionary<string, JsonElement>? ClickHouseBackupSettings = null,
-    IReadOnlyDictionary<string, JsonElement>? ClickHouseRestoreSettings = null);
+    IReadOnlyDictionary<string, JsonElement>? ClickHouseRestoreSettings = null,
+    int? MaxAgeHoursForBaseBackup = null);
 
 public sealed record PolicySelector(int Version, IReadOnlyList<PolicySelectorRule> Rules)
 {

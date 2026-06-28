@@ -746,6 +746,42 @@ public sealed class ChoboFoundationTests
     }
 
     [Fact]
+    public async Task Policy_max_base_age_uses_runtime_default_and_policy_override()
+    {
+        await using var factory = CreateFactory();
+        var client = AuthenticatedClient(factory);
+        await Put<RuntimeSettingUpdateResult>(client, "/api/v1/settings/Chobo%3ABackupRestore%3ADefaultMaxAgeHoursForBaseBackup", new UpdateRuntimeSettingRequest("24"));
+        var cluster = await Post<ClusterDto>(client, "/api/v1/clusters", new UpsertClusterRequest(
+            "policy-source",
+            ClusterMode.SingleInstance,
+            [new UpsertAccessNodeRequest("clickhouse-1")],
+            null,
+            null,
+            3));
+        var target = await Post<BackupTargetDto>(client, "/api/v1/targets/s3", new UpsertS3TargetRequest("s3", "http://minio:9000", "us-east-1", "bucket", null, true, "access", "secret"));
+
+        var created = await Post<BackupPolicyDto>(client, "/api/v1/policies", new UpsertPolicyRequest(
+            "policy-base-age",
+            cluster.Id,
+            target.Id,
+            PolicySelector.Empty));
+
+        Assert.Null(created.MaxAgeHoursForBaseBackup);
+        Assert.Equal(24, created.EffectiveMaxAgeHoursForBaseBackup);
+
+        var updated = await Put<BackupPolicyDto>(client, $"/api/v1/policies/{created.Id}", new UpsertPolicyRequest(
+            "policy-base-age",
+            cluster.Id,
+            target.Id,
+            PolicySelector.Empty,
+            MaxAgeHoursForBaseBackup: 12));
+
+        Assert.Equal(12, updated.MaxAgeHoursForBaseBackup);
+        Assert.Equal(12, updated.EffectiveMaxAgeHoursForBaseBackup);
+        var listed = await client.GetFromJsonAsync<List<BackupPolicyDto>>("/api/v1/policies", JsonOptions);
+        Assert.Contains(listed!, x => x.Id == created.Id && x.MaxAgeHoursForBaseBackup == 12 && x.EffectiveMaxAgeHoursForBaseBackup == 12);
+    }
+    [Fact]
     public async Task Users_can_add_list_and_deactivate_named_access_tokens()
     {
         await using var factory = CreateFactory();
@@ -874,6 +910,7 @@ public sealed class ChoboFoundationTests
         Assert.True(exportedCluster.IsDeleted);
         Assert.True(exportedTarget.IsDeleted);
         Assert.True(exportedPolicy.IsDeleted);
+        Assert.Equal(72, exportedPolicy.MaxAgeHoursForBaseBackup);
         Assert.True(exportedSchedule.IsDeleted);
         Assert.NotNull(exportedCluster.DeletedAt);
         Assert.NotNull(exportedTarget.DeletedAt);
@@ -926,6 +963,7 @@ public sealed class ChoboFoundationTests
         Assert.True(exportedCluster.IsDeleted);
         Assert.True(exportedTarget.IsDeleted);
         Assert.True(exportedPolicy.IsDeleted);
+        Assert.Equal(72, exportedPolicy.MaxAgeHoursForBaseBackup);
         Assert.True(exportedSchedule.IsDeleted);
         var legacyExportJson = JsonSerializer.Serialize(export, JsonOptions).Replace("\"storagePath\":", "\"s3Path\":");
         export = JsonSerializer.Deserialize<ExportEnvelope>(legacyExportJson, JsonOptions);
@@ -959,7 +997,7 @@ public sealed class ChoboFoundationTests
         Assert.Null(cluster.EncryptedPassword);
         Assert.Null(cluster.EncryptedPasswordKeyId);
         Assert.Equal("{}", target.SecretsJson);
-        Assert.True(await imported.BackupPolicies.AnyAsync(x => x.Id == ids.PolicyId && x.IsDeleted && x.DeletedAt == exportedPolicy.DeletedAt));
+        Assert.True(await imported.BackupPolicies.AnyAsync(x => x.Id == ids.PolicyId && x.IsDeleted && x.DeletedAt == exportedPolicy.DeletedAt && x.MaxAgeHoursForBaseBackup == 72));
         Assert.True(await imported.BackupSchedules.AnyAsync(x => x.Id == ids.ScheduleId && x.IsDeleted && x.DeletedAt == exportedSchedule.DeletedAt));
         Assert.True(await imported.SchemaDefinitions.AnyAsync(x => x.Id == ids.SchemaDefinitionId));
         Assert.True(await imported.Backups.AnyAsync(x => x.Id == ids.BackupId && x.Status == BackupRunStatus.Succeeded));
@@ -1934,6 +1972,7 @@ public sealed class ChoboFoundationTests
             IncrementalRetentionMinutes = 240,
             MinBackupsToKeep = 2,
             MinFullBackupsToKeep = 1,
+            MaxAgeHoursForBaseBackup = 72,
             IsDeleted = softDeletedConfig,
             CreatedAt = now,
             DeletedAt = deletedAt

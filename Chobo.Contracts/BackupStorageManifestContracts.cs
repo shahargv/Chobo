@@ -87,7 +87,8 @@ public sealed record BackupStorageManifestPolicyV1(
     bool IsDeleted,
     DateTimeOffset CreatedAt,
     DateTimeOffset? UpdatedAt,
-    DateTimeOffset? DeletedAt);
+    DateTimeOffset? DeletedAt,
+    int? MaxAgeHoursForBaseBackup = null);
 
 public sealed record BackupStorageManifestScheduleV1(
     Guid Id,

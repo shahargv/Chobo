@@ -887,6 +887,108 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Incremental_backup_ignores_parent_full_table_older_than_inherited_max_base_age()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1), DefaultMaxAgeHoursForBaseBackup = 2 });
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+        var policy = await fixture.SeedPolicyAsync();
+        var full = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, DateTimeOffset.UtcNow.AddHours(-3), tableName: "orders");
+
+        var incremental = new BackupEntity
+        {
+            TriggerType = BackupTriggerType.Manual,
+            Status = BackupRunStatus.Queued,
+            BackupType = BackupType.Incremental,
+            SourceClusterId = fixture.SourceClusterId,
+            TargetId = fixture.TargetId,
+            PolicyId = policy.Id
+        };
+        fixture.Db.Backups.Add(incremental);
+        await fixture.Db.SaveChangesAsync();
+        await fixture.RunBackupAsync(incremental.Id);
+
+        fixture.Db.ChangeTracker.Clear();
+        var table = await fixture.Db.BackupTables.Include(x => x.Shards).SingleAsync(x => x.BackupId == incremental.Id);
+        Assert.Equal(BackupType.Full, table.EffectiveBackupType);
+        Assert.Null(table.ParentFullBackupTableId);
+        Assert.StartsWith("backups/full/", table.StoragePath);
+        Assert.DoesNotContain($"parent-full-{full.Id:N}", table.StoragePath);
+        var shard = Assert.Single(table.Shards);
+        Assert.Equal(BackupType.Full, shard.EffectiveBackupType);
+        Assert.Null(shard.ParentFullBackupTableShardId);
+    }
+
+    [Fact]
+    public async Task Incremental_backup_uses_parent_full_table_within_policy_max_base_age_override()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1), DefaultMaxAgeHoursForBaseBackup = 2 });
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+        var policy = await fixture.SeedPolicyAsync();
+        policy.MaxAgeHoursForBaseBackup = 4;
+        await fixture.Db.SaveChangesAsync();
+        var full = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, DateTimeOffset.UtcNow.AddHours(-3), tableName: "orders");
+
+        var incremental = new BackupEntity
+        {
+            TriggerType = BackupTriggerType.Manual,
+            Status = BackupRunStatus.Queued,
+            BackupType = BackupType.Incremental,
+            SourceClusterId = fixture.SourceClusterId,
+            TargetId = fixture.TargetId,
+            PolicyId = policy.Id
+        };
+        fixture.Db.Backups.Add(incremental);
+        await fixture.Db.SaveChangesAsync();
+        await fixture.RunBackupAsync(incremental.Id);
+
+        fixture.Db.ChangeTracker.Clear();
+        var table = await fixture.Db.BackupTables.Include(x => x.Shards).SingleAsync(x => x.BackupId == incremental.Id);
+        Assert.Equal(BackupType.Incremental, table.EffectiveBackupType);
+        Assert.Equal(full.Id, table.ParentFullBackupId);
+        Assert.Equal(BackupType.Incremental, Assert.Single(table.Shards).EffectiveBackupType);
+        Assert.Equal(full.Id, Assert.Single(table.Shards).ParentFullBackupId);
+    }
+
+    [Fact]
+    public async Task Incremental_sharded_backup_ignores_old_base_shards_and_uses_recent_shards()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1), DefaultMaxAgeHoursForBaseBackup = 2 });
+        fixture.ClickHouse.Topology.Clear();
+        fixture.ClickHouse.Topology.AddRange([
+            new ClickHouseShardReplicaInfo(1, "shard-1", 1, "source-s1", 9000, false, 0),
+            new ClickHouseShardReplicaInfo(2, "shard-2", 1, "source-s2", 9000, false, 0)
+        ]);
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+        var policy = await fixture.SeedPolicyAsync();
+        _ = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, DateTimeOffset.UtcNow.AddHours(-3), shardCount: 1, tableName: "orders");
+        var recent = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, DateTimeOffset.UtcNow.AddMinutes(-30), shardCount: 2, tableName: "orders");
+        recent.Tables.Single().Shards.Single(x => x.SourceShardNumber == 1).Status = BackupTableStatus.Failed;
+        await fixture.Db.SaveChangesAsync();
+
+        var incremental = new BackupEntity
+        {
+            TriggerType = BackupTriggerType.Manual,
+            Status = BackupRunStatus.Queued,
+            BackupType = BackupType.Incremental,
+            SourceClusterId = fixture.SourceClusterId,
+            TargetId = fixture.TargetId,
+            PolicyId = policy.Id
+        };
+        fixture.Db.Backups.Add(incremental);
+        await fixture.Db.SaveChangesAsync();
+        await fixture.RunBackupAsync(incremental.Id);
+
+        fixture.Db.ChangeTracker.Clear();
+        var table = await fixture.Db.BackupTables.Include(x => x.Shards).SingleAsync(x => x.BackupId == incremental.Id);
+        var shardOne = Assert.Single(table.Shards, x => x.SourceShardNumber == 1);
+        var shardTwo = Assert.Single(table.Shards, x => x.SourceShardNumber == 2);
+        Assert.Equal(BackupType.Full, shardOne.EffectiveBackupType);
+        Assert.Null(shardOne.ParentFullBackupTableShardId);
+        Assert.Equal(BackupType.Incremental, shardTwo.EffectiveBackupType);
+        Assert.Equal(recent.Id, shardTwo.ParentFullBackupId);
+        Assert.NotNull(shardTwo.ParentFullBackupTableShardId);
+    }
+    [Fact]
     public async Task Backup_runner_enforces_global_and_cluster_maxdop()
     {
         await using var globalFixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 2, PollInterval = TimeSpan.FromMilliseconds(1) });
