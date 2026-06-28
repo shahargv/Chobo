@@ -762,6 +762,65 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Incremental_backup_uses_succeeded_rows_from_partially_succeeded_parent()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var policy = await fixture.SeedPolicyAsync();
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+        fixture.ClickHouse.Inventory.Add(Table("sales", "line_items", "MergeTree"));
+        fixture.ClickHouse.Inventory.Add(Table("sales", "failed_orders", "MergeTree"));
+        var parent = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Succeeded, "orders-op", true),
+            new SeedBackupTable("sales", "line_items", BackupTableStatus.Succeeded, "line-items-op", true),
+            new SeedBackupTable("sales", "failed_orders", BackupTableStatus.Failed, "failed-op", true)
+        ]);
+        var parentCompletedAt = DateTimeOffset.UtcNow.AddMinutes(-10);
+        parent.PolicyId = policy.Id;
+        parent.Status = BackupRunStatus.PartiallySucceeded;
+        parent.BackupType = BackupType.Full;
+        parent.CompletedAt = parentCompletedAt;
+        parent.CreatedAt = parentCompletedAt.AddMinutes(-1);
+        foreach (var table in parent.Tables)
+        {
+            table.EffectiveBackupType = BackupType.Full;
+            foreach (var shard in table.Shards)
+            {
+                shard.EffectiveBackupType = BackupType.Full;
+            }
+        }
+        await fixture.Db.SaveChangesAsync();
+
+        var incremental = new BackupEntity
+        {
+            TriggerType = BackupTriggerType.Manual,
+            Status = BackupRunStatus.Queued,
+            BackupType = BackupType.Incremental,
+            SourceClusterId = fixture.SourceClusterId,
+            TargetId = fixture.TargetId,
+            PolicyId = policy.Id
+        };
+        fixture.Db.Backups.Add(incremental);
+        await fixture.Db.SaveChangesAsync();
+        await fixture.RunBackupAsync(incremental.Id);
+
+        fixture.Db.ChangeTracker.Clear();
+        var tables = await fixture.Db.BackupTables.Include(x => x.Shards).Where(x => x.BackupId == incremental.Id).ToListAsync();
+        var orders = Assert.Single(tables, x => x.Table == "orders");
+        var lineItems = Assert.Single(tables, x => x.Table == "line_items");
+        var failedOrders = Assert.Single(tables, x => x.Table == "failed_orders");
+        Assert.Equal(BackupType.Incremental, orders.EffectiveBackupType);
+        Assert.Equal(parent.Id, orders.ParentFullBackupId);
+        Assert.Equal(BackupType.Incremental, Assert.Single(orders.Shards).EffectiveBackupType);
+        Assert.Equal(parent.Id, Assert.Single(orders.Shards).ParentFullBackupId);
+        Assert.Equal(BackupType.Incremental, lineItems.EffectiveBackupType);
+        Assert.Equal(parent.Id, lineItems.ParentFullBackupId);
+        Assert.Equal(BackupType.Full, failedOrders.EffectiveBackupType);
+        Assert.Null(failedOrders.ParentFullBackupId);
+        Assert.Equal(BackupType.Full, Assert.Single(failedOrders.Shards).EffectiveBackupType);
+        Assert.Null(Assert.Single(failedOrders.Shards).ParentFullBackupId);
+    }
+
+    [Fact]
     public async Task Incremental_sharded_backup_selects_parent_per_shard_and_falls_back_when_one_shard_has_no_parent()
     {
         await using var fixture = await TestFixture.CreateAsync();
@@ -1276,6 +1335,36 @@ public sealed class BackupRestoreExecutionTests
         await fixture.RunRestoreAsync(restore.Id);
 
         Assert.Equal(2, fixture.ClickHouse.MaxConcurrentRestoreStarts);
+    }
+
+    [Fact]
+    public async Task Restore_shards_for_same_table_can_run_concurrently_when_dop_allows()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 2, PollInterval = TimeSpan.FromMilliseconds(1) });
+        fixture.ClickHouse.StartDelay = TimeSpan.FromMilliseconds(80);
+        var targetCluster = await fixture.Db.ClickHouseClusters.SingleAsync(x => x.Id == fixture.TargetClusterId);
+        targetCluster.BackupRestoreMaxDop = 2;
+        targetCluster.NodeMaxDopDefault = 16;
+        targetCluster.ShardMaxDopDefault = 16;
+        await fixture.Db.SaveChangesAsync();
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "restore_parallel_shards", BackupTableStatus.Succeeded, "backup-op", true)
+        ], shardCount: 2);
+        backup.Status = BackupRunStatus.Succeeded;
+        await fixture.Db.SaveChangesAsync();
+        var restore = await fixture.SeedRestoreAsync(backup, [
+            new SeedRestoreTable("sales", "restore_parallel_shards", RestoreTableStatus.Queued, null)
+        ]);
+        foreach (var shard in restore.Tables.Single().Shards)
+        {
+            shard.TargetHost = $"restore-s{shard.TargetShardNumber}";
+        }
+        await fixture.Db.SaveChangesAsync();
+
+        await fixture.RunRestoreAsync(restore.Id);
+
+        Assert.Equal(2, fixture.ClickHouse.MaxConcurrentRestoreStarts);
+        Assert.Equal([1, 2], fixture.ClickHouse.RestoreStartShardNumbers.Order().ToArray());
     }
 
     [Fact]

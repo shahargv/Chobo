@@ -280,7 +280,9 @@ public sealed class BackupPreparationService(
             .AsSplitQuery()
             .Where(x => x.Backup != null &&
                         x.Backup.PolicyId == policyId &&
-                        x.Backup.Status == BackupRunStatus.Succeeded &&
+                        (x.Backup.Status == BackupRunStatus.Succeeded ||
+                         x.Backup.Status == BackupRunStatus.PartiallySucceeded) &&
+                        x.Status == BackupTableStatus.Succeeded &&
                         x.EffectiveBackupType == BackupType.Full &&
                         databases.Contains(x.Database) &&
                         tables.Contains(x.Table))
@@ -312,7 +314,9 @@ public sealed class BackupPreparationService(
             .Where(x => x.BackupTable != null &&
                         x.BackupTable.Backup != null &&
                         x.BackupTable.Backup.PolicyId == policyId &&
-                        x.BackupTable.Backup.Status == BackupRunStatus.Succeeded &&
+                        (x.BackupTable.Backup.Status == BackupRunStatus.Succeeded ||
+                         x.BackupTable.Backup.Status == BackupRunStatus.PartiallySucceeded) &&
+                        x.Status == BackupTableStatus.Succeeded &&
                         x.EffectiveBackupType == BackupType.Full &&
                         databases.Contains(x.BackupTable.Database) &&
                         tables.Contains(x.BackupTable.Table))

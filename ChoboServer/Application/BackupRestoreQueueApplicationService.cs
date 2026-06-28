@@ -219,7 +219,7 @@ public sealed class BackupRestoreQueueApplicationService(
                     shardLimit,
                     clusterRunning,
                     shardRunning,
-                    $"{shard.RestoreDatabase}.{shard.RestoreTableName}"))
+                    null))
             {
                 continue;
             }
