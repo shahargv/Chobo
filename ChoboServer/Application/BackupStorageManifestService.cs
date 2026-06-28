@@ -212,21 +212,20 @@ public sealed class BackupStorageManifestService(
         }
         if (importScope.TargetIds.Add(manifest.Target.Id) || string.IsNullOrWhiteSpace(target.Name))
         {
+            var manifestTargetType = ManifestTargetType(manifest.Target);
+            if (!string.Equals(scanTarget.Type, manifestTargetType, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException($"Cannot recover metadata for target type '{manifestTargetType}' using scan target type '{scanTarget.Type}'.");
+            }
+
             target.Name = manifest.Target.Name;
-            target.Type = manifest.Target.Type;
-            target.Endpoint = manifest.Target.S3.Endpoint;
-            target.Region = manifest.Target.S3.Region;
-            target.Bucket = manifest.Target.S3.Bucket;
-            target.PathPrefix = manifest.Target.S3.PathPrefix;
-            target.ForcePathStyle = manifest.Target.S3.ForcePathStyle;
+            target.Type = manifestTargetType;
+            target.SettingsJson = JsonSerializer.Serialize(ManifestTargetSettings(manifest.Target), JsonOptions);
+            target.SecretsJson = scanTarget.SecretsJson;
             target.IsDeleted = manifest.Target.IsDeleted;
             target.CreatedAt = manifest.Target.CreatedAt;
             target.UpdatedAt = manifest.Target.UpdatedAt;
             target.DeletedAt = manifest.Target.DeletedAt;
-            target.EncryptedAccessKey = scanTarget.EncryptedAccessKey;
-            target.EncryptedAccessKeyKeyId = scanTarget.EncryptedAccessKeyKeyId;
-            target.EncryptedSecretKey = scanTarget.EncryptedSecretKey;
-            target.EncryptedSecretKeyKeyId = scanTarget.EncryptedSecretKeyKeyId;
         }
 
         var cluster = await db.ClickHouseClusters.Include(x => x.AccessNodes).FirstOrDefaultAsync(x => x.Id == manifest.SourceCluster.Id, cancellationToken);
@@ -331,7 +330,7 @@ public sealed class BackupStorageManifestService(
 
         var degraded = validation.MissingPaths.Count > 0;
         var recoveryError = degraded
-            ? $"Recovered from storage manifest with missing S3 data path(s): {string.Join(", ", validation.MissingPaths)}"
+            ? $"Recovered from storage manifest with missing storage data path(s): {string.Join(", ", validation.MissingPaths)}"
             : null;
         var backup = await db.Backups.Include(x => x.Tables).ThenInclude(x => x.Shards).FirstOrDefaultAsync(x => x.Id == manifest.Backup.Id, cancellationToken);
         if (backup is null)
@@ -382,15 +381,16 @@ public sealed class BackupStorageManifestService(
             table.Engine = tableManifest.Engine;
             table.DataBackedUp = tableManifest.DataBackedUp;
             table.SchemaDefinitionId = tableManifest.SchemaDefinitionId;
-            table.S3Path = tableManifest.S3Path;
+            var tableStoragePath = ManifestStoragePath(tableManifest);
+            table.StoragePath = tableStoragePath;
             table.BackupSizeBytes = tableManifest.BackupSizeBytes;
-            var tablePathMissing = tableManifest.DataBackedUp && tableManifest.Shards.Count == 0 && IsMissing(validation, tableManifest.S3Path);
+            var tablePathMissing = tableManifest.DataBackedUp && tableManifest.Shards.Count == 0 && IsMissing(validation, tableStoragePath);
             table.Status = tablePathMissing ? BackupTableStatus.Failed : tableManifest.Status;
             table.ClickHouseOperationId = tableManifest.ClickHouseOperationId;
             table.ClickHouseStatus = tablePathMissing ? "RECOVERY_MISSING_STORAGE_PATH" : tableManifest.ClickHouseStatus;
             table.StartedAt = tableManifest.StartedAt;
             table.CompletedAt = tableManifest.CompletedAt;
-            table.Error = tablePathMissing ? $"Required S3 data path was missing during metadata recovery: {tableManifest.S3Path}" : tableManifest.Error;
+            table.Error = tablePathMissing ? $"Required storage data path was missing during metadata recovery: {tableStoragePath}" : tableManifest.Error;
 
             foreach (var shardManifest in tableManifest.Shards)
             {
@@ -409,21 +409,22 @@ public sealed class BackupStorageManifestService(
                 shard.Host = shardManifest.Host;
                 shard.Port = shardManifest.Port;
                 shard.UseTls = shardManifest.UseTls;
-                shard.S3Path = shardManifest.S3Path;
+                var shardStoragePath = ManifestStoragePath(shardManifest);
+                shard.StoragePath = shardStoragePath;
                 shard.BackupSizeBytes = shardManifest.BackupSizeBytes;
-                var shardPathMissing = IsMissing(validation, shardManifest.S3Path);
+                var shardPathMissing = IsMissing(validation, shardStoragePath);
                 shard.Status = shardPathMissing ? BackupTableStatus.Failed : shardManifest.Status;
                 shard.ClickHouseOperationId = shardManifest.ClickHouseOperationId;
                 shard.ClickHouseStatus = shardPathMissing ? "RECOVERY_MISSING_STORAGE_PATH" : shardManifest.ClickHouseStatus;
                 shard.StartedAt = shardManifest.StartedAt;
                 shard.CompletedAt = shardManifest.CompletedAt;
-                shard.Error = shardPathMissing ? $"Required S3 data path was missing during metadata recovery: {shardManifest.S3Path}" : shardManifest.Error;
+                shard.Error = shardPathMissing ? $"Required storage data path was missing during metadata recovery: {shardStoragePath}" : shardManifest.Error;
             }
 
             if (tableManifest.Shards.Count > 0 && table.Shards.Any(x => x.Status == BackupTableStatus.Failed))
             {
                 table.Status = AggregateRecoveredShardStatus(table.Shards.Select(x => x.Status));
-                table.Error ??= "One or more shard S3 data paths were missing during metadata recovery.";
+                table.Error ??= "One or more shard storage data paths were missing during metadata recovery.";
                 table.ClickHouseStatus = table.Status == BackupTableStatus.PartiallySucceeded
                     ? "RECOVERY_PARTIAL_MISSING_STORAGE_PATH"
                     : "RECOVERY_MISSING_STORAGE_PATH";
@@ -561,8 +562,32 @@ public sealed class BackupStorageManifestService(
     }
 
     private static BackupStorageManifestTargetV1 ToManifestTarget(BackupTargetEntity target) =>
-        new(target.Id, target.Name, target.Type, new S3TargetSettingsDto(target.Endpoint, target.Region, target.Bucket, target.PathPrefix, target.ForcePathStyle), target.IsDeleted, target.CreatedAt, target.UpdatedAt, target.DeletedAt);
+        new(target.Id, target.Name, target.Type, ReadSettingsDictionary(target.SettingsJson), target.IsDeleted, target.CreatedAt, target.UpdatedAt, target.DeletedAt);
 
+
+    private static string ManifestTargetType(BackupStorageManifestTargetV1 target) =>
+        string.IsNullOrWhiteSpace(target.Type) || string.Equals(target.Type, "S3", StringComparison.OrdinalIgnoreCase) ? StorageProviderTypes.S3 : target.Type;
+
+    private static IReadOnlyDictionary<string, JsonElement> ManifestTargetSettings(BackupStorageManifestTargetV1 target) =>
+        target.Settings is not null
+            ? CloneDictionary(target.Settings)
+            : target.S3 is not null
+                ? ReadSettingsDictionary(JsonSerializer.Serialize(target.S3, JsonOptions))
+                : new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+
+    private static IReadOnlyDictionary<string, JsonElement> ReadSettingsDictionary(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+        }
+
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.EnumerateObject().ToDictionary(x => x.Name, x => x.Value.Clone(), StringComparer.Ordinal);
+    }
+
+    private static IReadOnlyDictionary<string, JsonElement> CloneDictionary(IReadOnlyDictionary<string, JsonElement> values) =>
+        values.ToDictionary(x => x.Key, x => x.Value.Clone(), StringComparer.Ordinal);
     private static BackupStorageManifestClusterV1 ToManifestCluster(ClickHouseClusterEntity cluster) =>
         new(cluster.Id, cluster.Name, cluster.Mode, cluster.AccessNodes.Select(x => new AccessNodeDto(x.Id, x.Host, x.Port, x.UseTls)).ToList(), cluster.BackupRestoreMaxDop, cluster.NodeMaxDopDefault, DeserializeNodeOverrides(cluster.NodeMaxDopOverridesJson), cluster.ShardMaxDopDefault, DeserializeShardOverrides(cluster.ShardMaxDopOverridesJson), cluster.ClickHouseClusterName, cluster.IsDeleted, cluster.CreatedAt, cluster.UpdatedAt, cluster.DeletedAt);
 
@@ -599,7 +624,7 @@ public sealed class BackupStorageManifestService(
             table.Engine,
             table.DataBackedUp,
             table.SchemaDefinitionId,
-            table.S3Path,
+            table.StoragePath,
             table.BackupSizeBytes,
             table.Status,
             table.ClickHouseOperationId,
@@ -622,7 +647,7 @@ public sealed class BackupStorageManifestService(
             shard.Host,
             shard.Port,
             shard.UseTls,
-            shard.S3Path,
+            shard.StoragePath,
             shard.BackupSizeBytes,
             shard.Status,
             shard.ClickHouseOperationId,
@@ -631,6 +656,12 @@ public sealed class BackupStorageManifestService(
             shard.CompletedAt,
             shard.Error);
 
+
+    private static string ManifestStoragePath(BackupStorageManifestTableV1 table) =>
+        table.StoragePath ?? table.S3Path ?? throw new InvalidOperationException($"Backup manifest table '{table.Id}' is missing storagePath.");
+
+    private static string ManifestStoragePath(BackupStorageManifestShardV1 shard) =>
+        shard.StoragePath ?? shard.S3Path ?? throw new InvalidOperationException($"Backup manifest shard '{shard.Id}' is missing storagePath.");
     private static IEnumerable<string> RequiredStoragePaths(BackupStorageManifestV1 manifest)
     {
         if (manifest.RequiredStoragePaths is { Count: > 0 })
@@ -644,8 +675,8 @@ public sealed class BackupStorageManifestService(
     private static IEnumerable<string> RequiredStoragePaths(IReadOnlyList<BackupStorageManifestTableV1> tables) =>
         tables.SelectMany(table => table.DataBackedUp
                 ? table.Shards.Count > 0
-                    ? table.Shards.Select(shard => shard.S3Path)
-                    : [table.S3Path]
+                    ? table.Shards.Select(ManifestStoragePath)
+                    : [ManifestStoragePath(table)]
                 : [])
             .Where(x => !string.IsNullOrWhiteSpace(x))
             .Distinct(StringComparer.Ordinal)

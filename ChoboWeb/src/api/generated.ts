@@ -29,14 +29,13 @@ export type BackupRunStatus = "Queued" | "Running" | "Succeeded" | "PartiallySuc
 export interface BackupScheduleDto { id: string; name: string; policyId: string; backupType: BackupType; cronExpression: string; timeZoneId: string; isEnabled: boolean; missedRunGracePeriod?: string | null; description?: string | null; isSystemDefault: boolean; isDeleted: boolean; createdAt: string; updatedAt?: string | null; }
 export interface BackupScheduleExport { id: string; name: string; policyId: string; backupType: BackupType; cronExpression: string; timeZoneId: string; isEnabled: boolean; missedRunGracePeriod?: string | null; description?: string | null; isSystemDefault: boolean; isDeleted: boolean; createdAt: string; updatedAt?: string | null; deletedAt?: string | null; }
 export interface BackupSettingsPreviewRequest { clusterId?: string | null; policyId?: string | null; }
-export interface BackupTableDto { id: string; backupId: string; effectiveBackupType: BackupType; parentFullBackupId?: string | null; parentFullBackupTableId?: string | null; database: string; table: string; engine: string; dataBackedUp: boolean; schemaDefinitionId: string; s3Path: string; backupSizeBytes: number; status: BackupTableStatus; clickHouseOperationId?: string | null; clickHouseStatus?: string | null; startedAt?: string | null; completedAt: string; error?: string | null; shards: BackupTableShardDto[]; }
-export interface BackupTableExport { id: string; backupId: string; effectiveBackupType: BackupType; parentFullBackupId?: string | null; parentFullBackupTableId?: string | null; database: string; table: string; engine: string; dataBackedUp: boolean; schemaDefinitionId: string; s3Path: string; backupSizeBytes: number; status: BackupTableStatus; clickHouseOperationId?: string | null; clickHouseStatus?: string | null; startedAt?: string | null; completedAt: string; error?: string | null; }
-export interface BackupTableShardDto { id: string; backupTableId: string; effectiveBackupType: BackupType; parentFullBackupId?: string | null; parentFullBackupTableShardId?: string | null; sourceShardNumber: number; sourceShardName?: string | null; replicaNumber: number; host: string; port: number; useTls: boolean; s3Path: string; backupSizeBytes: number; status: BackupTableStatus; clickHouseOperationId?: string | null; clickHouseStatus?: string | null; startedAt?: string | null; completedAt: string; error?: string | null; }
-export interface BackupTableShardExport { id: string; backupTableId: string; effectiveBackupType: BackupType; parentFullBackupId?: string | null; parentFullBackupTableShardId?: string | null; sourceShardNumber: number; sourceShardName?: string | null; replicaNumber: number; host: string; port: number; useTls: boolean; s3Path: string; backupSizeBytes: number; status: BackupTableStatus; clickHouseOperationId?: string | null; clickHouseStatus?: string | null; startedAt?: string | null; completedAt: string; error?: string | null; }
+export interface BackupTableDto { id: string; backupId: string; effectiveBackupType: BackupType; parentFullBackupId?: string | null; parentFullBackupTableId?: string | null; database: string; table: string; engine: string; dataBackedUp: boolean; schemaDefinitionId: string; storagePath: string; backupSizeBytes: number; status: BackupTableStatus; clickHouseOperationId?: string | null; clickHouseStatus?: string | null; startedAt?: string | null; completedAt: string; error?: string | null; shards: BackupTableShardDto[]; }
+export interface BackupTableExport { id: string; backupId: string; effectiveBackupType: BackupType; parentFullBackupId?: string | null; parentFullBackupTableId?: string | null; database: string; table: string; engine: string; dataBackedUp: boolean; schemaDefinitionId: string; storagePath: string; backupSizeBytes: number; status: BackupTableStatus; clickHouseOperationId?: string | null; clickHouseStatus?: string | null; startedAt?: string | null; completedAt: string; error?: string | null; s3Path?: string; }
+export interface BackupTableShardDto { id: string; backupTableId: string; effectiveBackupType: BackupType; parentFullBackupId?: string | null; parentFullBackupTableShardId?: string | null; sourceShardNumber: number; sourceShardName?: string | null; replicaNumber: number; host: string; port: number; useTls: boolean; storagePath: string; backupSizeBytes: number; status: BackupTableStatus; clickHouseOperationId?: string | null; clickHouseStatus?: string | null; startedAt?: string | null; completedAt: string; error?: string | null; }
+export interface BackupTableShardExport { id: string; backupTableId: string; effectiveBackupType: BackupType; parentFullBackupId?: string | null; parentFullBackupTableShardId?: string | null; sourceShardNumber: number; sourceShardName?: string | null; replicaNumber: number; host: string; port: number; useTls: boolean; storagePath: string; backupSizeBytes: number; status: BackupTableStatus; clickHouseOperationId?: string | null; clickHouseStatus?: string | null; startedAt?: string | null; completedAt: string; error?: string | null; s3Path?: string; }
 export type BackupTableStatus = "Queued" | "Running" | "Succeeded" | "PartiallySucceeded" | "Failed" | "Skipped";
-export interface BackupTargetDto { id: string; name: string; type: BackupTargetType; s3: S3TargetSettingsDto; isDeleted: boolean; createdAt: string; updatedAt?: string | null; }
-export interface BackupTargetExport { id: string; name: string; type: BackupTargetType; s3: S3TargetSettingsDto; encryptedAccessKey?: string | null; encryptedAccessKeyKeyId?: string | null; encryptedSecretKey?: string | null; encryptedSecretKeyKeyId?: string | null; isDeleted: boolean; createdAt: string; updatedAt?: string | null; deletedAt?: string | null; }
-export type BackupTargetType = "S3";
+export interface BackupTargetDto { id: string; name: string; type: string; settings: Record<string, JsonValue>; secretFields: string[]; isDeleted: boolean; createdAt: string; updatedAt?: string | null; }
+export interface BackupTargetExport { id: string; name: string; type: string; settings?: Record<string, JsonValue>; secrets?: Record<string, JsonValue>; isDeleted: boolean; createdAt: string; updatedAt?: string | null; deletedAt?: string | null; s3?: S3TargetSettingsDto; encryptedAccessKey?: string | null; encryptedAccessKeyKeyId?: string | null; encryptedSecretKey?: string | null; encryptedSecretKeyKeyId?: string | null; }
 export type BackupTriggerType = "Manual" | "Scheduled";
 export type BackupType = "Full" | "Incremental";
 export interface ClearApplicationLogsRequest { before: string; }
@@ -45,7 +44,7 @@ export interface ClickHouseClusterNamesDto { clusterId: string; names: string[];
 export interface ClickHouseClusterShardDto { shardNumber: number; shardName: string; replicaNumber: number; host: string; port: number; useTls: boolean; errorsCount: number; }
 export interface ClickHouseClusterTopologyDto { clusterId: string; shards: ClickHouseClusterShardDto[]; }
 export interface ClickHouseSettingSourceDto { name: string; value: ClickHouseSettingValue; source: string; }
-export interface ClickHouseSettingsPreviewDto { settings: Record<string, ClickHouseSettingValue>; sources: ClickHouseSettingSourceDto[]; }
+export interface ClickHouseSettingsPreviewDto { settings: Record<string, JsonValue>; sources: ClickHouseSettingSourceDto[]; }
 export interface ClusterConnectionTestResult { clusterId: string; succeeded: boolean; message: string; }
 export interface ClusterDto { id: string; name: string; mode: ClusterMode; accessNodes: AccessNodeDto[]; backupRestoreMaxDop: number; nodeMaxDopDefault: number; nodeMaxDopOverrides: ClusterNodeMaxDopOverrideDto[]; shardMaxDopDefault: number; shardMaxDopOverrides: ClusterShardMaxDopOverrideDto[]; clickHouseClusterName?: string | null; clickHouseBackupSettings?: Record<string, ClickHouseSettingValue> | null; clickHouseRestoreSettings?: Record<string, ClickHouseSettingValue> | null; isDeleted: boolean; createdAt: string; updatedAt?: string | null; }
 export interface ClusterExport { id: string; name: string; mode: ClusterMode; clickHouseClusterName?: string | null; accessNodes: AccessNodeDto[]; encryptedUserName?: string | null; encryptedUserNameKeyId?: string | null; encryptedPassword?: string | null; encryptedPasswordKeyId?: string | null; backupRestoreMaxDop?: number | null; nodeMaxDopDefault: number; nodeMaxDopOverrides: ClusterNodeMaxDopOverrideDto[]; shardMaxDopDefault: number; shardMaxDopOverrides: ClusterShardMaxDopOverrideDto[]; clickHouseBackupSettings?: Record<string, ClickHouseSettingValue> | null; clickHouseRestoreSettings?: Record<string, ClickHouseSettingValue> | null; isDeleted: boolean; createdAt: string; updatedAt?: string | null; deletedAt?: string | null; }
@@ -107,10 +106,11 @@ export interface SchemaDefinitionExport { id: string; schemaHash: string; databa
 export interface SchemaTableDto { backupTableId: string; database: string; table: string; engine: string; dataBackedUp: boolean; createTableSql: string; columnsJson: string; }
 export interface SelectorPattern { kind: PolicyMatchKind; value: string; }
 export interface ServerVersionDto { productName: string; productVersion: string; apiVersion: number; schemaVersion: number; databaseSchemaVersion: number; }
-export interface StorageConnectionTestResult { targetId: string; targetType: BackupTargetType; succeeded: boolean; message: string; }
+export interface StorageConnectionTestResult { targetId: string; targetType: string; succeeded: boolean; message: string; }
 export interface UpdateClusterCredentialsRequest { userName?: string | null; password?: string | null; }
 export interface UpdateRuntimeSettingRequest { value: string; }
 export interface UpsertAccessNodeRequest { host: string; port: number; useTls: boolean; }
+export interface UpsertBackupTargetRequest { name: string; type: string; settings?: Record<string, JsonValue>; secrets?: Record<string, JsonValue>; updateSecrets: boolean; }
 export interface UpsertClusterRequest { name: string; mode: ClusterMode; accessNodes: UpsertAccessNodeRequest[]; userName?: string | null; password?: string | null; backupRestoreMaxDop: number; clickHouseClusterName?: string | null; nodeMaxDopDefault: number; nodeMaxDopOverrides: ClusterNodeMaxDopOverrideDto[]; shardMaxDopDefault: number; shardMaxDopOverrides: ClusterShardMaxDopOverrideDto[]; clickHouseBackupSettings?: Record<string, ClickHouseSettingValue> | null; clickHouseRestoreSettings?: Record<string, ClickHouseSettingValue> | null; }
 export interface UpsertPolicyRequest { name: string; sourceClusterId: string; targetId: string; selector: PolicySelector; contentMode: BackupContentMode; retention: BackupRetentionDto; failedBackupRetentionMode: FailedBackupRetentionMode; clickHouseBackupSettings?: Record<string, ClickHouseSettingValue> | null; clickHouseRestoreSettings?: Record<string, ClickHouseSettingValue> | null; }
 export interface UpsertS3TargetRequest { name: string; endpoint: string; region: string; bucket: string; pathPrefix?: string | null; forcePathStyle: boolean; accessKey?: string | null; secretKey?: string | null; }
@@ -152,7 +152,6 @@ export const openApiSchemaNames = [
   "BackupTableStatus",
   "BackupTargetDto",
   "BackupTargetExport",
-  "BackupTargetType",
   "BackupTriggerType",
   "BackupType",
   "ClearApplicationLogsRequest",
@@ -227,6 +226,7 @@ export const openApiSchemaNames = [
   "UpdateClusterCredentialsRequest",
   "UpdateRuntimeSettingRequest",
   "UpsertAccessNodeRequest",
+  "UpsertBackupTargetRequest",
   "UpsertClusterRequest",
   "UpsertPolicyRequest",
   "UpsertS3TargetRequest",

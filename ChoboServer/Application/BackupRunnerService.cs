@@ -466,7 +466,7 @@ public sealed class BackupRunnerService(
                     Host = node.Host,
                     Port = node.Port,
                     UseTls = node.UseTls,
-                    S3Path = table.S3Path
+                    StoragePath = table.StoragePath
                 });
             }
 
@@ -615,7 +615,7 @@ public sealed class BackupRunnerService(
                         await scopedQueue.ReleaseStartedAsync(BackupRestoreQueueKind.Backup, shard.Id, cancellationToken);
                         return BackupShardRunResult.Completed;
                     }
-                    var resumedBackupSizeBytes = await MeasureBackupPathAsync(scopedStorage, backup.Target!, shard.S3Path, cancellationToken);
+                    var resumedBackupSizeBytes = await MeasureBackupPathAsync(scopedStorage, backup.Target!, shard.StoragePath, cancellationToken);
                     if (await ReloadShardAndStopIfCanceledAsync(scopedDb, backup, table, shard, cancellationToken))
                     {
                         await scopedQueue.ReleaseStartedAsync(BackupRestoreQueueKind.Backup, shard.Id, cancellationToken);
@@ -651,7 +651,7 @@ public sealed class BackupRunnerService(
                 await scopedQueue.ReleaseStartedAsync(BackupRestoreQueueKind.Backup, shard.Id, cancellationToken);
                 return BackupShardRunResult.Completed;
             }
-            var backupSizeBytes = await MeasureBackupPathAsync(scopedStorage, backup.Target!, shard.S3Path, cancellationToken);
+            var backupSizeBytes = await MeasureBackupPathAsync(scopedStorage, backup.Target!, shard.StoragePath, cancellationToken);
             if (await ReloadShardAndStopIfCanceledAsync(scopedDb, backup, table, shard, cancellationToken))
             {
                 await scopedQueue.ReleaseStartedAsync(BackupRestoreQueueKind.Backup, shard.Id, cancellationToken);
@@ -872,7 +872,7 @@ public sealed class BackupRunnerService(
             ? null
             : await db.BackupTables
                 .Where(x => x.Id == parentFullBackupTableId)
-                .Select(x => x.S3Path)
+                .Select(x => x.StoragePath)
                 .FirstOrDefaultAsync(cancellationToken);
 
     private static async Task<string?> GetParentShardPathAsync(ChoboDbContext db, Guid? parentFullBackupTableShardId, CancellationToken cancellationToken) =>
@@ -880,7 +880,7 @@ public sealed class BackupRunnerService(
             ? null
             : await db.BackupTableShards
                 .Where(x => x.Id == parentFullBackupTableShardId)
-                .Select(x => x.S3Path)
+                .Select(x => x.StoragePath)
                 .FirstOrDefaultAsync(cancellationToken);
 
 

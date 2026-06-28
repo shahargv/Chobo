@@ -218,7 +218,7 @@ export function BackupDrawer({ backupId, onClose, onOpenBackup }: { backupId: st
 export function BackupTablesTable({ tableRows, isLoading }: { tableRows: BackupTableDto[]; isLoading: boolean }) {
   const [errorDetail, setErrorDetail] = useState<{ title: string; error: string } | null>(null);
   return <>
-  <DataTable headers={["Table", "Engine", "Shard", "Status", "Source node", "Size", "S3 path", "Details"]} isLoading={isLoading}>
+  <DataTable headers={["Table", "Engine", "Shard", "Status", "Source node", "Size", "Storage path", "Details"]} isLoading={isLoading}>
     {tableRows.flatMap((table) => {
       if (table.shards.length === 0) {
         return [
@@ -229,7 +229,7 @@ export function BackupTablesTable({ tableRows, isLoading }: { tableRows: BackupT
             <td><Status value={table.status} /></td>
             <td>none</td>
             <td>{formatBytes(calculateTableSizeBytes(table))}</td>
-            <td className="mono wide-cell">{table.s3Path}</td>
+            <td className="mono wide-cell">{table.storagePath}</td>
             <td>{table.error ? <ErrorDetailButton label={`${table.database}.${table.table}`} error={table.error} onOpen={setErrorDetail} /> : ""}</td>
           </tr>
         ];
@@ -246,7 +246,7 @@ export function BackupTablesTable({ tableRows, isLoading }: { tableRows: BackupT
             <td><Status value={shard.status} /></td>
             <td>{formatShardEndpoint(shard)}</td>
             <td>{formatBytes(shard.backupSizeBytes)}</td>
-            <td className="mono wide-cell">{shard.s3Path}</td>
+            <td className="mono wide-cell">{shard.storagePath}</td>
             <td>{shard.error ? <ErrorDetailButton label={`${table.database}.${table.table} ${formatShardLabel(shard)}`} error={shard.error} onOpen={setErrorDetail} /> : ""}</td>
           </tr>
         ));

@@ -71,7 +71,7 @@ public sealed class TestHooksController(
             Engine = "MergeTree",
             DataBackedUp = true,
             SchemaDefinition = schema,
-            S3Path = $"backups/{Uri.EscapeDataString(request.Database)}/{Uri.EscapeDataString(request.Table)}/test-hook/{backup.Id:N}",
+            StoragePath = $"backups/{Uri.EscapeDataString(request.Database)}/{Uri.EscapeDataString(request.Table)}/test-hook/{backup.Id:N}",
             Status = BackupTableStatus.Running,
             StartedAt = DateTimeOffset.UtcNow
         };
@@ -88,7 +88,7 @@ public sealed class TestHooksController(
                 Host = node.Host,
                 Port = node.Port,
                 UseTls = node.UseTls,
-                S3Path = $"{table.S3Path}/shards/shard-{shardNumber:0000}",
+                StoragePath = $"{table.StoragePath}/shards/shard-{shardNumber:0000}",
                 Status = BackupTableStatus.Running,
                 StartedAt = DateTimeOffset.UtcNow,
                 ClickHouseOperationId = $"missing-from-system-backups-{Guid.NewGuid():N}"
@@ -187,16 +187,9 @@ public sealed class TestHooksController(
         {
             Id = targetId,
             Name = "system-export-target",
-            Type = BackupTargetType.S3,
-            Endpoint = "http://backup-s3:9000",
-            Region = "us-east-1",
-            Bucket = "backups",
-            PathPrefix = "system-export",
-            ForcePathStyle = true,
-            EncryptedAccessKey = "encrypted-access-from-source",
-            EncryptedAccessKeyKeyId = Guid.NewGuid(),
-            EncryptedSecretKey = "encrypted-secret-from-source",
-            EncryptedSecretKeyKeyId = Guid.NewGuid(),
+            Type = StorageProviderTypes.S3,
+            SettingsJson = JsonSerializer.Serialize(new S3TargetSettingsDto("http://backup-s3:9000", "us-east-1", "backups", "system-export", true)),
+            SecretsJson = "{}",
             CreatedAt = now
         });
         db.BackupPolicies.Add(new BackupPolicyEntity
@@ -262,7 +255,7 @@ public sealed class TestHooksController(
             Engine = "MergeTree",
             DataBackedUp = true,
             SchemaDefinitionId = schemaDefinitionId,
-            S3Path = "s3://backups/system-export/system_export_table",
+            StoragePath = "s3://backups/system-export/system_export_table",
             Status = BackupTableStatus.Succeeded,
             StartedAt = now.AddSeconds(1),
             CompletedAt = now.AddSeconds(2)
@@ -278,7 +271,7 @@ public sealed class TestHooksController(
             Host = "source-cluster",
             Port = 9000,
             UseTls = false,
-            S3Path = "s3://backups/system-export/system_export_table/shard1",
+            StoragePath = "s3://backups/system-export/system_export_table/shard1",
             Status = BackupTableStatus.Succeeded,
             StartedAt = now.AddSeconds(1),
             CompletedAt = now.AddSeconds(2)
@@ -379,12 +372,9 @@ public sealed class TestHooksController(
         {
             Id = targetId,
             Name = "ui-dashboard-failure-target",
-            Type = BackupTargetType.S3,
-            Endpoint = "http://backup-s3:9000",
-            Region = "us-east-1",
-            Bucket = "data-bucket",
-            PathPrefix = "ui-dashboard-failure",
-            ForcePathStyle = true,
+            Type = StorageProviderTypes.S3,
+            SettingsJson = JsonSerializer.Serialize(new S3TargetSettingsDto("http://backup-s3:9000", "us-east-1", "data-bucket", "ui-dashboard-failure", true)),
+            SecretsJson = "{}",
             CreatedAt = now
         });
         db.BackupPolicies.Add(new BackupPolicyEntity
@@ -451,7 +441,7 @@ public sealed class TestHooksController(
             Engine = "MergeTree",
             DataBackedUp = true,
             SchemaDefinitionId = schemaDefinitionId,
-            S3Path = "s3://data-bucket/ui-dashboard-failure/orders",
+            StoragePath = "s3://data-bucket/ui-dashboard-failure/orders",
             Status = BackupTableStatus.Failed,
             StartedAt = now.AddSeconds(1),
             CompletedAt = now.AddSeconds(2),
@@ -468,7 +458,7 @@ public sealed class TestHooksController(
             Host = "missing-clickhouse",
             Port = 9000,
             UseTls = false,
-            S3Path = "s3://data-bucket/ui-dashboard-failure/orders/shard-0001",
+            StoragePath = "s3://data-bucket/ui-dashboard-failure/orders/shard-0001",
             Status = BackupTableStatus.Failed,
             StartedAt = now.AddSeconds(1),
             CompletedAt = now.AddSeconds(2),

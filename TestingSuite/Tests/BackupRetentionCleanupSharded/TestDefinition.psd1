@@ -1,6 +1,6 @@
 @{
     Name = 'BackupRetentionCleanupSharded'
-    Description = 'Verifies asynchronous backup cleanup removes every S3 object for a sharded backup.'
+    Description = 'Verifies asynchronous backup cleanup removes every storage object for a sharded backup.'
     Resources = @(
         @{ Name = 'server'; Type = 'ChoboServer' }
         @{ Name = 'source'; Type = 'Cluster'; Shards = 2; Replicas = 2; DnsName = 'source-cluster' }

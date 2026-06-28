@@ -136,7 +136,7 @@ public sealed class BackupRestoreQueueApplicationService(
                     shardLimit,
                     clusterRunning,
                     shardRunning,
-                    shard.S3Path))
+                    shard.StoragePath))
             {
                 continue;
             }

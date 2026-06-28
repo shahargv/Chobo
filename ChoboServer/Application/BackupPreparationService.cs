@@ -159,7 +159,7 @@ public sealed class BackupPreparationService(
                 Engine = table.Engine,
                 DataBackedUp = dataBackedUp,
                 SchemaDefinitionId = schema.Id,
-                S3Path = BuildS3Path(backup, table.Database, table.Table, effectiveTableType, tableParentBackupId)
+                StoragePath = BuildStoragePath(backup, table.Database, table.Table, effectiveTableType, tableParentBackupId)
             };
             if (backup.BackupType == BackupType.Incremental && dataBackedUp && parentTable is null && tableParentShards.Count == 0)
             {
@@ -177,8 +177,8 @@ public sealed class BackupPreparationService(
                         await audit.RecordAsync("incremental-shard-fallback-to-full", AuditEntityType.Backup, backup.Id.ToString(), new { table.Database, table.Table, sourceShard = representative.ShardNumber, reason = "missing-parent-full-shard" });
                     }
                     var shardParentBackupId = parentShard?.BackupTable?.BackupId;
-                    var shardPath = BuildShardS3Path(
-                        BuildS3Path(backup, table.Database, table.Table, effectiveShardType, shardParentBackupId),
+                    var shardPath = BuildShardStoragePath(
+                        BuildStoragePath(backup, table.Database, table.Table, effectiveShardType, shardParentBackupId),
                         representative.ShardNumber);
                     backupTable.Shards.Add(new BackupTableShardEntity
                     {
@@ -191,7 +191,7 @@ public sealed class BackupPreparationService(
                         Host = representative.Host,
                         Port = representative.Port,
                         UseTls = representative.UseTls,
-                        S3Path = shardPath
+                        StoragePath = shardPath
                     });
                 }
             }
@@ -325,7 +325,7 @@ public sealed class BackupPreparationService(
             .ToDictionary(x => x.Key, x => x.First(), StringComparer.Ordinal);
     }
 
-    private static string BuildS3Path(BackupEntity backup, string database, string table, BackupType effectiveType, Guid? parentFullBackupId)
+    private static string BuildStoragePath(BackupEntity backup, string database, string table, BackupType effectiveType, Guid? parentFullBackupId)
     {
         var source = backup.PolicyId is { } policyId ? $"policy-{policyId:N}" : "manual";
         var timestamp = backup.CreatedAt.UtcDateTime.ToString("yyyyMMddTHHmmssfffZ", System.Globalization.CultureInfo.InvariantCulture);
@@ -338,7 +338,7 @@ public sealed class BackupPreparationService(
         return $"backups/full/{source}/{EscapePathPart(database)}/{EscapePathPart(table)}/{timestamp}/{backup.Id:N}";
     }
 
-    private static string BuildShardS3Path(string tablePath, int shardNumber) =>
+    private static string BuildShardStoragePath(string tablePath, int shardNumber) =>
         $"{tablePath}/shards/shard-{shardNumber:0000}";
 
     private static IReadOnlyList<ClickHouseShardReplicaInfo> SelectShardRepresentatives(IReadOnlyList<ClickHouseShardReplicaInfo> topology) =>

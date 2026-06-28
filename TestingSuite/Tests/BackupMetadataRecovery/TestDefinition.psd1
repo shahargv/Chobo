@@ -84,7 +84,7 @@
         @{
             Name = 'delete-one-backup-prefix'
             Type = 'Shell'
-            Args = @('mc', 'rm', '--recursive', '--force', 'chobo/{backupStore.Bucket}/{missingPathFullComplete.tables.0.s3Path}')
+            Args = @('mc', 'rm', '--recursive', '--force', 'chobo/{backupStore.Bucket}/{missingPathFullComplete.tables.0.storagePath}')
             ExpectTextContains = 'Removed'
         }
         @{

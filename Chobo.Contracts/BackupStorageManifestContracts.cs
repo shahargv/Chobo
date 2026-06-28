@@ -1,5 +1,7 @@
-namespace Chobo.Contracts;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
+namespace Chobo.Contracts;
 public sealed record BackupStorageManifestV1(
     int ManifestVersion,
     int ApiVersion,
@@ -48,12 +50,13 @@ public sealed record BackupStorageManifestRunV1(
 public sealed record BackupStorageManifestTargetV1(
     Guid Id,
     string Name,
-    BackupTargetType Type,
-    S3TargetSettingsDto S3,
+    string Type,
+    IReadOnlyDictionary<string, JsonElement>? Settings,
     bool IsDeleted,
     DateTimeOffset CreatedAt,
     DateTimeOffset? UpdatedAt,
-    DateTimeOffset? DeletedAt);
+    DateTimeOffset? DeletedAt,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] S3TargetSettingsDto? S3 = null);
 
 public sealed record BackupStorageManifestClusterV1(
     Guid Id,
@@ -123,7 +126,7 @@ public sealed record BackupStorageManifestTableV1(
     string Engine,
     bool DataBackedUp,
     Guid? SchemaDefinitionId,
-    string S3Path,
+    string? StoragePath,
     long? BackupSizeBytes,
     BackupTableStatus Status,
     string? ClickHouseOperationId,
@@ -131,7 +134,11 @@ public sealed record BackupStorageManifestTableV1(
     DateTimeOffset? StartedAt,
     DateTimeOffset? CompletedAt,
     string? Error,
-    IReadOnlyList<BackupStorageManifestShardV1> Shards);
+    IReadOnlyList<BackupStorageManifestShardV1> Shards)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? S3Path { get; init; }
+}
 
 public sealed record BackupStorageManifestShardV1(
     Guid Id,
@@ -145,15 +152,18 @@ public sealed record BackupStorageManifestShardV1(
     string Host,
     int Port,
     bool UseTls,
-    string S3Path,
+    string? StoragePath,
     long? BackupSizeBytes,
     BackupTableStatus Status,
     string? ClickHouseOperationId,
     string? ClickHouseStatus,
     DateTimeOffset? StartedAt,
     DateTimeOffset? CompletedAt,
-    string? Error);
-
+    string? Error)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? S3Path { get; init; }
+}
 public sealed record RecoverBackupMetadataFromPathRequest(Guid TargetId, string BackupPath);
 
 public sealed record RecoverBackupMetadataScanRequest(Guid TargetId, string ScanRoot);

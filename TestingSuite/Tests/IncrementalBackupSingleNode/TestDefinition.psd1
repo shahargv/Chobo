@@ -70,7 +70,7 @@
                 @{ Path = 'endedAt'; NotEmpty = $true }
                 @{ Path = 'backupType'; Equals = 'Full' }
                 @{ Path = 'tables[0].effectiveBackupType'; Equals = 'Full' }
-                @{ Path = 'tables[0].s3Path'; Contains = 'backups/full/' }
+                @{ Path = 'tables[0].storagePath'; Contains = 'backups/full/' }
             )
         }
         @{ Name = 'mutate-source-data'; Type = 'Sql'; Resource = 'source'; Path = 'Sql/mutate-source-data.sql' }
@@ -91,7 +91,7 @@
                 @{ Path = 'backupType'; Equals = 'Incremental' }
                 @{ Path = 'tables'; ContainsObject = @{ table = 'orders'; effectiveBackupType = 'Incremental' } }
                 @{ Path = 'tables'; ContainsObject = @{ table = 'new_orders'; effectiveBackupType = 'Full' } }
-                @{ Path = 'tables[1].s3Path'; Contains = 'parent-full-{fullBackup.id.n}' }
+                @{ Path = 'tables[1].storagePath'; Contains = 'parent-full-{fullBackup.id.n}' }
             )
         }
         @{

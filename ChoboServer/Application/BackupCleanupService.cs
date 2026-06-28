@@ -124,9 +124,9 @@ public sealed class BackupCleanupService(
     {
         foreach (var table in backup.Tables)
         {
-            if (!string.IsNullOrWhiteSpace(table.S3Path))
+            if (!string.IsNullOrWhiteSpace(table.StoragePath))
             {
-                yield return table.S3Path;
+                yield return table.StoragePath;
             }
         }
     }

@@ -112,7 +112,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IEndpointRewriteService, EndpointRewriteService>();
         services.AddScoped<ClickHouseAdapter>();
         services.AddScoped<IClickHouseAdapter>(serviceProvider => serviceProvider.GetRequiredService<ClickHouseAdapter>());
-        services.AddScoped<S3BackupStorageOperations>();
+        services.AddScoped<IBackupStorageProvider, S3StorageProvider>();
+        services.AddScoped<IBackupStorageProviderRegistry, BackupStorageProviderRegistry>();
         services.AddScoped<IBackupStorageOperations, BackupStorageOperations>();
         services.AddScoped<IApplicationLogStore, ApplicationLogStore>();
         services.AddScoped<IAuditStore, AuditStore>();
