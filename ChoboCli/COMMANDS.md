@@ -196,6 +196,7 @@ ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-i
 ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-id> --layout single-node --source-shard 1
 ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-id> --layout preserve --target-shard 2
 ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-id> --table-mappings-json '[{"backupTableId":"<table-id>","targetDatabase":"restore","targetTable":"orders_restore","schemaOnly":false,"append":true,"allowSchemaMismatch":true}]' --confirm-destructive
+ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-id> --table-mappings-file .\restore-tables.json
 ChoboCli restores list
 ChoboCli restores show --id <restore-id>
 ChoboCli restores wait --id <restore-id> --timeout-seconds 300 --poll-seconds 2
@@ -211,6 +212,8 @@ ChoboCli restore initiate --backup-id <backup-id> --target-cluster-id <cluster-i
 
 Advanced settings options are `--clickhouse-backup-setting name=value`, `--clickhouse-backup-settings-json`, `--clickhouse-backup-settings-file`, `--remove-clickhouse-backup-setting`, and the matching `restore` variants. Values must be strings, numbers, or booleans. Chobo rejects settings it manages internally, including `base_backup` and `allow_non_empty_tables`. ClickHouse documents supported backup/restore setting names at <https://clickhouse.com/docs/operations/backup/overview#settings>.
 Backup and restore commands return run records immediately. `wait` is a client-side polling helper. Run JSON includes `startedAt` and `endedAt`; `endedAt` is when the actual run process reached a terminal outcome, including success, partial success, failure, or cancellation, not the last metadata update time.
+
+Per-table restore mappings may include `createTableSqlOverride` when a DBA needs Chobo to create a target table from corrected DDL instead of the captured backup schema. The override is used only for that restore request; Chobo still rewrites the target database/table name from the mapping.
 
 `backups recover` rebuilds SQLite backup metadata from storage-side manifests after local database loss. Use `--scan-root` to scan a bucket/root for manifests, or `--backup-path` for one known manifest path. The supplied target provides S3 credentials; recovered ClickHouse clusters still need `clusters update-credentials` because manifests do not store ClickHouse credentials. If a manifest declares storage data paths that are already missing, recovery imports the backup as `PartiallySucceeded` so remaining data can still be managed.
 

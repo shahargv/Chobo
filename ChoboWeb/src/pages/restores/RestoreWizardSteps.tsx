@@ -1,6 +1,6 @@
-import type { ReactNode } from "react";
-import { ArrowRight, CheckCircle2, Database, GitBranch, Info, ListChecks, ShieldAlert } from "lucide-react";
-import type { BackupDto, InitiateRestoreRequest, RestoreLayout } from "../../api/generated";
+import { useState, type ReactNode } from "react";
+import { ArrowRight, CheckCircle2, Code2, Database, GitBranch, Info, ListChecks, ShieldAlert, SlidersHorizontal } from "lucide-react";
+import type { BackupDto, InitiateRestoreRequest, RestoreLayout, SchemaTableDto } from "../../api/generated";
 import { DataTable, Detail, Empty, Select, Status } from "../../components/ui";
 import { formatTime } from "../../utils/format";
 import type { RestoreMappingDraft, RestoreStep, SourceShardOption, TargetShardOption } from "./restoreTypes";
@@ -65,12 +65,12 @@ function LayoutChoice({ value, selected, title, body, disabled, disabledReason, 
   return <button type="button" disabled={disabled} className={`restore-choice ${selected === value ? "selected" : ""} ${disabled ? "disabled" : ""}`} onClick={() => onSelect(value)}><strong>{title}</strong><span>{disabled && disabledReason ? disabledReason : body}</span></button>;
 }
 
-export function ScopeStep({ backup, mappings, onMappingsChange, sourceShardOptions, selectedSourceShards, onSourceShardsChange }: { backup: BackupDto | null; mappings: RestoreMappingDraft[]; onMappingsChange: (mappings: RestoreMappingDraft[]) => void; sourceShardOptions: SourceShardOption[]; selectedSourceShards: number[]; onSourceShardsChange: (value: number[]) => void }) {
+export function ScopeStep({ backup, mappings, onMappingsChange, sourceShardOptions, selectedSourceShards, onSourceShardsChange, schemaByTableId, schemaLoading }: { backup: BackupDto | null; mappings: RestoreMappingDraft[]; onMappingsChange: (mappings: RestoreMappingDraft[]) => void; sourceShardOptions: SourceShardOption[]; selectedSourceShards: number[]; onSourceShardsChange: (value: number[]) => void; schemaByTableId: Map<string, SchemaTableDto>; schemaLoading: boolean }) {
   return (
     <div className="restore-step-content">
       <StepIntro icon={<ListChecks size={20} />} title="Choose exactly what gets restored" body="Select source shards and tables, then decide whether each table restores schema plus data or schema only. The default target table name uses _restore so existing tables are not overwritten by accident." />
       <SourceShardsPicker shards={sourceShardOptions} selected={selectedSourceShards} onChange={onSourceShardsChange} />
-      <RestoreMappingsEditor backup={backup} mappings={mappings} onChange={onMappingsChange} />
+      <RestoreMappingsEditor backup={backup} mappings={mappings} onChange={onMappingsChange} schemaByTableId={schemaByTableId} schemaLoading={schemaLoading} />
     </div>
   );
 }
@@ -90,7 +90,7 @@ export function ReviewStep({ backup, targetClusterName, request, mappings, sourc
         <strong>What Chobo will do</strong>
         <span>{buildImpactSentence(request, mappings, sourceShardOptions, selectedSourceShards, targetShardOptions, selectedTargetShards)}</span>
       </div>
-      <DataTable headers={["Source table", "Target table", "Mode", "Append", "Schema mismatch"]}>
+      <DataTable headers={["Source table", "Target table", "Mode", "Append", "Schema mismatch", "Schema SQL"]}>
         {mappings.map((mapping) => {
           const table = backup?.tables.find((item) => item.id === mapping.backupTableId);
           return <tr key={mapping.backupTableId}>
@@ -99,6 +99,7 @@ export function ReviewStep({ backup, targetClusterName, request, mappings, sourc
             <td>{mapping.schemaOnly ? "Schema only" : "Schema + data"}</td>
             <td>{mapping.schemaOnly ? "No" : mapping.append ? "Yes" : "No"}</td>
             <td>{mapping.allowSchemaMismatch ? "Allowed" : "Blocked"}</td>
+            <td>{mapping.createTableSqlOverride?.trim() ? "Custom" : "Captured"}</td>
           </tr>;
         })}
       </DataTable>
@@ -140,7 +141,8 @@ function ImpactItem({ label, value, complete, warn }: { label: string; value: st
   return <div className={`restore-impact-item ${complete ? "complete" : ""} ${warn ? "warn" : ""}`}><span>{label}</span><strong>{value}</strong></div>;
 }
 
-function RestoreMappingsEditor({ backup, mappings, onChange }: { backup: BackupDto | null; mappings: RestoreMappingDraft[]; onChange: (mappings: RestoreMappingDraft[]) => void }) {
+function RestoreMappingsEditor({ backup, mappings, onChange, schemaByTableId, schemaLoading }: { backup: BackupDto | null; mappings: RestoreMappingDraft[]; onChange: (mappings: RestoreMappingDraft[]) => void; schemaByTableId: Map<string, SchemaTableDto>; schemaLoading: boolean }) {
+  const [advancedTableId, setAdvancedTableId] = useState<string | null>(null);
   if (!backup) return <Empty text="Choose a backup first. Its tables will appear here." />;
   if (backup.tables.length === 0) return <Empty text="This backup does not contain restorable tables." />;
   const update = (id: string, patch: Partial<RestoreMappingDraft>) => onChange(mappings.map((mapping) => mapping.backupTableId === id ? { ...mapping, ...patch } : mapping));
@@ -158,7 +160,7 @@ function RestoreMappingsEditor({ backup, mappings, onChange }: { backup: BackupD
           <button type="button" className="ghost" onClick={() => onChange(mappings.map((mapping) => ({ ...mapping, selected: false })))}>Clear</button>
         </div>
       </div>
-      <DataTable headers={["Restore", "Source table", "Target database", "Target table", "Mode", "Options"]}>
+      <DataTable headers={["Restore", "Source table", "Target database", "Target table", "Mode", "Options", "Advanced"]}>
         {backup.tables.map((table) => {
           const mapping = mapped(table.id, table.database, table.table);
           return <tr key={table.id}>
@@ -180,13 +182,53 @@ function RestoreMappingsEditor({ backup, mappings, onChange }: { backup: BackupD
                 <label className="checkbox-row"><input type="checkbox" checked={mapping.allowSchemaMismatch ?? false} disabled={!mapping.selected} onChange={(event) => update(table.id, { allowSchemaMismatch: event.target.checked })} /> Allow schema mismatch</label>
               </div>
             </td>
+            <td>
+              <button type="button" className={mapping.createTableSqlOverride?.trim() ? "secondary advanced-active" : "ghost"} disabled={!mapping.selected} title="Advanced table schema options" onClick={() => setAdvancedTableId(table.id)}>
+                {mapping.createTableSqlOverride?.trim() ? <Code2 size={15} /> : <SlidersHorizontal size={15} />}
+                {mapping.createTableSqlOverride?.trim() ? "Custom SQL" : "Advanced"}
+              </button>
+            </td>
           </tr>;
         })}
       </DataTable>
+      {advancedTableId && <CreateTableOverrideDialog table={backup.tables.find((table) => table.id === advancedTableId) ?? null} mapping={mappings.find((mapping) => mapping.backupTableId === advancedTableId) ?? null} capturedSql={schemaByTableId.get(advancedTableId)?.createTableSql ?? ""} schemaLoading={schemaLoading} onSave={(patch) => { update(advancedTableId, patch); setAdvancedTableId(null); }} onClose={() => setAdvancedTableId(null)} />}
     </div>
   );
 }
 
+function CreateTableOverrideDialog({ table, mapping, capturedSql, schemaLoading, onSave, onClose }: { table: BackupDto["tables"][number] | null; mapping: RestoreMappingDraft | null; capturedSql: string; schemaLoading: boolean; onSave: (patch: Partial<RestoreMappingDraft>) => void; onClose: () => void }) {
+  const [enabled, setEnabled] = useState(() => mapping?.createTableSqlOverride != null);
+  const [sql, setSql] = useState(() => mapping?.createTableSqlOverride ?? capturedSql);
+  const targetName = mapping ? `${mapping.targetDatabase}.${mapping.targetTable}` : "target table";
+  const sourceName = table ? `${table.database}.${table.table}` : "source table";
+  const canSave = !enabled || sql.trim().length > 0;
+  const setOverride = (checked: boolean) => {
+    setEnabled(checked);
+    if (checked && !sql.trim()) setSql(capturedSql);
+  };
+
+  return <div className="modal-backdrop" role="presentation" onClick={onClose}>
+    <section className="confirm-dialog create-table-override-dialog" role="dialog" aria-modal="true" aria-labelledby="create-table-override-title" onClick={(event) => event.stopPropagation()}>
+      <div className="confirm-icon primary"><Code2 size={22} /></div>
+      <div className="confirm-content">
+        <div className="section-head">
+          <div>
+            <h2 id="create-table-override-title">Table schema override</h2>
+            <span className="hint">{sourceName} to {targetName}</span>
+          </div>
+          <button type="button" className="ghost" onClick={onClose}>Close</button>
+        </div>
+        <label className="checkbox-row restore-advanced-toggle"><input type="checkbox" checked={enabled} disabled={schemaLoading} onChange={(event) => setOverride(event.target.checked)} /> Override CREATE TABLE statement</label>
+        {enabled && <textarea className="create-table-override-editor" aria-label={`Custom CREATE TABLE SQL for ${sourceName}`} value={sql} disabled={schemaLoading} onChange={(event) => setSql(event.target.value)} />}
+        {!canSave && <span className="field-error">Custom CREATE TABLE SQL must not be empty.</span>}
+        <div className="confirm-actions">
+          <button type="button" className="ghost" onClick={onClose}>Cancel</button>
+          <button type="button" className="primary" disabled={!canSave || schemaLoading} onClick={() => onSave({ createTableSqlOverride: enabled ? sql : null })}>Apply</button>
+        </div>
+      </div>
+    </section>
+  </div>;
+}
 function isDistributedEngine(engine: string) {
   return /^Distributed\b/i.test(engine.trim());
 }

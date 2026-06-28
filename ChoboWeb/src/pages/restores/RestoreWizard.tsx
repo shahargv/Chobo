@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, ArrowRight, RotateCcw } from "lucide-react";
-import type { InitiateRestoreRequest } from "../../api/generated";
+import type { InitiateRestoreRequest, SchemaTableDto } from "../../api/generated";
 import { useApi } from "../../api-context";
 import { ConfirmDialog, Page } from "../../components/ui";
 import { ClickHouseAdvancedSettingsEditor, type ClickHouseSettings } from "../../components/ClickHouseAdvancedSettingsEditor";
@@ -34,6 +34,11 @@ export function RestoreWizard() {
     enabled: Boolean(request.backupId && request.targetClusterId),
     retry: false
   });
+  const backupSchema = useQuery({
+    queryKey: ["restore-schema", request.backupId],
+    queryFn: () => api.backupSchema(request.backupId),
+    enabled: Boolean(request.backupId)
+  });
   const targetTopology = useQuery({
     queryKey: ["cluster-topology", request.targetClusterId],
     queryFn: () => api.clusterTopology(request.targetClusterId),
@@ -45,6 +50,10 @@ export function RestoreWizard() {
   const selectedBackup = restorableBackups.find((backup) => backup.id === request.backupId) ?? null;
   const sourceShardOptions = useMemo(() => getSourceShardOptions(selectedBackup), [selectedBackup]);
   const targetShardOptions = useMemo(() => getTargetShardOptions(targetTopology.data?.shards), [targetTopology.data]);
+  const schemaByTableId = useMemo(() => {
+    const tables = backupSchema.data?.databases.flatMap((database) => database.tables) ?? [];
+    return new Map<string, SchemaTableDto>(tables.map((table) => [table.backupTableId, table]));
+  }, [backupSchema.data]);
   const isDifferentCluster = Boolean(selectedBackup && request.targetClusterId && selectedBackup.sourceClusterId !== request.targetClusterId);
   const preserveMissingTargetShards = isDifferentCluster && targetTopology.isSuccess ? getMissingPreserveTargetShards(selectedSourceShards, targetShardOptions) : [];
   const preserveLayoutError = isDifferentCluster && targetTopology.isFetching
@@ -79,6 +88,7 @@ export function RestoreWizard() {
       append: false,
       allowSchemaMismatch: false,
       schemaOnly: !table.dataBackedUp,
+      createTableSqlOverride: null,
       selected: false
     })));
     setSelectedSourceShards(getSourceShardOptions(selectedBackup).map((shard) => shard.value));
@@ -152,7 +162,7 @@ export function RestoreWizard() {
           <div className="restore-step-body">
             {step === 0 && <BackupChoiceStep isLoading={backups.isLoading || policies.isLoading} backups={restorableBackups} selectedBackupId={request.backupId} onSelect={(backupId) => setRequest({ ...request, backupId })} clusterName={(clusterId) => clusterById.get(clusterId)?.name ?? clusterId} policyName={(policyId) => policyId ? policyById.get(policyId)?.name ?? policyId : "Manual"} />}
             {step === 1 && <DestinationStep request={request} onChange={setRequest} clusters={clusters.data ?? []} targetShardOptions={targetShardOptions} selectedTargetShards={selectedTargetShards} onTargetShardsChange={setSelectedTargetShards} targetShardsLoading={targetTopology.isFetching} preserveLayoutDisabled={preserveLayoutDisabled} preserveLayoutReason={preserveLayoutReason} />}
-            {step === 2 && <ScopeStep backup={selectedBackup} mappings={mappings} onMappingsChange={setMappings} sourceShardOptions={sourceShardOptions} selectedSourceShards={selectedSourceShards} onSourceShardsChange={setSelectedSourceShards} />}
+            {step === 2 && <ScopeStep backup={selectedBackup} mappings={mappings} onMappingsChange={setMappings} sourceShardOptions={sourceShardOptions} selectedSourceShards={selectedSourceShards} onSourceShardsChange={setSelectedSourceShards} schemaByTableId={schemaByTableId} schemaLoading={backupSchema.isFetching} />}
             {step === 3 && <>
               <ReviewStep backup={selectedBackup} targetClusterName={clusterById.get(request.targetClusterId)?.name ?? request.targetClusterId} request={request} mappings={selectedMappings} sourceShardOptions={sourceShardOptions} selectedSourceShards={selectedSourceShards} targetShardOptions={targetShardOptions} selectedTargetShards={selectedTargetShards} errors={restoreErrors} />
               <ClickHouseAdvancedSettingsEditor title="ClickHouse restore settings for this run" value={clickHouseSettings} sources={(settingsPreview.data?.sources ?? []) as any} onChange={setClickHouseSettings} onValidityChange={setSettingsValid} />

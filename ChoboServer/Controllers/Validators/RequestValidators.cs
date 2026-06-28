@@ -312,12 +312,36 @@ public sealed class RestoreTableMappingRequestValidator : AbstractValidator<Rest
         RuleFor(x => x.BackupTableId).NotEmpty();
         RuleFor(x => x.TargetDatabase).MaximumLength(512).When(x => x.TargetDatabase is not null);
         RuleFor(x => x.TargetTable).MaximumLength(512).When(x => x.TargetTable is not null);
+        RuleFor(x => x.CreateTableSqlOverride).MaximumLength(200000).When(x => x.CreateTableSqlOverride is not null);
+        RuleFor(x => x.CreateTableSqlOverride)
+            .Must(x => x is null || !string.IsNullOrWhiteSpace(x))
+            .WithMessage("CreateTableSqlOverride must not be empty when provided.");
+        RuleFor(x => x.CreateTableSqlOverride)
+            .Must(IsSingleCreateTableStatement)
+            .WithMessage("CreateTableSqlOverride must be a single CREATE TABLE statement.");
         RuleFor(x => x)
             .Must(x => x.SchemaOnly is not true || x.Append is not true)
             .WithMessage("Schema-only table restores cannot append data.");
         RuleFor(x => x)
             .Must(x => string.IsNullOrWhiteSpace(x.TargetDatabase) == string.IsNullOrWhiteSpace(x.TargetTable))
             .WithMessage("TargetDatabase and TargetTable must be provided together for each table mapping.");
+    }
+
+    private static bool IsSingleCreateTableStatement(string? sql)
+    {
+        if (sql is null)
+        {
+            return true;
+        }
+
+        var trimmed = sql.Trim();
+        if (!trimmed.StartsWith("CREATE TABLE ", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var withoutTrailingSemicolon = trimmed.EndsWith(';') ? trimmed[..^1].TrimEnd() : trimmed;
+        return !withoutTrailingSemicolon.Contains(';');
     }
 }
 

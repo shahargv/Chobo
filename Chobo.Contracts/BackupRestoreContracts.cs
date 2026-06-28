@@ -267,4 +267,5 @@ public sealed record RestoreTableMappingRequest(
     string? TargetTable,
     bool? Append = null,
     bool? AllowSchemaMismatch = null,
-    bool? SchemaOnly = null);
+    bool? SchemaOnly = null,
+    string? CreateTableSqlOverride = null);

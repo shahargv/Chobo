@@ -270,6 +270,23 @@ pre, .token-box {
   background: var(--surface-muted);
 }
 .restore-table-options { gap: 6px; min-width: 180px; }
+button.advanced-active {
+  border-color: var(--accent);
+  background: #eef8fb;
+  color: var(--accent-strong);
+}
+.create-table-override-dialog {
+  width: min(920px, calc(100vw - 32px));
+  align-items: start;
+}
+.create-table-override-dialog .confirm-content { gap: 16px; }
+.restore-advanced-toggle { align-self: start; }
+.create-table-override-editor {
+  width: 100%;
+  min-height: min(48vh, 460px);
+  white-space: pre;
+  overflow: auto;
+}
 .restore-source-table-name {
   display: inline-flex;
   align-items: center;

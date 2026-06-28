@@ -21,6 +21,7 @@ const nullableProperties = new Set([
   "clickHouseStatus",
   "clickHouseBackupSettings",
   "clickHouseRestoreSettings",
+  "createTableSqlOverride",
   "currentRunReason",
   "deactivatedAt",
   "deletedAt",
