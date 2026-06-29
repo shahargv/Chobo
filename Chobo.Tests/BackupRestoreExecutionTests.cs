@@ -2635,7 +2635,7 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
-    public async Task Garbage_collector_cleans_failed_backups_only_when_policy_opts_in()
+    public async Task Garbage_collector_cleans_failed_backups_only_when_policy_opts_in_and_keeps_partial_backups()
     {
         var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
         await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now));
@@ -2649,7 +2649,7 @@ public sealed class BackupRestoreExecutionTests
 
         fixture.Db.ChangeTracker.Clear();
         Assert.Equal(BackupRunStatus.FailedBackupDeletedByGarbageCollector, (await fixture.Db.Backups.SingleAsync(x => x.Id == failed.Id)).Status);
-        Assert.Equal(BackupRunStatus.FailedBackupDeletedByGarbageCollector, (await fixture.Db.Backups.SingleAsync(x => x.Id == partial.Id)).Status);
+        Assert.Equal(BackupRunStatus.PartiallySucceeded, (await fixture.Db.Backups.SingleAsync(x => x.Id == partial.Id)).Status);
         Assert.Equal(BackupRunStatus.Failed, (await fixture.Db.Backups.SingleAsync(x => x.Id == kept.Id)).Status);
     }
 
@@ -2690,6 +2690,7 @@ public sealed class BackupRestoreExecutionTests
         manual.DeletionReason = "manual";
         manual.DeletionRequestedAt = now.AddMinutes(-20);
         var failed = await fixture.SeedPolicyBackupAsync(cleanupPolicy.Id, BackupRunStatus.Failed, now.AddMinutes(-10));
+        var partial = await fixture.SeedPolicyBackupAsync(cleanupPolicy.Id, BackupRunStatus.PartiallySucceeded, now.AddMinutes(-7));
         var kept = await fixture.SeedPolicyBackupAsync(keepPolicy.Id, BackupRunStatus.Failed, now.AddMinutes(-5));
         await fixture.Db.SaveChangesAsync();
 
@@ -2697,6 +2698,7 @@ public sealed class BackupRestoreExecutionTests
 
         Assert.Contains(queue, x => x.EntityId == manual.Id && x.Status == BackupRunStatus.ManualDeleteRequested && x.FinalStatus == BackupRunStatus.ManualDeleted && x.Reason == "manual");
         Assert.Contains(queue, x => x.EntityId == failed.Id && x.Status == BackupRunStatus.Failed && x.FinalStatus == BackupRunStatus.FailedBackupDeletedByGarbageCollector && x.Reason == "failed-backup-garbage-collector");
+        Assert.DoesNotContain(queue, x => x.EntityId == partial.Id);
         Assert.DoesNotContain(queue, x => x.EntityId == kept.Id);
     }
 
@@ -2779,6 +2781,7 @@ public sealed class BackupRestoreExecutionTests
 
         var incremental = await fixture.SeedDependentIncrementalAsync(policy.Id, parent, now.AddHours(-1));
         var incrementalTable = incremental.Tables.Single();
+        incrementalTable.ParentFullBackupId = null;
         incrementalTable.ParentFullBackupTableId = null;
         var incrementalShards = incrementalTable.Shards.OrderBy(x => x.SourceShardNumber).ToList();
         incrementalShards[0].ParentFullBackupId = parent.Id;
@@ -2795,6 +2798,38 @@ public sealed class BackupRestoreExecutionTests
         Assert.DoesNotContain(queue, x => x.EntityId == incremental.Id && x.Reason == "orphaned-incremental-parent-missing");
         Assert.Equal(BackupRunStatus.PartiallySucceeded, (await fixture.Db.Backups.SingleAsync(x => x.Id == parent.Id)).Status);
         Assert.Equal(BackupRunStatus.Succeeded, (await fixture.Db.Backups.SingleAsync(x => x.Id == incremental.Id)).Status);
+        Assert.False(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "orphaned-incremental-garbage-collection-requested" && x.EntityId == incremental.Id.ToString()));
+    }
+
+    [Fact]
+    public async Task Garbage_collector_keeps_incremental_that_depends_on_effective_full_table_from_incremental_parent()
+    {
+        var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now));
+        var policy = await fixture.SeedPolicyAsync();
+        var parent = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.PartiallySucceeded, now.AddHours(-2), backupType: BackupType.Incremental, shardCount: 2, tableName: "orders");
+        var parentTable = parent.Tables.Single();
+        parentTable.EffectiveBackupType = BackupType.Full;
+        parentTable.Status = BackupTableStatus.Succeeded;
+        foreach (var parentShard in parentTable.Shards)
+        {
+            parentShard.EffectiveBackupType = BackupType.Full;
+            parentShard.Status = BackupTableStatus.Succeeded;
+        }
+
+        var incremental = await fixture.SeedDependentIncrementalAsync(policy.Id, parent, now.AddHours(-1));
+        await fixture.Db.SaveChangesAsync();
+
+        var queue = await fixture.Services.GetRequiredService<BackupsGarbageCollectorBackgroundService>().GetQueueAsync();
+        await fixture.Services.GetRequiredService<BackupsGarbageCollectorBackgroundService>().RunOnceAsync();
+
+        fixture.Db.ChangeTracker.Clear();
+        Assert.DoesNotContain(queue, x => x.EntityId == incremental.Id && x.Reason == "orphaned-incremental-parent-missing");
+        var persistedParent = await fixture.Db.Backups.SingleAsync(x => x.Id == parent.Id);
+        var persistedIncremental = await fixture.Db.Backups.SingleAsync(x => x.Id == incremental.Id);
+        Assert.Equal(BackupType.Incremental, persistedParent.BackupType);
+        Assert.Equal(BackupRunStatus.PartiallySucceeded, persistedParent.Status);
+        Assert.Equal(BackupRunStatus.Succeeded, persistedIncremental.Status);
         Assert.False(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "orphaned-incremental-garbage-collection-requested" && x.EntityId == incremental.Id.ToString()));
     }
 

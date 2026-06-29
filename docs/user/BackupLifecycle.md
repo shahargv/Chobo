@@ -70,10 +70,10 @@ ChoboCli policies update --id <policy-id> --name nightly-prod --source-cluster-i
 
 Modes:
 
-- `KeepAndExcludeFromMinBackupsToKeep`: keep failed and partially succeeded backups. This is the default.
-- `DeleteByGarbageCollectorAfterFailure`: mark failed and partially succeeded backups for S3 cleanup.
+- `KeepAndExcludeFromMinBackupsToKeep`: keep failed backups and exclude them from minimum-backup retention counts. This is the default.
+- `DeleteByGarbageCollectorAfterFailure`: mark failed backups for S3 cleanup.
 
-When garbage collection is enabled, backups in `Failed` or `PartiallySucceeded` become `FailedBackupDeleteRequested`, and then `FailedBackupDeletedByGarbageCollector` after object deletion succeeds.
+Partially succeeded backups can still contain restorable tables or shards, so they remain under normal retention. When failed-backup garbage collection is enabled, backups in `Failed` become `FailedBackupDeleteRequested`, and then `FailedBackupDeletedByGarbageCollector` after object deletion succeeds.
 
 ## Background Services
 
