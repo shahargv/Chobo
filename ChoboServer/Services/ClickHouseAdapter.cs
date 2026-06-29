@@ -14,6 +14,8 @@ public sealed record ClickHouseOperationResult(string OperationId, string Status
 
 public sealed record ClickHouseOperationStatus(bool Exists, string? Status, string? Error);
 
+public sealed record ClickHouseDiscoveredOperation(string OperationId, string Status, string? Error);
+
 public sealed record ClickHouseNodeEndpoint(string Host, int Port, bool UseTls);
 
 public sealed record ClickHouseShardReplicaInfo(int ShardNumber, string? ShardName, int ReplicaNumber, string Host, int Port, bool UseTls, int ErrorsCount)
@@ -37,6 +39,7 @@ public interface IClickHouseAdapter
     Task<ClickHouseOperationResult> StartRestoreShardAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, BackupTargetEntity target, RestoreTableShardEntity shard, BackupTableEntity backupTable, BackupTableShardEntity backupShard, bool allowNonEmptyTables, IReadOnlyDictionary<string, JsonElement> settings, CancellationToken cancellationToken);
     Task<ClickHouseOperationStatus> GetOperationStatusAsync(ClickHouseClusterEntity cluster, string operationId, CancellationToken cancellationToken);
     Task<ClickHouseOperationStatus> GetOperationStatusAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string operationId, CancellationToken cancellationToken);
+    Task<ClickHouseDiscoveredOperation?> FindLatestBackupOperationForPathAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, BackupTargetEntity target, string storagePath, CancellationToken cancellationToken);
     Task KillBackupRestoreOperationAsync(ClickHouseClusterEntity cluster, string operationId, CancellationToken cancellationToken);
     Task KillBackupRestoreOperationAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string operationId, CancellationToken cancellationToken);
 }
@@ -244,6 +247,51 @@ public sealed class ClickHouseAdapter(ICredentialProtector protector, IEndpointR
 
         _logger.Information("ClickHouse operation {OperationId} status is {Status}.", operationId, rows[0][0]);
         return new ClickHouseOperationStatus(true, rows[0][0], rows[0].Count > 1 ? rows[0][1] : null);
+    }
+
+    public async Task<ClickHouseDiscoveredOperation?> FindLatestBackupOperationForPathAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, BackupTargetEntity target, string storagePath, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(storagePath))
+        {
+            return null;
+        }
+
+        var destination = await storageProviders.Get(target).CreateBackupDestinationAsync(target, storagePath, null, cancellationToken);
+        var exactNames = destination.OperationNames
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        var fragments = destination.OperationNameFragments
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        if (exactNames.Count == 0 && fragments.Count == 0)
+        {
+            return null;
+        }
+
+        var predicates = exactNames
+            .Select(name => $"name = {ClickHouseSql.Literal(name)}")
+            .Concat(fragments.Select(fragment => $"position(name, {ClickHouseSql.Literal(fragment)}) > 0"))
+            .ToList();
+        var predicate = string.Join(" OR ", predicates);
+        _logger.Information("Looking for ClickHouse backup operation on {Host}:{Port} for storage path {StoragePath}.", endpoint.Host, endpoint.Port, storagePath);
+        var rows = await QueryAsync(endpoint, cluster, $"""
+            SELECT id, status, error
+            FROM system.backups
+            WHERE {predicate}
+            ORDER BY multiIf(status = 'CREATING_BACKUP', 0, status = 'BACKUP_CREATED', 1, positionCaseInsensitive(status, 'FAILED') > 0, 3, 2), start_time DESC
+            LIMIT 1
+            """, cancellationToken, destination.SensitiveValues);
+        if (rows.Count == 0 || rows[0].Count < 2 || string.IsNullOrWhiteSpace(rows[0][0]))
+        {
+            _logger.Information("No ClickHouse backup operation was found on {Host}:{Port} for storage path {StoragePath}.", endpoint.Host, endpoint.Port, storagePath);
+            return null;
+        }
+
+        var operation = new ClickHouseDiscoveredOperation(rows[0][0], rows[0][1], rows[0].Count > 2 ? rows[0][2] : null);
+        _logger.Information("Recovered ClickHouse backup operation {OperationId} status {Status} for storage path {StoragePath}.", operation.OperationId, operation.Status, storagePath);
+        return operation;
     }
 
     public async Task KillBackupRestoreOperationAsync(ClickHouseClusterEntity cluster, string operationId, CancellationToken cancellationToken)
