@@ -176,8 +176,12 @@ public sealed class BackupApplicationService(
 
         if (includeTables)
         {
-            return (await query.OrderByDescending(x => x.CreatedAt).Take(200).ToListAsync(cancellationToken))
-                .Select(backup => BackupRestoreMapping.ToDto(backup))
+            var loadedBackups = await query.OrderByDescending(x => x.CreatedAt).Take(200).ToListAsync(cancellationToken);
+            var loadedChildBackupIdsByBackupId = await ChildBackupIdsByBackupIdAsync(loadedBackups.Select(x => x.Id).ToList(), cancellationToken);
+            return loadedBackups
+                .Select(backup => BackupRestoreMapping.ToDto(
+                    backup,
+                    childBackupIds: loadedChildBackupIdsByBackupId.TryGetValue(backup.Id, out var loadedChildBackupIds) ? loadedChildBackupIds : []))
                 .ToList();
         }
 
@@ -243,11 +247,13 @@ public sealed class BackupApplicationService(
         var relatedFullIdsByBackupId = relatedFullRows
             .GroupBy(x => x.BackupId)
             .ToDictionary(x => x.Key, x => (IReadOnlyList<Guid>)x.Select(row => row.RelatedFullBackupId).Distinct().OrderBy(id => id).ToList());
+        var childBackupIdsByBackupId = await ChildBackupIdsByBackupIdAsync(summaryIds, cancellationToken);
         return summaries
             .Select(x =>
             {
                 statsByBackupId.TryGetValue(x.Id, out var stats);
                 relatedFullIdsByBackupId.TryGetValue(x.Id, out var relatedFullBackupIds);
+                childBackupIdsByBackupId.TryGetValue(x.Id, out var childBackupIds);
                 return BackupRestoreMapping.ToSummaryDto(
                     x.Id,
                     x.TriggerType,
@@ -279,6 +285,7 @@ public sealed class BackupApplicationService(
                     stats?.TableCount ?? 0,
                     stats?.BackupSizeBytes,
                     relatedFullBackupIds ?? [],
+                    childBackupIds ?? [],
                     x.ClickHouseBackupSettingsJson);
             })
             .ToList();
@@ -287,7 +294,13 @@ public sealed class BackupApplicationService(
     {
         if (includeTables)
         {
-            return await LoadAsync(id, cancellationToken) is { } backup ? BackupRestoreMapping.ToDto(backup) : null;
+            if (await LoadAsync(id, cancellationToken) is not { } backup)
+            {
+                return null;
+            }
+
+            var includedChildBackupIds = await DependentBackupIdsAsync(id, cancellationToken);
+            return BackupRestoreMapping.ToDto(backup, childBackupIds: includedChildBackupIds);
         }
 
         var summary = await db.Backups
@@ -301,7 +314,8 @@ public sealed class BackupApplicationService(
         }
 
         var relatedFullBackupIds = await RelatedFullBackupIdsAsync(id, cancellationToken);
-        return BackupRestoreMapping.ToDto(summary.Backup, summary.TableCount, summary.BackupSizeBytes, relatedFullBackupIds, includeTables: false);
+        var childBackupIds = await DependentBackupIdsAsync(id, cancellationToken);
+        return BackupRestoreMapping.ToDto(summary.Backup, summary.TableCount, summary.BackupSizeBytes, relatedFullBackupIds, childBackupIds, includeTables: false);
     }
 
     public async Task<BackupDto?> PinAsync(Guid id, CancellationToken cancellationToken = default)
@@ -496,6 +510,7 @@ public sealed class BackupApplicationService(
 
     private sealed record BackupTableStats(Guid BackupId, int TableCount, long? BackupSizeBytes);
     private sealed record BackupRelatedFullRow(Guid BackupId, Guid RelatedFullBackupId);
+    private sealed record BackupChildRow(Guid ParentBackupId, Guid ChildBackupId);
     private async Task<(int Killed, IReadOnlyList<string> Failures)> KillBackupOperationsAsync(BackupEntity backup, CancellationToken cancellationToken)
     {
         if (backup.SourceCluster is null)
@@ -567,6 +582,28 @@ public sealed class BackupApplicationService(
             .Select(x => x.ParentFullBackupId!.Value)
             .ToListAsync(cancellationToken);
         return tableParents.Concat(shardParents).Distinct().OrderBy(x => x).ToList();
+    }
+    private async Task<IReadOnlyDictionary<Guid, IReadOnlyList<Guid>>> ChildBackupIdsByBackupIdAsync(IReadOnlyList<Guid> backupIds, CancellationToken cancellationToken)
+    {
+        if (backupIds.Count == 0)
+        {
+            return new Dictionary<Guid, IReadOnlyList<Guid>>();
+        }
+
+        var tableChildren = await db.BackupTables
+            .AsNoTracking()
+            .Where(x => x.ParentFullBackupId != null && backupIds.Contains(x.ParentFullBackupId.Value))
+            .Select(x => new BackupChildRow(x.ParentFullBackupId!.Value, x.BackupId))
+            .ToListAsync(cancellationToken);
+        var shardChildren = await db.BackupTableShards
+            .AsNoTracking()
+            .Where(x => x.BackupTable != null && x.ParentFullBackupId != null && backupIds.Contains(x.ParentFullBackupId.Value))
+            .Select(x => new BackupChildRow(x.ParentFullBackupId!.Value, x.BackupTable!.BackupId))
+            .ToListAsync(cancellationToken);
+        return tableChildren
+            .Concat(shardChildren)
+            .GroupBy(x => x.ParentBackupId)
+            .ToDictionary(x => x.Key, x => (IReadOnlyList<Guid>)x.Select(row => row.ChildBackupId).Distinct().OrderBy(id => id).ToList());
     }
     private Task<BackupEntity?> LoadAsync(Guid id, CancellationToken cancellationToken) =>
         db.Backups

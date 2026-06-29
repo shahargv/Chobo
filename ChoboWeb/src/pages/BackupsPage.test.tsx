@@ -186,6 +186,7 @@ describe("Backups destructive delete flow", () => {
 
     expect(host.textContent).toContain("Delete backup backup-delete-id");
     expect(host.textContent).toContain("This is destructive and cannot be undone.");
+    expect(host.textContent).toContain("Any associated child backups will also be deleted.");
     const confirmButton = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "Delete backup") as HTMLButtonElement | undefined;
     expect(confirmButton).toBeTruthy();
 
@@ -245,6 +246,7 @@ describe("Backups destructive delete flow", () => {
     });
 
     expect(host.textContent).toContain("Delete 2 backups");
+    expect(host.textContent).toContain("Any associated child backups will also be deleted.");
     expect(host.textContent).toContain("1 selected backup is pinned");
     const confirmButton = Array.from(host.querySelectorAll("button")).find((button) => button.textContent?.includes("Force delete backups")) as HTMLButtonElement | undefined;
     expect(confirmButton).toBeTruthy();
@@ -264,7 +266,7 @@ describe("Backups destructive delete flow", () => {
   });
 
   it("refreshes backup table details when the drawer refresh button is clicked", async () => {
-    const backup = baseBackup({ id: "backup-detail-id", status: "Running" });
+    const backup = baseBackup({ id: "backup-detail-id", status: "Running", childBackupIds: ["child-backup-id"] });
     const table = baseTable({ id: "table-detail-id", backupId: backup.id, table: "orders", shards: [baseShard({ id: "shard-detail-id", status: "Queued" })] });
     const backupApi = vi.fn(async (_id: string, options: { includeTables?: boolean } = {}) => options.includeTables ? { ...backup, tables: [table] } : backup);
     const api = {
@@ -302,6 +304,8 @@ describe("Backups destructive delete flow", () => {
     const completionBadge = host.querySelector(".backup-completion");
     expect(completionBadge?.textContent).toBe("0% (0/1 table-shards)");
     expect(completionBadge?.classList.contains("warn")).toBe(true);
+    expect(host.textContent).toContain("Child backups");
+    expect(host.textContent).toContain("child-backup-id");
     const refreshButton = Array.from(host.querySelectorAll("button")).find((button) => button.textContent?.includes("Refresh")) as HTMLButtonElement | undefined;
     expect(refreshButton).toBeTruthy();
 
@@ -421,6 +425,7 @@ function baseBackup(overrides: Partial<BackupDto> = {}): BackupDto {
     tableCount: overrides.tableCount ?? 1,
     backupSizeBytes: overrides.backupSizeBytes ?? 0,
     relatedFullBackupIds: overrides.relatedFullBackupIds ?? [],
+    childBackupIds: overrides.childBackupIds ?? [],
     tables: overrides.tables ?? []
   };
 }

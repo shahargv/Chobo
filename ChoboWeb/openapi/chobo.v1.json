@@ -3903,6 +3903,14 @@
             },
             "nullable": true
           },
+          "childBackupIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "nullable": true
+          },
           "tables": {
             "type": "array",
             "items": {

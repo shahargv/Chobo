@@ -155,7 +155,7 @@ public sealed class BackupsCommands : CliSubject
     private static string FormatProgress(BackupDto backup)
     {
         var builder = new StringBuilder();
-        builder.AppendLine($"Backup {backup.Id} {backup.Status} tables={backup.TableCount} size={FormatBytes(backup.BackupSizeBytes ?? CalculateBackupSizeBytes(backup.Tables))}{FormatRelatedFullBackups(backup)}");
+        builder.AppendLine($"Backup {backup.Id} {backup.Status} tables={backup.TableCount} size={FormatBytes(backup.BackupSizeBytes ?? CalculateBackupSizeBytes(backup.Tables))}{FormatRelatedFullBackups(backup)}{FormatChildBackups(backup)}");
         if (backup.ContentMode == BackupContentMode.SchemaOnly)
         {
             builder.AppendLine($"  schema-only backup captured {backup.TableCount} table schema{(backup.TableCount == 1 ? "" : "s")}; shard data backup was skipped.");
@@ -191,6 +191,12 @@ public sealed class BackupsCommands : CliSubject
             ? " relatedFullBackups=none"
             : $" relatedFullBackups={string.Join(",", backup.RelatedFullBackupIds)}";
     }
+
+    private static string FormatChildBackups(BackupDto backup) =>
+        backup.ChildBackupIds.Count == 0
+            ? " childBackups=none"
+            : $" childBackups={string.Join(",", backup.ChildBackupIds)}";
+
     private static long? CalculateBackupSizeBytes(IReadOnlyList<BackupTableDto> tables)
     {
         var sizes = tables.Select(x => x.BackupSizeBytes ?? CalculateTableSizeBytes(x)).Where(x => x.HasValue).ToList();

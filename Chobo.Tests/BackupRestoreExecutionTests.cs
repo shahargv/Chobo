@@ -5042,6 +5042,7 @@ public sealed class BackupRestoreExecutionTests
                     .Distinct()
                     .OrderBy(id => id)
                     .ToList(),
+                [],
                 backup.Tables.Select(table => new BackupTableDto(
                     table.Id,
                     table.BackupId,

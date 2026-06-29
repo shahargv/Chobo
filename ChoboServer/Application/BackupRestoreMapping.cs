@@ -6,7 +6,7 @@ namespace ChoboServer.Application;
 
 internal static class BackupRestoreMapping
 {
-    public static BackupDto ToDto(BackupEntity x, int? tableCount = null, long? backupSizeBytes = null, IReadOnlyList<Guid>? relatedFullBackupIds = null, bool includeTables = true) =>
+    public static BackupDto ToDto(BackupEntity x, int? tableCount = null, long? backupSizeBytes = null, IReadOnlyList<Guid>? relatedFullBackupIds = null, IReadOnlyList<Guid>? childBackupIds = null, bool includeTables = true) =>
         new(
             x.Id,
             x.TriggerType,
@@ -39,6 +39,7 @@ internal static class BackupRestoreMapping
             backupSizeBytes ?? CalculateBackupSizeBytes(x.Tables),
             ClickHouseAdvancedSettings.Deserialize(x.ClickHouseBackupSettingsJson, ClickHouseAdvancedSettingsKind.Backup),
             relatedFullBackupIds ?? CalculateRelatedFullBackupIds(x.Tables),
+            childBackupIds ?? [],
             includeTables ? x.Tables.OrderBy(t => t.Database).ThenBy(t => t.Table).Select(ToDto).ToList() : []);
 
 
@@ -73,6 +74,7 @@ internal static class BackupRestoreMapping
         int tableCount,
         long? backupSizeBytes,
         IReadOnlyList<Guid> relatedFullBackupIds,
+        IReadOnlyList<Guid> childBackupIds,
         string? clickHouseBackupSettingsJson = null) =>
         new(
             id,
@@ -106,6 +108,7 @@ internal static class BackupRestoreMapping
             backupSizeBytes,
             ClickHouseAdvancedSettings.Deserialize(clickHouseBackupSettingsJson, ClickHouseAdvancedSettingsKind.Backup),
             relatedFullBackupIds,
+            childBackupIds,
             []);
     private static IReadOnlyList<Guid> CalculateRelatedFullBackupIds(IEnumerable<BackupTableEntity> tables) =>
         tables.Select(x => x.ParentFullBackupId)
