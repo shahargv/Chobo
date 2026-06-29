@@ -51,7 +51,7 @@ public sealed class BackupExecutorBackgroundService(
             var db = scope.ServiceProvider.GetRequiredService<ChoboServer.Data.ChoboDbContext>();
             var activeQueueItems = await db.BackupRestoreQueueItems
                 .AsNoTracking()
-                .CountAsync(x => x.CompletedAt == null, stoppingToken);
+                .CountAsync(x => x.StartedAt != null && x.CompletedAt == null, stoppingToken);
             if (activeQueueItems < maxActiveQueueItems)
             {
                 return;
