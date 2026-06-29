@@ -14,7 +14,6 @@ public sealed class BackupRunnerService(
     ChoboDbContext db,
     IClickHouseAdapter clickHouse,
     IOptionsMonitor<ChoboBackupRestoreOptions> options,
-    BackupRestoreQueueApplicationService queue,
     BackupPreparationService preparation,
     IBackupStorageManifestService manifests,
     IAuditService audit,
@@ -67,7 +66,6 @@ public sealed class BackupRunnerService(
             await audit.RecordAsync("started", AuditEntityType.Backup, backup.Id.ToString(), new { backup.SourceClusterId, backup.TargetId });
 
             await preparation.PrepareQueueItemsAsync(backup.Id, cancellationToken);
-            await queue.ResetIncompleteBackupClaimsAsync(backup.Id, cancellationToken);
 
             if (backup.ContentMode == BackupContentMode.SchemaOnly)
             {
@@ -133,6 +131,18 @@ public sealed class BackupRunnerService(
     {
         if (backup.Status == BackupRunStatus.Running)
         {
+            var hasActiveClaim = await db.BackupRestoreQueueItems
+                .AsNoTracking()
+                .AnyAsync(x => x.Kind == BackupRestoreQueueKind.Backup &&
+                               x.OperationId == backup.Id &&
+                               x.StartedAt != null &&
+                               x.CompletedAt == null, cancellationToken);
+            if (hasActiveClaim)
+            {
+                _logger.Information("Backup run {BackupId} is already active according to queue claims; duplicate execution request skipped.", backup.Id);
+                return false;
+            }
+
             return true;
         }
 

@@ -1,4 +1,5 @@
 using Chobo.Contracts;
+using ChoboServer.Application;
 using ChoboServer.Data;
 using ChoboServer.Services;
 using Microsoft.EntityFrameworkCore;
@@ -21,10 +22,16 @@ public sealed class BackupRestoreResumeBackgroundService(
             var audit = scope.ServiceProvider.GetRequiredService<IAuditService>();
             var backups = await db.Backups
                 .Where(x => x.Status == BackupRunStatus.Queued || x.Status == BackupRunStatus.Running)
-                .Select(x => new { x.Id, x.ContentMode })
+                .Select(x => new { x.Id, x.ContentMode, x.Status })
                 .ToListAsync(stoppingToken);
+            var queueService = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
             foreach (var backup in backups)
             {
+                if (backup.Status == BackupRunStatus.Running)
+                {
+                    await queueService.ResetIncompleteBackupClaimsAsync(backup.Id, stoppingToken);
+                }
+
                 await queues.QueueBackupAsync(backup.Id, backup.ContentMode, stoppingToken);
                 await audit.RecordAsync("resumed", AuditEntityType.Backup, backup.Id.ToString(), new { reason = "server-startup" });
             }
