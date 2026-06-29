@@ -37,8 +37,8 @@ public interface IClickHouseAdapter
     Task<ClickHouseOperationResult> StartRestoreShardAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, BackupTargetEntity target, RestoreTableShardEntity shard, BackupTableEntity backupTable, BackupTableShardEntity backupShard, bool allowNonEmptyTables, IReadOnlyDictionary<string, JsonElement> settings, CancellationToken cancellationToken);
     Task<ClickHouseOperationStatus> GetOperationStatusAsync(ClickHouseClusterEntity cluster, string operationId, CancellationToken cancellationToken);
     Task<ClickHouseOperationStatus> GetOperationStatusAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string operationId, CancellationToken cancellationToken);
-    Task KillQueryAsync(ClickHouseClusterEntity cluster, string queryId, CancellationToken cancellationToken);
-    Task KillQueryAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string queryId, CancellationToken cancellationToken);
+    Task KillBackupRestoreOperationAsync(ClickHouseClusterEntity cluster, string operationId, CancellationToken cancellationToken);
+    Task KillBackupRestoreOperationAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string operationId, CancellationToken cancellationToken);
 }
 
 public sealed class ClickHouseAdapter(ICredentialProtector protector, IEndpointRewriteService endpointRewrites, IBackupStorageProviderRegistry storageProviders, Serilog.ILogger logger) : IClickHouseAdapter
@@ -246,21 +246,29 @@ public sealed class ClickHouseAdapter(ICredentialProtector protector, IEndpointR
         return new ClickHouseOperationStatus(true, rows[0][0], rows[0].Count > 1 ? rows[0][1] : null);
     }
 
-    public async Task KillQueryAsync(ClickHouseClusterEntity cluster, string queryId, CancellationToken cancellationToken)
+    public async Task KillBackupRestoreOperationAsync(ClickHouseClusterEntity cluster, string operationId, CancellationToken cancellationToken)
     {
         var endpoint = ToEndpoint(FirstAccessNode(cluster));
-        await KillQueryAsync(endpoint, cluster, queryId, cancellationToken);
+        await KillBackupRestoreOperationAsync(endpoint, cluster, operationId, cancellationToken);
     }
 
-    public async Task KillQueryAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string queryId, CancellationToken cancellationToken)
+    public async Task KillBackupRestoreOperationAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string operationId, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(queryId))
+        if (string.IsNullOrWhiteSpace(operationId))
         {
             return;
         }
 
-        _logger.Information("Requesting ClickHouse query cancellation for {QueryId} on {Host}:{Port} for cluster {ClusterId}.", queryId, endpoint.Host, endpoint.Port, cluster.Id);
-        await QueryAsync(endpoint, cluster, $"KILL QUERY WHERE query_id = {ClickHouseSql.Literal(queryId)} ASYNC", cancellationToken);
+        _logger.Information("Requesting ClickHouse backup/restore cancellation for operation {OperationId} on {Host}:{Port} for cluster {ClusterId}.", operationId, endpoint.Host, endpoint.Port, cluster.Id);
+        await QueryAsync(endpoint, cluster, $"""
+            KILL QUERY
+            WHERE query_id = {ClickHouseSql.Literal(operationId)}
+              AND (
+                positionCaseInsensitive(query, 'BACKUP TABLE') > 0 OR
+                positionCaseInsensitive(query, 'RESTORE TABLE') > 0
+              )
+            ASYNC
+            """, cancellationToken);
     }
 
     private async Task<ClickHouseOperationResult> StartOperationAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string sql, IReadOnlyList<string>? sensitiveValues, CancellationToken cancellationToken)

@@ -3,8 +3,10 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Chobo.Contracts;
 using ChoboServer.Data;
+using ChoboServer.Options;
 using ChoboServer.Services;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace ChoboServer.Application;
 
@@ -14,6 +16,7 @@ public sealed class BackupApplicationService(
     BackupRestoreQueueApplicationService queueItems,
     BackupPreparationService preparation,
     IClickHouseAdapter clickHouse,
+    IOptionsMonitor<ChoboBackupRestoreOptions> options,
     IAuditService audit,
     ActorContext actor,
     Serilog.ILogger logger)
@@ -503,27 +506,33 @@ public sealed class BackupApplicationService(
         var killed = 0;
         var failures = new List<string>();
         var operations = backup.Tables
-            .SelectMany(table => table.Shards
-                .Where(shard => !string.IsNullOrWhiteSpace(shard.ClickHouseOperationId))
-                .Select(shard => new { Endpoint = (ClickHouseNodeEndpoint?)new ClickHouseNodeEndpoint(shard.Host, shard.Port, shard.UseTls), OperationId = shard.ClickHouseOperationId! })
-                .Concat(string.IsNullOrWhiteSpace(table.ClickHouseOperationId)
-                    ? []
-                    : [new { Endpoint = (ClickHouseNodeEndpoint?)null, OperationId = table.ClickHouseOperationId! }]))
-            .DistinctBy(x => x.OperationId)
+            .SelectMany(table =>
+            {
+                var tableEndpoint = table.Shards
+                    .OrderBy(shard => shard.SourceShardNumber)
+                    .Select(shard => (ClickHouseNodeEndpoint?)new ClickHouseNodeEndpoint(shard.Host, shard.Port, shard.UseTls))
+                    .FirstOrDefault();
+                return table.Shards
+                    .Where(shard => !string.IsNullOrWhiteSpace(shard.ClickHouseOperationId))
+                    .Select(shard => new { Endpoint = (ClickHouseNodeEndpoint?)new ClickHouseNodeEndpoint(shard.Host, shard.Port, shard.UseTls), OperationId = shard.ClickHouseOperationId! })
+                    .Concat(string.IsNullOrWhiteSpace(table.ClickHouseOperationId)
+                        ? []
+                        : [new { Endpoint = tableEndpoint, OperationId = table.ClickHouseOperationId! }]);
+            })
+            .DistinctBy(x => (EndpointKey(x.Endpoint), x.OperationId))
             .ToList();
 
         foreach (var operation in operations)
         {
             try
             {
-                if (operation.Endpoint is { } endpoint)
+                await KillBackupOperationOnceAsync(backup.SourceCluster, operation.Endpoint, operation.OperationId, cancellationToken);
+                var retryDelay = options.CurrentValue.CancelKillRetryDelay;
+                if (retryDelay > TimeSpan.Zero)
                 {
-                    await clickHouse.KillQueryAsync(endpoint, backup.SourceCluster, operation.OperationId, cancellationToken);
+                    await Task.Delay(retryDelay, cancellationToken);
                 }
-                else
-                {
-                    await clickHouse.KillQueryAsync(backup.SourceCluster, operation.OperationId, cancellationToken);
-                }
+                await KillBackupOperationOnceAsync(backup.SourceCluster, operation.Endpoint, operation.OperationId, cancellationToken);
 
                 killed++;
             }
@@ -536,6 +545,14 @@ public sealed class BackupApplicationService(
 
         return (killed, failures);
     }
+
+    private Task KillBackupOperationOnceAsync(ClickHouseClusterEntity cluster, ClickHouseNodeEndpoint? endpoint, string operationId, CancellationToken cancellationToken) =>
+        endpoint is { } concreteEndpoint
+            ? clickHouse.KillBackupRestoreOperationAsync(concreteEndpoint, cluster, operationId, cancellationToken)
+            : clickHouse.KillBackupRestoreOperationAsync(cluster, operationId, cancellationToken);
+
+    private static string EndpointKey(ClickHouseNodeEndpoint? endpoint) =>
+        endpoint is null ? "default" : $"{endpoint.Host}:{endpoint.Port}:{endpoint.UseTls}";
 
     private async Task<IReadOnlyList<Guid>> RelatedFullBackupIdsAsync(Guid backupId, CancellationToken cancellationToken)
     {

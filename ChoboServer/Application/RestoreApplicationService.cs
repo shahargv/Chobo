@@ -5,8 +5,10 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Chobo.Contracts;
 using ChoboServer.Data;
+using ChoboServer.Options;
 using ChoboServer.Services;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Serilog.Context;
 
 namespace ChoboServer.Application;
@@ -16,6 +18,7 @@ public sealed class RestoreApplicationService(
     IBackupRestoreQueues queues,
     BackupRestoreQueueApplicationService queueItems,
     IClickHouseAdapter clickHouse,
+    IOptionsMonitor<ChoboBackupRestoreOptions> options,
     IAuditService audit,
     ActorContext actor,
     Serilog.ILogger logger)
@@ -324,26 +327,34 @@ public sealed class RestoreApplicationService(
         var killed = 0;
         var failures = new List<string>();
         var operations = restore.Tables
-            .SelectMany(table => table.Shards.Count == 0
-                ? string.IsNullOrWhiteSpace(table.ClickHouseOperationId) ? [] : [new { Endpoint = (ClickHouseNodeEndpoint?)null, OperationId = table.ClickHouseOperationId! }]
-                : table.Shards
+            .SelectMany(table =>
+            {
+                var tableEndpoint = table.Shards
+                    .OrderBy(shard => shard.TargetShardNumber ?? int.MaxValue)
+                    .ThenBy(shard => shard.SourceShardNumber)
+                    .Select(shard => (ClickHouseNodeEndpoint?)new ClickHouseNodeEndpoint(shard.TargetHost, shard.TargetPort, shard.TargetUseTls))
+                    .FirstOrDefault();
+                return table.Shards
                     .Where(shard => !string.IsNullOrWhiteSpace(shard.ClickHouseOperationId))
-                    .Select(shard => new { Endpoint = (ClickHouseNodeEndpoint?)new ClickHouseNodeEndpoint(shard.TargetHost, shard.TargetPort, shard.TargetUseTls), OperationId = shard.ClickHouseOperationId! }))
-            .DistinctBy(x => x.OperationId)
+                    .Select(shard => new { Endpoint = (ClickHouseNodeEndpoint?)new ClickHouseNodeEndpoint(shard.TargetHost, shard.TargetPort, shard.TargetUseTls), OperationId = shard.ClickHouseOperationId! })
+                    .Concat(string.IsNullOrWhiteSpace(table.ClickHouseOperationId)
+                        ? []
+                        : [new { Endpoint = tableEndpoint, OperationId = table.ClickHouseOperationId! }]);
+            })
+            .DistinctBy(x => (EndpointKey(x.Endpoint), x.OperationId))
             .ToList();
 
         foreach (var operation in operations)
         {
             try
             {
-                if (operation.Endpoint is { } endpoint)
+                await KillRestoreOperationOnceAsync(restore.TargetCluster, operation.Endpoint, operation.OperationId, cancellationToken);
+                var retryDelay = options.CurrentValue.CancelKillRetryDelay;
+                if (retryDelay > TimeSpan.Zero)
                 {
-                    await clickHouse.KillQueryAsync(endpoint, restore.TargetCluster, operation.OperationId, cancellationToken);
+                    await Task.Delay(retryDelay, cancellationToken);
                 }
-                else
-                {
-                    await clickHouse.KillQueryAsync(restore.TargetCluster, operation.OperationId, cancellationToken);
-                }
+                await KillRestoreOperationOnceAsync(restore.TargetCluster, operation.Endpoint, operation.OperationId, cancellationToken);
 
                 killed++;
             }
@@ -356,6 +367,15 @@ public sealed class RestoreApplicationService(
 
         return (killed, failures);
     }
+
+    private Task KillRestoreOperationOnceAsync(ClickHouseClusterEntity cluster, ClickHouseNodeEndpoint? endpoint, string operationId, CancellationToken cancellationToken) =>
+        endpoint is { } concreteEndpoint
+            ? clickHouse.KillBackupRestoreOperationAsync(concreteEndpoint, cluster, operationId, cancellationToken)
+            : clickHouse.KillBackupRestoreOperationAsync(cluster, operationId, cancellationToken);
+
+    private static string EndpointKey(ClickHouseNodeEndpoint? endpoint) =>
+        endpoint is null ? "default" : $"{endpoint.Host}:{endpoint.Port}:{endpoint.UseTls}";
+
     private Task<RestoreEntity?> LoadAsync(Guid id, CancellationToken cancellationToken) =>
         db.Restores.Include(x => x.Tables).ThenInclude(x => x.Shards).FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
 
