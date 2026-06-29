@@ -12,6 +12,7 @@ public sealed class ChoboBackupRestoreOptions
     public TimeSpan ManifestWriteTimeout { get; set; } = TimeSpan.FromSeconds(90);
     public int TransientShardMaxRetries { get; set; } = 3;
     public TimeSpan TransientShardRetryDelay { get; set; } = TimeSpan.FromMinutes(1);
+    public TimeSpan BackupSubmissionStatusCheckDelay { get; set; } = TimeSpan.FromSeconds(10);
     public TimeSpan CancelKillRetryDelay { get; set; } = TimeSpan.FromSeconds(5);
     public int DefaultMaxAgeHoursForBaseBackup { get; set; } = 168;
 }

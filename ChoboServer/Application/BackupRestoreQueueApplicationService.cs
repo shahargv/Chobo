@@ -144,9 +144,49 @@ public sealed class BackupRestoreQueueApplicationService(
             try
             {
                 var now = DateTimeOffset.UtcNow;
-                var claimed = await db.BackupRestoreQueueItems
-                    .Where(x => x.Id == item.Id && x.StartedAt == null && x.CompletedAt == null)
-                    .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.StartedAt, now), cancellationToken);
+                var destinationPath = NormalizeDestinationPath(shard.StoragePath);
+                var claimQuery = db.BackupRestoreQueueItems
+                    .Where(x => x.Id == item.Id && x.StartedAt == null && x.CompletedAt == null);
+                if (destinationPath is not null)
+                {
+                    var backupTargetId = backup.TargetId;
+                    claimQuery = claimQuery.Where(x =>
+                        !db.BackupRestoreQueueItems
+                            .Where(active => active.Kind == BackupRestoreQueueKind.Backup &&
+                                             active.StartedAt != null &&
+                                             active.CompletedAt == null &&
+                                             active.ShardId != item.ShardId)
+                            .Join(db.BackupTableShards,
+                                active => active.ShardId,
+                                activeShard => activeShard.Id,
+                                (_, activeShard) => activeShard)
+                            .Join(db.BackupTables,
+                                activeShard => activeShard.BackupTableId,
+                                activeTable => activeTable.Id,
+                                (activeShard, activeTable) => new { activeShard, activeTable })
+                            .Join(db.Backups,
+                                active => active.activeTable.BackupId,
+                                activeBackup => activeBackup.Id,
+                                (active, activeBackup) => new { active.activeShard, activeBackup })
+                            .Any(active => active.activeBackup.TargetId == backupTargetId && active.activeShard.StoragePath.Trim() == destinationPath) &&
+                        !db.BackupTableShards
+                            .Where(activeShard => activeShard.Id != item.ShardId &&
+                                                  (activeShard.Status == BackupTableStatus.Queued || activeShard.Status == BackupTableStatus.Running) &&
+                                                  activeShard.ClickHouseOperationId != null &&
+                                                  activeShard.ClickHouseOperationId.Trim() != "" &&
+                                                  activeShard.StoragePath.Trim() == destinationPath)
+                            .Join(db.BackupTables,
+                                activeShard => activeShard.BackupTableId,
+                                activeTable => activeTable.Id,
+                                (activeShard, activeTable) => new { activeShard, activeTable })
+                            .Join(db.Backups,
+                                active => active.activeTable.BackupId,
+                                activeBackup => activeBackup.Id,
+                                (active, activeBackup) => new { active.activeShard, activeBackup })
+                            .Any(active => active.activeBackup.TargetId == backupTargetId));
+                }
+
+                var claimed = await claimQuery.ExecuteUpdateAsync(setters => setters.SetProperty(x => x.StartedAt, now), cancellationToken);
                 if (claimed == 0)
                 {
                     concurrency.ReleaseQueueItem(item.Kind, item.ShardId);
@@ -617,6 +657,9 @@ public sealed class BackupRestoreQueueApplicationService(
         }
         return Math.Max(1, cluster.ShardMaxDopDefault);
     }
+
+    private static string? NormalizeDestinationPath(string? storagePath) =>
+        string.IsNullOrWhiteSpace(storagePath) ? null : storagePath.Trim();
 
     private static IReadOnlyList<ClusterNodeMaxDopOverrideDto> DeserializeNodeOverrides(string json)
     {

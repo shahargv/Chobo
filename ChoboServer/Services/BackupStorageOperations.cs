@@ -41,7 +41,7 @@ public interface IBackupStorageProviderRegistry
 
 public sealed record BackupStorageObjectInfo(string Path, long SizeBytes);
 
-public sealed record ClickHouseStorageDestination(string Expression, IReadOnlyList<(string Name, string Value)> Settings, IReadOnlyList<string> SensitiveValues);
+public sealed record ClickHouseStorageDestination(string Expression, IReadOnlyList<(string Name, string Value)> Settings, IReadOnlyList<string> SensitiveValues, IReadOnlyList<string> OperationNames, IReadOnlyList<string> OperationNameFragments);
 
 public sealed class BackupStorageProviderRegistry(IEnumerable<IBackupStorageProvider> providers) : IBackupStorageProviderRegistry
 {
@@ -139,17 +139,20 @@ public sealed class S3StorageProvider(
     public async Task<ClickHouseStorageDestination> CreateBackupDestinationAsync(BackupTargetEntity target, string storagePath, string? baseBackupStoragePath, CancellationToken cancellationToken = default)
     {
         var secrets = await DecryptSecretsAsync(target, cancellationToken);
-        var expression = ClickHouseSql.S3(S3Endpoint(target, storagePath), secrets.AccessKey, secrets.SecretKey);
+        var endpoint = S3Endpoint(target, storagePath);
+        var expression = ClickHouseSql.S3(endpoint, secrets.AccessKey, secrets.SecretKey);
         var settings = string.IsNullOrWhiteSpace(baseBackupStoragePath)
             ? []
             : new[] { ("base_backup", ClickHouseSql.S3(S3Endpoint(target, baseBackupStoragePath), secrets.AccessKey, secrets.SecretKey)) };
-        return new ClickHouseStorageDestination(expression, settings, [secrets.AccessKey, secrets.SecretKey]);
+        return new ClickHouseStorageDestination(expression, settings, [secrets.AccessKey, secrets.SecretKey], [expression, endpoint], DestinationFragments(endpoint));
     }
 
     public async Task<ClickHouseStorageDestination> CreateRestoreDestinationAsync(BackupTargetEntity target, string storagePath, CancellationToken cancellationToken = default)
     {
         var secrets = await DecryptSecretsAsync(target, cancellationToken);
-        return new ClickHouseStorageDestination(ClickHouseSql.S3(S3Endpoint(target, storagePath), secrets.AccessKey, secrets.SecretKey), [], [secrets.AccessKey, secrets.SecretKey]);
+        var endpoint = S3Endpoint(target, storagePath);
+        var expression = ClickHouseSql.S3(endpoint, secrets.AccessKey, secrets.SecretKey);
+        return new ClickHouseStorageDestination(expression, [], [secrets.AccessKey, secrets.SecretKey], [expression, endpoint], DestinationFragments(endpoint));
     }
 
     public async Task DeleteDirectoryAsync(BackupTargetEntity target, string directoryPath, CancellationToken cancellationToken = default)
@@ -258,6 +261,17 @@ public sealed class S3StorageProvider(
 
             return new StorageConnectionTestResult(target.Id, target.Type, false, ex.Message);
         }
+    }
+
+    private static IReadOnlyList<string> DestinationFragments(string endpoint)
+    {
+        return new[]
+            {
+                $"{endpoint}'"
+            }
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
     }
 
     private string S3Endpoint(BackupTargetEntity target, string path) =>

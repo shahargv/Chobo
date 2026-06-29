@@ -551,6 +551,7 @@ public sealed class BackupRunnerService(
 
         var endpoint = new ClickHouseNodeEndpoint(shard.Host, shard.Port, shard.UseTls);
         var nodeReserved = false;
+        var backupSubmissionAttempted = false;
         try
         {
             if (string.IsNullOrWhiteSpace(shard.ClickHouseOperationId) && IsReplicatedMergeTreeEngine(table.Engine))
@@ -637,6 +638,7 @@ public sealed class BackupRunnerService(
 
             var baseBackupPath = await GetParentShardPathAsync(scopedDb, shard.ParentFullBackupTableShardId, cancellationToken);
             var settings = ClickHouseAdvancedSettings.Deserialize(backup.ClickHouseBackupSettingsJson, ClickHouseAdvancedSettingsKind.Backup);
+            backupSubmissionAttempted = true;
             var operation = await scopedClickHouse.StartBackupShardAsync(endpoint, backup.SourceCluster!, backup.Target!, table, shard, baseBackupPath, settings, cancellationToken);
             shard.ClickHouseOperationId = operation.OperationId;
             shard.ClickHouseStatus = operation.Status;
@@ -675,6 +677,25 @@ public sealed class BackupRunnerService(
                 return BackupShardRunResult.Completed;
             }
 
+            if (backupSubmissionAttempted && string.IsNullOrWhiteSpace(shard.ClickHouseOperationId) && IsTransientShardFailure(ex, cancellationToken))
+            {
+                var recoveryResult = await TryRecoverUnknownSubmittedBackupShardAsync(scopedDb, scopedClickHouse, scopedAudit, scopedQueue, scopedStorage, backup, table, shard, endpoint, scopedOptions.CurrentValue.BackupSubmissionStatusCheckDelay, scopedOptions.CurrentValue.PollInterval, scopedOptions.CurrentValue.TransientShardRetryDelay, scopedOptions.CurrentValue.TransientShardMaxRetries, retryCounts, CancellationToken.None);
+                if (recoveryResult is not null)
+                {
+                    return recoveryResult.Value;
+                }
+
+                var error = $"Backup submission to ClickHouse failed before Chobo received an operation id. Chobo waited {scopedOptions.CurrentValue.BackupSubmissionStatusCheckDelay} and did not find a matching ClickHouse backup operation for this destination, so the shard will not be retried automatically because retrying could start a duplicate backup. Original error: {ex.Message}";
+                _logger.Error(ex, "Backup table {BackupTableId} {Database}.{Table} shard {ShardNumber} submission outcome is unknown and no matching ClickHouse operation was found; failing without retry to avoid duplicate destination work.", table.Id, table.Database, table.Table, shard.SourceShardNumber);
+                shard.Status = BackupTableStatus.Failed;
+                shard.Error = error;
+                shard.CompletedAt = DateTimeOffset.UtcNow;
+                await scopedDb.SaveChangesAsync(CancellationToken.None);
+                await scopedAudit.RecordAsync("shard-failed", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { error, sourceShard = shard.SourceShardNumber, clickHouseOperationId = shard.ClickHouseOperationId, reason = "unknown-submission-outcome" });
+                await scopedQueue.MarkCompletedAsync(BackupRestoreQueueKind.Backup, shard.Id, CancellationToken.None);
+                return BackupShardRunResult.Completed;
+            }
+
             var maxRetries = Math.Max(0, scopedOptions.CurrentValue.TransientShardMaxRetries);
             var attempt = retryCounts.AddOrUpdate(shard.Id, 1, (_, current) => current + 1);
             if (attempt <= maxRetries && IsTransientShardFailure(ex, cancellationToken))
@@ -699,6 +720,115 @@ public sealed class BackupRunnerService(
             shard.CompletedAt = DateTimeOffset.UtcNow;
             await scopedDb.SaveChangesAsync(CancellationToken.None);
             await scopedAudit.RecordAsync("shard-failed", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { error = ex.Message, sourceShard = shard.SourceShardNumber, clickHouseOperationId = shard.ClickHouseOperationId });
+            await scopedQueue.MarkCompletedAsync(BackupRestoreQueueKind.Backup, shard.Id, CancellationToken.None);
+            return BackupShardRunResult.Completed;
+        }
+    }
+
+    private async Task<BackupShardRunResult?> TryRecoverUnknownSubmittedBackupShardAsync(
+        ChoboDbContext scopedDb,
+        IClickHouseAdapter scopedClickHouse,
+        IAuditService scopedAudit,
+        BackupRestoreQueueApplicationService scopedQueue,
+        IBackupStorageOperations scopedStorage,
+        BackupEntity backup,
+        BackupTableEntity table,
+        BackupTableShardEntity shard,
+        ClickHouseNodeEndpoint endpoint,
+        TimeSpan statusCheckDelay,
+        TimeSpan pollInterval,
+        TimeSpan retryDelay,
+        int maxRetries,
+        ConcurrentDictionary<Guid, int> retryCounts,
+        CancellationToken cancellationToken)
+    {
+        var delay = statusCheckDelay < TimeSpan.Zero ? TimeSpan.Zero : statusCheckDelay;
+        if (delay > TimeSpan.Zero)
+        {
+            await Task.Delay(delay, cancellationToken);
+        }
+
+        ClickHouseDiscoveredOperation? discovered;
+        try
+        {
+            discovered = await scopedClickHouse.FindLatestBackupOperationForPathAsync(endpoint, backup.SourceCluster!, backup.Target!, shard.StoragePath, cancellationToken);
+        }
+        catch (Exception lookupEx)
+        {
+            _logger.Warning(lookupEx, "Could not check ClickHouse backup status for backup table {BackupTableId} shard {BackupShardId} after uncertain submission failure.", table.Id, shard.Id);
+            await scopedAudit.RecordAsync("clickhouse-operation-recovery-check-failed", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { error = lookupEx.Message, sourceShard = shard.SourceShardNumber, shard.StoragePath });
+            return null;
+        }
+
+        if (discovered is null)
+        {
+            await scopedAudit.RecordAsync("clickhouse-operation-recovery-not-found", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { sourceShard = shard.SourceShardNumber, shard.StoragePath });
+            return null;
+        }
+
+        shard.ClickHouseOperationId = discovered.OperationId;
+        shard.ClickHouseStatus = discovered.Status;
+        table.ClickHouseOperationId ??= discovered.OperationId;
+        table.ClickHouseStatus = discovered.Status;
+        await scopedDb.SaveChangesAsync(cancellationToken);
+        await scopedAudit.RecordAsync("clickhouse-operation-recovered", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { clickHouseOperationId = discovered.OperationId, discovered.Status, sourceShard = shard.SourceShardNumber, shard.StoragePath });
+
+        try
+        {
+            var finalClickHouseStatus = await PollBackupShardAsync(scopedDb, scopedClickHouse, endpoint, backup.SourceCluster!, backup.Id, shard, new ClickHouseOperationStatus(true, discovered.Status, discovered.Error), pollInterval, cancellationToken);
+            if (finalClickHouseStatus is null || await ReloadShardAndStopIfCanceledAsync(scopedDb, backup, table, shard, cancellationToken))
+            {
+                await scopedQueue.ReleaseStartedAsync(BackupRestoreQueueKind.Backup, shard.Id, cancellationToken);
+                return BackupShardRunResult.Completed;
+            }
+
+            var backupSizeBytes = await MeasureBackupPathAsync(scopedStorage, backup.Target!, shard.StoragePath, cancellationToken);
+            if (await ReloadShardAndStopIfCanceledAsync(scopedDb, backup, table, shard, cancellationToken))
+            {
+                await scopedQueue.ReleaseStartedAsync(BackupRestoreQueueKind.Backup, shard.Id, cancellationToken);
+                return BackupShardRunResult.Completed;
+            }
+
+            shard.Status = BackupTableStatus.Succeeded;
+            shard.ClickHouseStatus = finalClickHouseStatus;
+            shard.Error = null;
+            shard.CompletedAt = DateTimeOffset.UtcNow;
+            shard.BackupSizeBytes = backupSizeBytes;
+            await scopedDb.SaveChangesAsync(cancellationToken);
+            await scopedAudit.RecordAsync("shard-succeeded", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { table.Database, table.Table, sourceShard = shard.SourceShardNumber, clickHouseOperationId = shard.ClickHouseOperationId, shard.ClickHouseStatus, shard.BackupSizeBytes, recovered = true });
+            await scopedQueue.MarkCompletedAsync(BackupRestoreQueueKind.Backup, shard.Id, cancellationToken);
+            return BackupShardRunResult.Completed;
+        }
+        catch (Exception recoveryEx)
+        {
+            if (await ReloadShardAndStopIfCanceledAsync(scopedDb, backup, table, shard, CancellationToken.None))
+            {
+                await scopedQueue.ReleaseStartedAsync(BackupRestoreQueueKind.Backup, shard.Id, CancellationToken.None);
+                return BackupShardRunResult.Completed;
+            }
+
+            var attempt = retryCounts.AddOrUpdate(shard.Id, 1, (_, current) => current + 1);
+            if (attempt <= Math.Max(0, maxRetries) && IsTransientShardFailure(recoveryEx, cancellationToken))
+            {
+                var effectiveRetryDelay = retryDelay <= TimeSpan.Zero ? TimeSpan.FromMinutes(1) : retryDelay;
+                _logger.Warning(recoveryEx, "Recovered ClickHouse backup operation {OperationId} for table {BackupTableId} shard {BackupShardId} hit a transient error; retry {RetryAttempt}/{MaxRetries} will resume the recovered operation after {RetryDelay}.", shard.ClickHouseOperationId, table.Id, shard.Id, attempt, maxRetries, effectiveRetryDelay);
+                shard.Status = BackupTableStatus.Queued;
+                shard.Error = recoveryEx.Message;
+                shard.CompletedAt = null;
+                shard.StartedAt = null;
+                await scopedDb.SaveChangesAsync(CancellationToken.None);
+                await scopedAudit.RecordAsync("shard-retry-scheduled", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { error = recoveryEx.Message, sourceShard = shard.SourceShardNumber, retryAttempt = attempt, maxRetries, retryDelaySeconds = effectiveRetryDelay.TotalSeconds, clickHouseOperationId = shard.ClickHouseOperationId, recovered = true });
+                await Task.Delay(effectiveRetryDelay, CancellationToken.None);
+                await scopedQueue.ReleaseStartedAsync(BackupRestoreQueueKind.Backup, shard.Id, CancellationToken.None);
+                return BackupShardRunResult.RetryLater;
+            }
+
+            _logger.Error(recoveryEx, "Recovered ClickHouse backup operation {OperationId} for table {BackupTableId} shard {BackupShardId} failed while polling.", shard.ClickHouseOperationId, table.Id, shard.Id);
+            shard.Status = BackupTableStatus.Failed;
+            shard.Error = recoveryEx.Message;
+            shard.CompletedAt = DateTimeOffset.UtcNow;
+            await scopedDb.SaveChangesAsync(CancellationToken.None);
+            await scopedAudit.RecordAsync("shard-failed", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { error = recoveryEx.Message, sourceShard = shard.SourceShardNumber, clickHouseOperationId = shard.ClickHouseOperationId, recovered = true });
             await scopedQueue.MarkCompletedAsync(BackupRestoreQueueKind.Backup, shard.Id, CancellationToken.None);
             return BackupShardRunResult.Completed;
         }
