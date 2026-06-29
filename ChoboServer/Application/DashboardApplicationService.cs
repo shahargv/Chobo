@@ -1,5 +1,7 @@
+using System.Text.Json;
 using Chobo.Contracts;
 using ChoboServer.Data;
+using ChoboServer.Services;
 using Microsoft.EntityFrameworkCore;
 
 namespace ChoboServer.Application;
@@ -117,6 +119,63 @@ public sealed class DashboardApplicationService(ChoboDbContext db, TimeProvider 
         return new DashboardDto(generatedAt, boundedHours, queue, runningBackupDtos, scheduleSummaries, futureSchedules);
     }
 
+    public async Task<IReadOnlyList<DashboardMissingBackupDto>> GetMissingBackupsAsync(int hours = 24, CancellationToken cancellationToken = default)
+    {
+        var generatedAt = timeProvider.GetUtcNow();
+        var boundedHours = Math.Clamp(hours, 1, 720);
+        var cutoff = generatedAt.AddHours(-boundedHours);
+        var backupScheduleEntityType = AuditEntityTypes.ToStorageValue(AuditEntityType.BackupSchedule);
+
+        var rows = await db.AuditEntries
+            .AsNoTracking()
+            .Where(x => x.Action == "scheduled-backup-missed" &&
+                        x.EntityType == backupScheduleEntityType &&
+                        x.Timestamp >= cutoff)
+            .OrderByDescending(x => x.Timestamp)
+            .ThenByDescending(x => x.Id)
+            .Select(x => new MissingBackupAuditRow(x.Id, x.EntityId, x.Timestamp, x.Details))
+            .ToListAsync(cancellationToken);
+
+        var scheduleIds = rows
+            .Select(x => TryParseGuid(x.EntityId))
+            .OfType<Guid>()
+            .Distinct()
+            .ToList();
+
+        var schedules = scheduleIds.Count == 0
+            ? []
+            : await db.BackupSchedules
+                .AsNoTracking()
+                .Where(x => scheduleIds.Contains(x.Id))
+                .Select(x => new MissingBackupScheduleRow(
+                    x.Id,
+                    x.Name,
+                    x.PolicyId,
+                    x.Policy == null ? null : x.Policy.Name,
+                    x.BackupType))
+                .ToListAsync(cancellationToken);
+        var schedulesById = schedules.ToDictionary(x => x.Id);
+
+        return rows.Select(row =>
+        {
+            var scheduleId = TryParseGuid(row.EntityId);
+            schedulesById.TryGetValue(scheduleId ?? Guid.Empty, out var schedule);
+            using var details = TryParseJson(row.Details);
+            return new DashboardMissingBackupDto(
+                row.Id,
+                scheduleId,
+                schedule?.Name,
+                schedule?.PolicyId,
+                schedule?.PolicyName,
+                schedule?.BackupType,
+                ReadDateTimeOffset(details?.RootElement, "plannedRunAt"),
+                ReadDateTimeOffset(details?.RootElement, "detectedAt"),
+                row.Timestamp,
+                ReadDouble(details?.RootElement, "latenessSeconds"),
+                ReadDouble(details?.RootElement, "gracePeriodSeconds"));
+        }).ToList();
+    }
+
     public async Task<IReadOnlyDictionary<string, double?>> GetMetricsAsync(CancellationToken cancellationToken = default)
     {
         var generatedAt = timeProvider.GetUtcNow();
@@ -228,6 +287,52 @@ public sealed class DashboardApplicationService(ChoboDbContext db, TimeProvider 
             .ToList();
     }
 
+    private static Guid? TryParseGuid(string? value) =>
+        Guid.TryParse(value, out var parsed) ? parsed : null;
+
+    private static JsonDocument? TryParseJson(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonDocument.Parse(value);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static DateTimeOffset? ReadDateTimeOffset(JsonElement? details, string propertyName)
+    {
+        if (details is not { ValueKind: JsonValueKind.Object } root || !root.TryGetProperty(propertyName, out var property))
+        {
+            return null;
+        }
+
+        return property.ValueKind == JsonValueKind.String && DateTimeOffset.TryParse(property.GetString(), out var value)
+            ? value
+            : null;
+    }
+
+    private static double? ReadDouble(JsonElement? details, string propertyName)
+    {
+        if (details is not { ValueKind: JsonValueKind.Object } root || !root.TryGetProperty(propertyName, out var property))
+        {
+            return null;
+        }
+
+        return property.ValueKind == JsonValueKind.Number && property.TryGetDouble(out var value)
+            ? value
+            : null;
+    }
+
+    private sealed record MissingBackupAuditRow(long Id, string? EntityId, DateTimeOffset Timestamp, string? Details);
+    private sealed record MissingBackupScheduleRow(Guid Id, string Name, Guid PolicyId, string? PolicyName, BackupType BackupType);
     private sealed record ScheduleSummaryRow(Guid Id, string Name, Guid PolicyId, string? PolicyName, BackupType BackupType, string CronExpression, string TimeZoneId, bool IsEnabled, TimeSpan? MissedRunGracePeriod);
     private sealed record ScheduleLastRunRow(Guid ScheduleId, DateTimeOffset CreatedAt, BackupRunStatus Status, string? FailureReason, bool IsPinned, DateTimeOffset? DeletionRequestedAt);
     private sealed record MetricPolicyRow(Guid Id, string Name);

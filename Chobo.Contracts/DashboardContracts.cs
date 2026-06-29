@@ -56,4 +56,15 @@ public sealed record DashboardFutureScheduleDto(
     DateTimeOffset PlannedRunAt,
     string TimeZoneId);
 
-
+public sealed record DashboardMissingBackupDto(
+    long AuditId,
+    Guid? ScheduleId,
+    string? ScheduleName,
+    Guid? PolicyId,
+    string? PolicyName,
+    BackupType? BackupType,
+    DateTimeOffset? PlannedRunAt,
+    DateTimeOffset? DetectedAt,
+    DateTimeOffset AuditedAt,
+    double? LatenessSeconds,
+    double? GracePeriodSeconds);

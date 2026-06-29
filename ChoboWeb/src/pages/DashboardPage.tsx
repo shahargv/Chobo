@@ -1,12 +1,12 @@
 import { NavLink } from "react-router-dom";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Activity, CheckCircle2, Circle, Info, ShieldCheck } from "lucide-react";
+import { Activity, CalendarX, CheckCircle2, Circle, Info, ShieldCheck } from "lucide-react";
 import type { BackupDto } from "../api/generated";
 import { useApi } from "../api-context";
 import { DataTable, Empty, ExpandableErrorText, Page, Stat, Status } from "../components/ui";
 import { BackupDrawer } from "./BackupsPage";
-import { formatCompletionTime, formatTime } from "../utils/format";
+import { formatCompletionTime, formatDurationSeconds, formatTime } from "../utils/format";
 
 export function Dashboard() {
   const { api } = useApi();
@@ -18,10 +18,14 @@ export function Dashboard() {
   const policies = useQuery({ queryKey: ["policies"], queryFn: () => api.policies() });
   const allSchedules = useQuery({ queryKey: ["schedules"], queryFn: () => api.schedules() });
   const backups = useQuery({ queryKey: ["backups", "summary"], queryFn: () => api.backups({}, { includeTables: false }) });
+  const missingBackups = useQuery({ queryKey: ["dashboard", "missing-backups", 24], queryFn: () => api.missingBackups(24) });
   const restores = useQuery({ queryKey: ["restores"], queryFn: () => api.restores() });
   const running = dashboard.data?.runningBackups ?? [];
   const schedules = dashboard.data?.schedules ?? [];
-  const failures = schedules.filter((schedule) => schedule.lastRunFailureReason);
+  const failures = schedules
+    .filter((schedule) => schedule.lastRunFailureReason)
+    .sort((left, right) => new Date(right.lastRunAt ?? 0).getTime() - new Date(left.lastRunAt ?? 0).getTime());
+  const missing = missingBackups.data ?? [];
   const sortedBackups = [...(backups.data ?? [])]
     .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
   const latestBackups = sortedBackups.slice(0, 8);
@@ -37,13 +41,13 @@ export function Dashboard() {
   });
   const missingOnboarding = onboarding.filter((step) => !step.done);
   return (
-    <Page title="Dashboard" subtitle="See upcoming schedules, running backups, and recent operational health at a glance." action={<button className="secondary" onClick={() => { dashboard.refetch(); backups.refetch(); }}><Activity size={16} /> Refresh</button>}>
+    <Page title="Dashboard" subtitle="See upcoming schedules, running backups, and recent operational health at a glance." action={<button className="secondary" onClick={() => { dashboard.refetch(); backups.refetch(); missingBackups.refetch(); }}><Activity size={16} /> Refresh</button>}>
       {onboardingIsLoading ? <OnboardingLoading /> : missingOnboarding.length > 0 ? <OnboardingPanel steps={onboarding} /> : <OnboardingComplete />}
       <div className="stat-grid">
         <Stat label="Running backups" value={running.length} tone={running.length ? "warn" : "ok"} />
         <Stat label="Enabled schedules" value={schedules.filter((x) => x.isEnabled).length} />
         <Stat label="Recent failures" value={failures.length} tone={failures.length ? "bad" : "ok"} />
-        <Stat label="Latest backups" value={latestBackups.length} />
+        <Stat label="Missed backups" value={missing.length} tone={missing.length ? "bad" : "ok"} />
       </div>
       <section className="panel">
         <div className="section-head">
@@ -85,6 +89,27 @@ export function Dashboard() {
             </tr>
           ))}
         </DataTable>
+      </section>
+      <section className="panel">
+        <div className="section-head">
+          <div>
+            <h2>Missed backups</h2>
+            <p>Scheduled runs missed in the last 24 hours.</p>
+          </div>
+        </div>
+        <DataTable headers={["Planned run", "Detected", "Policy", "Schedule", "Lateness", "Grace"]} isLoading={missingBackups.isLoading}>
+          {missing.map((missed) => (
+            <tr key={missed.auditId}>
+              <td>{formatTime(missed.plannedRunAt)}</td>
+              <td>{formatTime(missed.detectedAt ?? missed.auditedAt)}</td>
+              <td>{missed.policyId ? <NavLink to={`/policies/${missed.policyId}`}>{missed.policyName ?? missed.policyId}</NavLink> : "unknown"}</td>
+              <td>{missed.scheduleId ? <NavLink to={`/schedules/${missed.scheduleId}`}>{missed.scheduleName ?? missed.scheduleId}</NavLink> : "unknown"}</td>
+              <td><span className="restore-source-table-name"><CalendarX size={16} /> {formatDurationSeconds(missed.latenessSeconds)}</span></td>
+              <td>{formatDurationSeconds(missed.gracePeriodSeconds)}</td>
+            </tr>
+          ))}
+        </DataTable>
+        {!missingBackups.isLoading && missing.length === 0 ? <Empty text="No missed scheduled backups in the last 24 hours." /> : null}
       </section>
       <section className="panel two-col">
         <div>

@@ -2602,6 +2602,63 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Dashboard_reports_recent_missing_backups_from_missed_schedule_audits()
+    {
+        var now = new DateTimeOffset(2026, 5, 11, 10, 0, 0, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now));
+        var schedule = await fixture.SeedPolicyAndScheduleAsync();
+        var scheduleEntityType = AuditEntityTypes.ToStorageValue(AuditEntityType.BackupSchedule);
+        var olderPlannedRun = now.AddHours(-2);
+        var newerPlannedRun = now.AddMinutes(-30);
+
+        fixture.Db.AuditEntries.AddRange(
+            new AuditEntryEntity
+            {
+                Timestamp = now.AddMinutes(-20),
+                ActorName = "system",
+                Action = "scheduled-backup-missed",
+                EntityType = scheduleEntityType,
+                EntityId = schedule.Id.ToString(),
+                Details = JsonSerializer.Serialize(new { plannedRunAt = newerPlannedRun, detectedAt = now.AddMinutes(-20), latenessSeconds = 600.0, gracePeriodSeconds = 300.0 })
+            },
+            new AuditEntryEntity
+            {
+                Timestamp = now.AddHours(-1),
+                ActorName = "system",
+                Action = "scheduled-backup-missed",
+                EntityType = scheduleEntityType,
+                EntityId = schedule.Id.ToString(),
+                Details = JsonSerializer.Serialize(new { plannedRunAt = olderPlannedRun, detectedAt = now.AddHours(-1), latenessSeconds = 1800.0, gracePeriodSeconds = 300.0 })
+            },
+            new AuditEntryEntity
+            {
+                Timestamp = now.AddHours(-30),
+                ActorName = "system",
+                Action = "scheduled-backup-missed",
+                EntityType = scheduleEntityType,
+                EntityId = schedule.Id.ToString(),
+                Details = JsonSerializer.Serialize(new { plannedRunAt = now.AddHours(-31), detectedAt = now.AddHours(-30), latenessSeconds = 3600.0, gracePeriodSeconds = 300.0 })
+            });
+        await fixture.Db.SaveChangesAsync();
+
+        var missing = await fixture.Services.GetRequiredService<DashboardApplicationService>().GetMissingBackupsAsync(hours: 24);
+
+        Assert.Equal(2, missing.Count);
+        Assert.Equal(newerPlannedRun, missing[0].PlannedRunAt);
+        Assert.Equal(olderPlannedRun, missing[1].PlannedRunAt);
+        Assert.All(missing, item =>
+        {
+            Assert.Equal(schedule.Id, item.ScheduleId);
+            Assert.Equal("hourly", item.ScheduleName);
+            Assert.Equal(schedule.PolicyId, item.PolicyId);
+            Assert.Equal("hourly", item.PolicyName);
+            Assert.Equal(BackupType.Full, item.BackupType);
+            Assert.Equal(300.0, item.GracePeriodSeconds);
+        });
+        Assert.Equal(600.0, missing[0].LatenessSeconds);
+    }
+
+    [Fact]
     public async Task Scheduler_uses_schedule_grace_period_override_when_specified()
     {
         var now = new DateTimeOffset(2026, 5, 11, 8, 50, 0, TimeSpan.Zero);
