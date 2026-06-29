@@ -530,6 +530,34 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Backup_executor_capacity_ignores_queued_rows_that_have_not_started()
+    {
+        await using var fixture = await TestFixture.CreateAsync(
+            clusterMaxDop: 1,
+            options: new ChoboBackupRestoreOptions { MaxDop = 1, MaxActiveQueueItems = 1, PollInterval = TimeSpan.FromMilliseconds(10) });
+        fixture.ClickHouse.Inventory.Add(Table("sales", "capacity_orders", "MergeTree"));
+        var service = fixture.Services.GetRequiredService<BackupApplicationService>();
+        var queues = fixture.Services.GetRequiredService<IBackupRestoreQueues>();
+        var executor = new BackupExecutorBackgroundService(
+            fixture.Services,
+            queues,
+            fixture.Services.GetRequiredService<IOptionsMonitor<ChoboBackupRestoreOptions>>(),
+            Serilog.Core.Logger.None);
+
+        var backup = await service.ManualAsync(new ManualBackupRequest(fixture.SourceClusterId, fixture.TargetId, PolicySelector.Empty));
+        Assert.True(await fixture.Db.BackupRestoreQueueItems.AnyAsync(x => x.OperationId == backup.Id && x.StartedAt == null && x.CompletedAt == null));
+
+        await executor.StartAsync(CancellationToken.None);
+        await WaitUntilAsync(async () =>
+        {
+            fixture.Db.ChangeTracker.Clear();
+            return await fixture.Db.BackupRestoreQueueItems.AnyAsync(x => x.OperationId == backup.Id && x.StartedAt != null);
+        });
+
+        await executor.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
     public async Task Backup_executor_prepares_second_data_backup_queue_while_first_backup_is_running()
     {
         await using var fixture = await TestFixture.CreateAsync(
