@@ -246,12 +246,12 @@ public sealed class BackupsGarbageCollectorBackgroundService(
         var now = timeProvider.GetUtcNow();
         var backups = await db.Backups
             .Include(x => x.Policy)
-            .Where(x => (x.Status == BackupRunStatus.Failed || x.Status == BackupRunStatus.PartiallySucceeded) &&
+            .Where(x => x.Status == BackupRunStatus.Failed &&
                         x.Policy != null &&
                         x.Policy.FailedBackupRetentionMode == FailedBackupRetentionMode.DeleteByGarbageCollectorAfterFailure)
             .ToListAsync(cancellationToken);
 
-        _logger.Information("Backup garbage collection found {FailedBackupCount} failed/partial backup(s) eligible for cleanup marking.", backups.Count);
+        _logger.Information("Backup garbage collection found {FailedBackupCount} failed backup(s) eligible for cleanup marking.", backups.Count);
         if (backups.Count == 0)
         {
             return 0;
@@ -285,7 +285,7 @@ public sealed class BackupsGarbageCollectorBackgroundService(
             return 0;
         }
 
-        if ((backup.Status == BackupRunStatus.Failed || backup.Status == BackupRunStatus.PartiallySucceeded) &&
+        if (backup.Status == BackupRunStatus.Failed &&
             backup.Policy?.FailedBackupRetentionMode == FailedBackupRetentionMode.DeleteByGarbageCollectorAfterFailure)
         {
             var markedCount = await MarkDependentIncrementalBackupsAsync(db, audit, [backup.Id], now, "failed-parent-garbage-collector", cancellationToken);
@@ -397,7 +397,7 @@ public sealed class BackupsGarbageCollectorBackgroundService(
         var failed = await db.Backups
             .AsNoTracking()
             .Where(x => !pendingIds.Contains(x.Id) &&
-                        (x.Status == BackupRunStatus.Failed || x.Status == BackupRunStatus.PartiallySucceeded) &&
+                        x.Status == BackupRunStatus.Failed &&
                         x.Policy != null &&
                         x.Policy.FailedBackupRetentionMode == FailedBackupRetentionMode.DeleteByGarbageCollectorAfterFailure)
             .Select(x => new BackupGarbageCollectorQueueItemDto(x.Id, "backup", x.Status, BackupRunStatus.FailedBackupDeletedByGarbageCollector, "failed-backup-garbage-collector", x.CreatedAt, x.DeletionRequestedAt, x.DeletionAttemptCount, x.DeletionError))
@@ -440,8 +440,14 @@ public sealed class BackupsGarbageCollectorBackgroundService(
         var deletedStatuses = DeletedStatuses;
         return db.BackupTables
             .Where(x => x.EffectiveBackupType == BackupType.Incremental &&
-                        (x.ParentFullBackupId == null ||
-                         !db.Backups.Any(parent => parent.Id == x.ParentFullBackupId.Value && !deletedStatuses.Contains(parent.Status))))
+                        ((x.ParentFullBackupId != null &&
+                          !db.Backups.Any(parent => parent.Id == x.ParentFullBackupId.Value && !deletedStatuses.Contains(parent.Status))) ||
+                         (x.ParentFullBackupId == null &&
+                          !db.BackupTableShards.Any(shard =>
+                              shard.BackupTableId == x.Id &&
+                              shard.EffectiveBackupType == BackupType.Incremental &&
+                              shard.ParentFullBackupId != null &&
+                              db.Backups.Any(parent => parent.Id == shard.ParentFullBackupId.Value && !deletedStatuses.Contains(parent.Status))))))
             .Select(x => x.BackupId)
             .Concat(db.BackupTableShards
                 .Where(x => x.EffectiveBackupType == BackupType.Incremental &&
@@ -456,8 +462,14 @@ public sealed class BackupsGarbageCollectorBackgroundService(
         await db.BackupTables.AnyAsync(x =>
             x.BackupId == backupId &&
             x.EffectiveBackupType == BackupType.Incremental &&
-            (x.ParentFullBackupId == null ||
-             !db.Backups.Any(parent => parent.Id == x.ParentFullBackupId.Value && !DeletedStatuses.Contains(parent.Status))),
+            ((x.ParentFullBackupId != null &&
+              !db.Backups.Any(parent => parent.Id == x.ParentFullBackupId.Value && !DeletedStatuses.Contains(parent.Status))) ||
+             (x.ParentFullBackupId == null &&
+              !db.BackupTableShards.Any(shard =>
+                  shard.BackupTableId == x.Id &&
+                  shard.EffectiveBackupType == BackupType.Incremental &&
+                  shard.ParentFullBackupId != null &&
+                  db.Backups.Any(parent => parent.Id == shard.ParentFullBackupId.Value && !DeletedStatuses.Contains(parent.Status))))),
             cancellationToken) ||
         await db.BackupTableShards.AnyAsync(x =>
             x.BackupTable!.BackupId == backupId &&
