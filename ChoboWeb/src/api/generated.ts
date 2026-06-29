@@ -57,6 +57,7 @@ export interface CreateUserRequest { userName?: string | null; }
 export interface CreateUserResponse { userId: string; userName?: string | null; accessToken: string; }
 export interface DashboardDto { generatedAt: string; futureWindowHours: number; queue: QueueHealthDto; runningBackups: DashboardRunningBackupDto[]; schedules: DashboardScheduleDto[]; futureSchedules: DashboardFutureScheduleDto[]; }
 export interface DashboardFutureScheduleDto { scheduleId: string; scheduleName?: string | null; policyId: string; policyName?: string | null; backupType: BackupType; plannedRunAt: string; timeZoneId: string; }
+export interface DashboardMissingBackupDto { auditId: number; scheduleId?: string | null; scheduleName?: string | null; policyId?: string | null; policyName?: string | null; backupType: BackupType; plannedRunAt: string; detectedAt: string; auditedAt: string; latenessSeconds: number; gracePeriodSeconds: number; }
 export interface DashboardRunningBackupDto { backupId: string; status: BackupRunStatus; triggerType: BackupTriggerType; policyId?: string | null; policyName?: string | null; scheduleId?: string | null; scheduleName?: string | null; createdAt: string; startedAt?: string | null; failureReason?: string | null; isPinned: boolean; deletionRequestedAt?: string | null; deletionReason?: string | null; tableCount: number; shardCount: number; succeededShardCount: number; failedShardCount: number; runningShardCount: number; }
 export interface DashboardScheduleDto { scheduleId: string; scheduleName?: string | null; policyId: string; policyName?: string | null; backupType: BackupType; cronExpression: string; timeZoneId: string; isEnabled: boolean; missedRunGracePeriod?: string | null; lastRunAt?: string | null; lastRunStatus: BackupRunStatus; lastRunFailureReason?: string | null; lastRunIsPinned: boolean; lastRunDeletionRequestedAt: string; lastSuccessfulRunCompletedAt?: string | null; }
 export interface ExportEnvelope { exportVersion: number; schemaVersion: number; generatedAt: string; productVersion: string; data: ExportPayload; }
@@ -173,6 +174,7 @@ export const openApiSchemaNames = [
   "CreateUserResponse",
   "DashboardDto",
   "DashboardFutureScheduleDto",
+  "DashboardMissingBackupDto",
   "DashboardRunningBackupDto",
   "DashboardScheduleDto",
   "ExportEnvelope",

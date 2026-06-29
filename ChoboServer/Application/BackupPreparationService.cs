@@ -376,7 +376,7 @@ public sealed class BackupPreparationService(
             .ToList();
 
     private static string EscapePathPart(string value) =>
-        Uri.EscapeDataString(value).Replace("%2F", "_", StringComparison.OrdinalIgnoreCase);
+        Uri.EscapeDataString(value);
 
     private static JsonSerializerOptions CreateJsonOptions()
     {

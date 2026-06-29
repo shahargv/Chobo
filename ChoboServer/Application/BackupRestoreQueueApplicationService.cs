@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Chobo.Contracts;
 using ChoboServer.Data;
 using ChoboServer.Services;
@@ -9,8 +10,10 @@ public sealed class BackupRestoreQueueApplicationService(
     ChoboDbContext db,
     IAuditService audit,
     ActorContext actor,
-    IBackupRestoreConcurrencyCoordinator concurrency)
+    IBackupRestoreConcurrencyCoordinator concurrency,
+    IEndpointRewriteService endpointRewrites)
 {
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private const long PositionStep = 1000;
     private const long MinimumQueuedPosition = 1000;
 
@@ -96,6 +99,7 @@ public sealed class BackupRestoreQueueApplicationService(
     {
         var backup = await db.Backups.AsNoTracking()
             .Include(x => x.SourceCluster)
+            .Include(x => x.Target)
             .FirstAsync(x => x.Id == backupId, cancellationToken);
         await using var transaction = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable, cancellationToken);
         var runningItems = await db.BackupRestoreQueueItems.AsNoTracking()
@@ -125,6 +129,11 @@ public sealed class BackupRestoreQueueApplicationService(
             var isResume = shard.Status == BackupTableStatus.Running;
             var shardLimit = ShardMaxDop(backup.SourceCluster!, item.LogicalShardNumber, item.LogicalShardName);
             var shardRunning = runningItems.Count(x => x.LogicalShardNumber == item.LogicalShardNumber);
+            var destinationKey = BuildBackupDestinationKey(backup.Target, shard.StoragePath);
+            if (destinationKey is not null && await IsBackupDestinationBlockedAsync(item.ShardId, destinationKey, cancellationToken))
+            {
+                continue;
+            }
             if (!concurrency.TryReserveQueueItem(
                     item.Kind,
                     item.OperationId,
@@ -136,7 +145,7 @@ public sealed class BackupRestoreQueueApplicationService(
                     shardLimit,
                     clusterRunning,
                     shardRunning,
-                    shard.StoragePath))
+                    destinationKey))
             {
                 continue;
             }
@@ -658,6 +667,70 @@ public sealed class BackupRestoreQueueApplicationService(
         return Math.Max(1, cluster.ShardMaxDopDefault);
     }
 
+    private async Task<bool> IsBackupDestinationBlockedAsync(Guid shardId, string destinationKey, CancellationToken cancellationToken)
+    {
+        var activeDestinations = await (
+            from activeShard in db.BackupTableShards.AsNoTracking()
+            join activeTable in db.BackupTables.AsNoTracking() on activeShard.BackupTableId equals activeTable.Id
+            join activeBackup in db.Backups.AsNoTracking() on activeTable.BackupId equals activeBackup.Id
+            join activeTarget in db.BackupTargets.AsNoTracking() on activeBackup.TargetId equals activeTarget.Id
+            where activeShard.Id != shardId &&
+                  (
+                      db.BackupRestoreQueueItems.Any(active => active.Kind == BackupRestoreQueueKind.Backup &&
+                                                               active.ShardId == activeShard.Id &&
+                                                               active.StartedAt != null &&
+                                                               active.CompletedAt == null) ||
+                      ((activeShard.Status == BackupTableStatus.Queued || activeShard.Status == BackupTableStatus.Running) &&
+                       activeShard.ClickHouseOperationId != null &&
+                       activeShard.ClickHouseOperationId.Trim() != "")
+                  )
+            select new
+            {
+                TargetId = (Guid?)activeTarget.Id,
+                TargetType = activeTarget.Type,
+                activeTarget.SettingsJson,
+                activeShard.StoragePath
+            }).ToListAsync(cancellationToken);
+
+        return activeDestinations.Any(active => string.Equals(
+            BuildBackupDestinationKey(active.TargetId, active.TargetType, active.SettingsJson, active.StoragePath),
+            destinationKey,
+            StringComparison.Ordinal));
+    }
+
+    private string? BuildBackupDestinationKey(BackupTargetEntity? target, string? storagePath) =>
+        target is null
+            ? BuildBackupDestinationKey(null, null, null, storagePath)
+            : BuildBackupDestinationKey(target.Id, target.Type, target.SettingsJson, storagePath);
+
+    private string? BuildBackupDestinationKey(Guid? targetId, string? targetType, string? targetSettingsJson, string? storagePath)
+    {
+        var normalizedPath = NormalizeDestinationPath(storagePath);
+        if (normalizedPath is null)
+        {
+            return null;
+        }
+
+        if (string.Equals(targetType, StorageProviderTypes.S3, StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(targetSettingsJson))
+        {
+            try
+            {
+                var settings = JsonSerializer.Deserialize<S3TargetSettingsDto>(targetSettingsJson, JsonOptions);
+                if (settings is not null)
+                {
+                    var destination = endpointRewrites.RewriteS3EndpointForClickHouse(S3TargetUrlBuilder.BuildObjectUrl(settings, normalizedPath));
+                    return $"{StorageProviderTypes.S3}:{destination.AbsoluteUri}";
+                }
+            }
+            catch
+            {
+                // Fall back to a conservative raw key when target settings are invalid or incomplete.
+            }
+        }
+
+        return $"{targetType ?? "unknown"}:{targetId?.ToString("N") ?? "no-target"}:{normalizedPath.TrimStart('/')}";
+    }
+
     private static string? NormalizeDestinationPath(string? storagePath) =>
         string.IsNullOrWhiteSpace(storagePath) ? null : storagePath.Trim();
 
@@ -672,6 +745,7 @@ public sealed class BackupRestoreQueueApplicationService(
         try { return System.Text.Json.JsonSerializer.Deserialize<List<ClusterShardMaxDopOverrideDto>>(json) ?? []; }
         catch (System.Text.Json.JsonException) { return []; }
     }
+
     private static BackupRestoreQueueItemDto ToDto(BackupRestoreQueueItemEntity item, IReadOnlyDictionary<Guid, BackupTableShardEntity> backupShards, IReadOnlyDictionary<Guid, RestoreTableShardEntity> restoreShards)
     {
         if (item.Kind == BackupRestoreQueueKind.Backup && backupShards.TryGetValue(item.ShardId, out var backupShard))

@@ -26,6 +26,7 @@ import type {
   CreateUserRequest,
   CreateUserResponse,
   DashboardDto,
+  DashboardMissingBackupDto,
   ExportEnvelope,
   InitiateRestoreRequest,
   RestoreSettingsPreviewRequest,
@@ -79,6 +80,7 @@ export class ChoboApiClient {
   installStatus() { return this.get<InstallStatusDto>("server/install/status"); }
   install(request: InstallRequest) { return this.post<InstallResponse>("server/install", request); }
   dashboard(nextHours = 6) { return this.get<DashboardDto>(`dashboard?nextHours=${nextHours}`); }
+  missingBackups(hours = 24) { return this.get<DashboardMissingBackupDto[]>(`dashboard/missing-backups?hours=${hours}`); }
   metrics() { return this.get<Record<string, number | null>>("metrics"); }
   metricsJsonText() { return this.requestText("metrics"); }
   runtimeSettings() { return this.get<RuntimeSettingsListDto>("settings"); }

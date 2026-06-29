@@ -1475,6 +1475,55 @@
         }
       }
     },
+    "/api/v1/dashboard/missing-backups": {
+      "get": {
+        "tags": [
+          "Dashboard"
+        ],
+        "parameters": [
+          {
+            "name": "hours",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 24
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DashboardMissingBackupDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DashboardMissingBackupDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DashboardMissingBackupDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/metrics": {
       "get": {
         "tags": [
@@ -5628,6 +5677,61 @@
           },
           "timeZoneId": {
             "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "DashboardMissingBackupDto": {
+        "type": "object",
+        "properties": {
+          "auditId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "scheduleId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "scheduleName": {
+            "type": "string",
+            "nullable": true
+          },
+          "policyId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "policyName": {
+            "type": "string",
+            "nullable": true
+          },
+          "backupType": {
+            "$ref": "#/components/schemas/BackupType"
+          },
+          "plannedRunAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "detectedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "auditedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "latenessSeconds": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "gracePeriodSeconds": {
+            "type": "number",
+            "format": "double",
             "nullable": true
           }
         },

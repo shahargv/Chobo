@@ -50,6 +50,30 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Backup_paths_keep_slash_and_underscore_table_names_distinct()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        fixture.ClickHouse.Inventory.AddRange([
+            Table("sales", "orders/2026", "MergeTree"),
+            Table("sales", "orders_2026", "MergeTree")
+        ]);
+
+        var backupId = await fixture.CreateManualBackupAsync();
+        await fixture.RunBackupAsync(backupId);
+
+        fixture.Db.ChangeTracker.Clear();
+        var paths = await fixture.Db.BackupTables
+            .Where(x => x.BackupId == backupId)
+            .OrderBy(x => x.Table)
+            .Select(x => x.StoragePath)
+            .ToListAsync();
+        Assert.Equal(2, paths.Count);
+        Assert.Contains(paths, path => path.Contains("/orders%2F2026/", StringComparison.Ordinal));
+        Assert.Contains(paths, path => path.Contains("/orders_2026/", StringComparison.Ordinal));
+        Assert.NotEqual(paths[0], paths[1]);
+    }
+
+    [Fact]
     public async Task Backup_selection_excludes_system_databases_even_if_inventory_contains_them()
     {
         await using var fixture = await TestFixture.CreateAsync();
@@ -476,6 +500,7 @@ public sealed class BackupRestoreExecutionTests
         Assert.Null(shardAfterRun.ClickHouseOperationId);
         Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "clickhouse-operation-recovery-not-found" && x.EntityId == shardAfterRun.Id.ToString()));
     }
+
     [Fact]
     public async Task Backup_shard_retry_resumes_submitted_operation_after_transient_poll_failure()
     {
@@ -1345,6 +1370,61 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Backup_runner_does_not_reset_live_claim_for_running_backup()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "live_claim_orders", BackupTableStatus.Running, null, true)
+        ]);
+        var shard = await fixture.Db.BackupTableShards.SingleAsync(x => x.BackupTable!.BackupId == backup.Id);
+        using (var scope = fixture.Services.CreateScope())
+        {
+            await scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>().EnsureBackupQueueItemsAsync(backup.Id);
+        }
+
+        var startedAt = DateTimeOffset.UtcNow.AddSeconds(-30);
+        await fixture.Db.BackupRestoreQueueItems
+            .Where(x => x.Kind == BackupRestoreQueueKind.Backup && x.ShardId == shard.Id)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.StartedAt, startedAt));
+        fixture.Db.ChangeTracker.Clear();
+
+        await fixture.RunBackupAsync(backup.Id);
+
+        Assert.Empty(fixture.ClickHouse.BackupStartTables);
+        var queueItem = await fixture.Db.BackupRestoreQueueItems.AsNoTracking().SingleAsync(x => x.Kind == BackupRestoreQueueKind.Backup && x.ShardId == shard.Id);
+        Assert.NotNull(queueItem.StartedAt);
+        Assert.Null(queueItem.CompletedAt);
+        var backupAfterRun = await fixture.Db.Backups.AsNoTracking().SingleAsync(x => x.Id == backup.Id);
+        var shardAfterRun = await fixture.Db.BackupTableShards.AsNoTracking().SingleAsync(x => x.Id == shard.Id);
+        Assert.Equal(BackupRunStatus.Running, backupAfterRun.Status);
+        Assert.Equal(BackupTableStatus.Running, shardAfterRun.Status);
+    }
+
+    [Fact]
+    public async Task Target_update_rejects_active_backup_target_mutation()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "active_target_orders", BackupTableStatus.Running, null, true)
+        ]);
+
+        using var scope = fixture.Services.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<TargetApplicationService>();
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => service.UpdateS3Async(
+            fixture.TargetId,
+            new UpsertS3TargetRequest("minio-renamed", "http://minio:9000", "us-east-1", "data-bucket", "changed-prefix", true, null, null),
+            updateSecrets: false));
+
+        Assert.Contains("cannot be updated", ex.Message, StringComparison.OrdinalIgnoreCase);
+        fixture.Db.ChangeTracker.Clear();
+        var target = await fixture.Db.BackupTargets.AsNoTracking().SingleAsync(x => x.Id == fixture.TargetId);
+        var settings = JsonSerializer.Deserialize<S3TargetSettingsDto>(target.SettingsJson, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.NotNull(settings);
+        Assert.Equal("minio", target.Name);
+        Assert.Null(settings!.PathPrefix);
+    }
+
+    [Fact]
     public async Task Backup_queue_does_not_claim_duplicate_destination_concurrently()
     {
         await using var fixture = await TestFixture.CreateAsync(clusterMaxDop: 8, options: new ChoboBackupRestoreOptions { MaxDop = 8, PollInterval = TimeSpan.FromMilliseconds(1) });
@@ -1440,6 +1520,92 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Backup_queue_blocks_leading_slash_variant_of_active_destination()
+    {
+        await using var fixture = await TestFixture.CreateAsync(clusterMaxDop: 8, options: new ChoboBackupRestoreOptions { MaxDop = 8, PollInterval = TimeSpan.FromMilliseconds(1) });
+        var cluster = await fixture.Db.ClickHouseClusters.SingleAsync(x => x.Id == fixture.SourceClusterId);
+        cluster.ShardMaxDopDefault = 8;
+        cluster.NodeMaxDopDefault = 8;
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "canonical_destination_a", BackupTableStatus.Queued, null, true),
+            new SeedBackupTable("sales", "canonical_destination_b", BackupTableStatus.Queued, null, true)
+        ]);
+        var tableIds = backup.Tables.Select(x => x.Id).ToList();
+        var shards = await fixture.Db.BackupTableShards
+            .Where(x => tableIds.Contains(x.BackupTableId))
+            .OrderBy(x => x.Id)
+            .ToListAsync();
+        shards[0].StoragePath = "backups/canonical/same-path";
+        shards[1].StoragePath = "/backups/canonical/same-path";
+        await fixture.Db.SaveChangesAsync();
+
+        using (var scope = fixture.Services.CreateScope())
+        {
+            await scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>().EnsureBackupQueueItemsAsync(backup.Id);
+        }
+
+        var activeShardId = shards[0].Id;
+        await fixture.Db.BackupRestoreQueueItems
+            .Where(x => x.Kind == BackupRestoreQueueKind.Backup && x.ShardId == activeShardId)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.StartedAt, DateTimeOffset.UtcNow));
+        fixture.Db.ChangeTracker.Clear();
+
+        using (var scope = fixture.Services.CreateScope())
+        {
+            var queue = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
+            var blocked = await queue.TryTakeNextBackupWorkAsync(backup.Id);
+            Assert.Null(blocked.WorkItem);
+            Assert.True(blocked.HasQueuedWork);
+        }
+    }
+
+    [Fact]
+    public async Task Backup_queue_blocks_targets_that_resolve_to_same_s3_destination()
+    {
+        await using var fixture = await TestFixture.CreateAsync(clusterMaxDop: 8, options: new ChoboBackupRestoreOptions { MaxDop = 8, PollInterval = TimeSpan.FromMilliseconds(1) });
+        var cluster = await fixture.Db.ClickHouseClusters.SingleAsync(x => x.Id == fixture.SourceClusterId);
+        cluster.ShardMaxDopDefault = 8;
+        cluster.NodeMaxDopDefault = 8;
+        var prefixedTargetId = Guid.NewGuid();
+        fixture.Db.BackupTargets.Add(CreateS3TargetEntity(prefixedTargetId, "prefixed", "http://minio:9000", "us-east-1", "data-bucket", "prod", true, false));
+
+        var activeBackup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "target_collision_active", BackupTableStatus.Queued, null, true)
+        ]);
+        var candidateBackup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "target_collision_candidate", BackupTableStatus.Queued, null, true)
+        ]);
+        candidateBackup.TargetId = prefixedTargetId;
+        await fixture.Db.SaveChangesAsync();
+
+        var activeShard = await fixture.Db.BackupTableShards.SingleAsync(x => x.BackupTable!.BackupId == activeBackup.Id);
+        var candidateShard = await fixture.Db.BackupTableShards.SingleAsync(x => x.BackupTable!.BackupId == candidateBackup.Id);
+        activeShard.StoragePath = "prod/backups/canonical/cross-target";
+        candidateShard.StoragePath = "backups/canonical/cross-target";
+        await fixture.Db.SaveChangesAsync();
+
+        using (var scope = fixture.Services.CreateScope())
+        {
+            var queue = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
+            await queue.EnsureBackupQueueItemsAsync(activeBackup.Id);
+            await queue.EnsureBackupQueueItemsAsync(candidateBackup.Id);
+        }
+
+        await fixture.Db.BackupRestoreQueueItems
+            .Where(x => x.Kind == BackupRestoreQueueKind.Backup && x.ShardId == activeShard.Id)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.StartedAt, DateTimeOffset.UtcNow));
+        fixture.Db.ChangeTracker.Clear();
+
+        using (var scope = fixture.Services.CreateScope())
+        {
+            var queue = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
+            var blocked = await queue.TryTakeNextBackupWorkAsync(candidateBackup.Id);
+            Assert.Null(blocked.WorkItem);
+            Assert.True(blocked.HasQueuedWork);
+        }
+    }
+
+    [Fact]
     public async Task Backup_queue_resumes_requeued_operation_before_duplicate_destination()
     {
         await using var fixture = await TestFixture.CreateAsync(clusterMaxDop: 8, options: new ChoboBackupRestoreOptions { MaxDop = 8, PollInterval = TimeSpan.FromMilliseconds(1) });
@@ -1491,6 +1657,7 @@ public sealed class BackupRestoreExecutionTests
             Assert.Equal(duplicateShardId, next.WorkItem.ShardId);
         }
     }
+
     [Fact]
     public async Task Node_maxdop_selects_different_replica_when_one_replica_is_busy()
     {
@@ -2432,6 +2599,63 @@ public sealed class BackupRestoreExecutionTests
         var audit = await fixture.Db.AuditEntries.SingleAsync(x => x.Action == "scheduled-backup-missed" && x.EntityId == schedule.Id.ToString());
         Assert.Contains("plannedRunAt", audit.Details);
         Assert.Contains("latenessSeconds", audit.Details);
+    }
+
+    [Fact]
+    public async Task Dashboard_reports_recent_missing_backups_from_missed_schedule_audits()
+    {
+        var now = new DateTimeOffset(2026, 5, 11, 10, 0, 0, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now));
+        var schedule = await fixture.SeedPolicyAndScheduleAsync();
+        var scheduleEntityType = AuditEntityTypes.ToStorageValue(AuditEntityType.BackupSchedule);
+        var olderPlannedRun = now.AddHours(-2);
+        var newerPlannedRun = now.AddMinutes(-30);
+
+        fixture.Db.AuditEntries.AddRange(
+            new AuditEntryEntity
+            {
+                Timestamp = now.AddMinutes(-20),
+                ActorName = "system",
+                Action = "scheduled-backup-missed",
+                EntityType = scheduleEntityType,
+                EntityId = schedule.Id.ToString(),
+                Details = JsonSerializer.Serialize(new { plannedRunAt = newerPlannedRun, detectedAt = now.AddMinutes(-20), latenessSeconds = 600.0, gracePeriodSeconds = 300.0 })
+            },
+            new AuditEntryEntity
+            {
+                Timestamp = now.AddHours(-1),
+                ActorName = "system",
+                Action = "scheduled-backup-missed",
+                EntityType = scheduleEntityType,
+                EntityId = schedule.Id.ToString(),
+                Details = JsonSerializer.Serialize(new { plannedRunAt = olderPlannedRun, detectedAt = now.AddHours(-1), latenessSeconds = 1800.0, gracePeriodSeconds = 300.0 })
+            },
+            new AuditEntryEntity
+            {
+                Timestamp = now.AddHours(-30),
+                ActorName = "system",
+                Action = "scheduled-backup-missed",
+                EntityType = scheduleEntityType,
+                EntityId = schedule.Id.ToString(),
+                Details = JsonSerializer.Serialize(new { plannedRunAt = now.AddHours(-31), detectedAt = now.AddHours(-30), latenessSeconds = 3600.0, gracePeriodSeconds = 300.0 })
+            });
+        await fixture.Db.SaveChangesAsync();
+
+        var missing = await fixture.Services.GetRequiredService<DashboardApplicationService>().GetMissingBackupsAsync(hours: 24);
+
+        Assert.Equal(2, missing.Count);
+        Assert.Equal(newerPlannedRun, missing[0].PlannedRunAt);
+        Assert.Equal(olderPlannedRun, missing[1].PlannedRunAt);
+        Assert.All(missing, item =>
+        {
+            Assert.Equal(schedule.Id, item.ScheduleId);
+            Assert.Equal("hourly", item.ScheduleName);
+            Assert.Equal(schedule.PolicyId, item.PolicyId);
+            Assert.Equal("hourly", item.PolicyName);
+            Assert.Equal(BackupType.Full, item.BackupType);
+            Assert.Equal(300.0, item.GracePeriodSeconds);
+        });
+        Assert.Equal(600.0, missing[0].LatenessSeconds);
     }
 
     [Fact]
@@ -4718,12 +4942,15 @@ public sealed class BackupRestoreExecutionTests
                 .AddScoped<IClickHouseAdapter>(provider => provider.GetRequiredService<FakeClickHouseAdapter>())
                 .AddSingleton(storageDeletion)
                 .AddScoped<IBackupStorageOperations>(provider => provider.GetRequiredService<FakeBackupStorageOperations>())
+                .AddScoped<IBackupStorageProviderRegistry, BackupStorageProviderRegistry>()
                 .AddScoped<PolicySelectorEvaluationService>()
                 .AddMemoryCache()
                 .AddScoped<ActorContext>()
                 .AddScoped<IActorContext>(provider => provider.GetRequiredService<ActorContext>())
                 .AddScoped<IAuditService, AuditService>()
                 .AddSingleton(Options.Create(new ChoboTestHooksOptions()))
+                .AddSingleton(Options.Create(new ChoboEndpointRewriteOptions()))
+                .AddSingleton<IEndpointRewriteService, EndpointRewriteService>()
                 .AddSingleton<ITestHookCoordinator, TestHookCoordinator>()
                 .AddScoped<DashboardApplicationService>()
                 .AddScoped<BackupApplicationService>()
@@ -4734,6 +4961,7 @@ public sealed class BackupRestoreExecutionTests
                 .AddScoped<IScheduleRepository, ScheduleRepository>()
                 .AddScoped<IUnitOfWork, EfUnitOfWork>()
                 .AddScoped<PolicyApplicationService>()
+                .AddScoped<TargetApplicationService>()
                 .AddScoped<ScheduleApplicationService>()
                 .AddScoped<SchemaBrowserApplicationService>()
                 .AddScoped<SystemDefaultBackupPolicyService>()

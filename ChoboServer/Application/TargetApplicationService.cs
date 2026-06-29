@@ -3,6 +3,7 @@ using Chobo.Contracts;
 using ChoboServer.Data;
 using ChoboServer.Repositories;
 using ChoboServer.Services;
+using Microsoft.EntityFrameworkCore;
 
 namespace ChoboServer.Application;
 
@@ -10,7 +11,8 @@ public sealed class TargetApplicationService(
     ITargetRepository targets,
     IUnitOfWork unitOfWork,
     IBackupStorageProviderRegistry storageProviders,
-    IAuditService audit)
+    IAuditService audit,
+    ChoboDbContext db)
 {
     public async Task<IReadOnlyList<BackupTargetDto>> ListAsync(bool includeDeleted = false) =>
         (await targets.ListAsync(includeDeleted)).Select(ToDto).ToList();
@@ -46,6 +48,11 @@ public sealed class TargetApplicationService(
             throw new ArgumentException("Backup target storage type cannot be changed.");
         }
 
+        if (await HasActiveBackupsAsync(id, cancellationToken))
+        {
+            throw new InvalidOperationException("Backup target cannot be updated while queued or running backups use it.");
+        }
+
         var provider = storageProviders.Get(target);
         var previous = ToDto(target);
         target.Name = NormalizeName(request.Name);
@@ -57,6 +64,11 @@ public sealed class TargetApplicationService(
         await audit.RecordAsync("update", AuditEntityType.BackupTarget, id.ToString(), AuditDetails.Change(previous, current));
         return current;
     }
+
+    private async Task<bool> HasActiveBackupsAsync(Guid targetId, CancellationToken cancellationToken) =>
+        await db.Backups.AsNoTracking().AnyAsync(x =>
+            x.TargetId == targetId &&
+            (x.Status == BackupRunStatus.Queued || x.Status == BackupRunStatus.Running), cancellationToken);
 
     public Task<BackupTargetDto> AddS3Async(UpsertS3TargetRequest request, CancellationToken cancellationToken = default) =>
         AddAsync(ToGenericS3Request(request), cancellationToken);
