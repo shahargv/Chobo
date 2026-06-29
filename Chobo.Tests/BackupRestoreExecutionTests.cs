@@ -18,6 +18,13 @@ namespace Chobo.Tests;
 
 public sealed class BackupRestoreExecutionTests
 {
+    private static ChoboBackupRestoreOptions FastCancelOptions(int maxDop = 3, TimeSpan? pollInterval = null) => new()
+    {
+        MaxDop = maxDop,
+        PollInterval = pollInterval ?? TimeSpan.FromMilliseconds(1),
+        CancelKillRetryDelay = TimeSpan.Zero
+    };
+
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
     [Fact]
@@ -2852,7 +2859,7 @@ public sealed class BackupRestoreExecutionTests
     [Fact]
     public async Task Backup_cancel_marks_run_canceled_kills_queries_and_garbage_collector_cleans_remains()
     {
-        await using var fixture = await TestFixture.CreateAsync();
+        await using var fixture = await TestFixture.CreateAsync(options: FastCancelOptions());
         var backup = await fixture.SeedBackupWithTablesAsync([
             new SeedBackupTable("sales", "orders", BackupTableStatus.Running, "backup-op-1", true)
         ]);
@@ -2863,7 +2870,8 @@ public sealed class BackupRestoreExecutionTests
 
         Assert.NotNull(canceled);
         Assert.Equal(BackupRunStatus.Canceled, canceled.Status);
-        Assert.Contains("backup-op-1", fixture.ClickHouse.KilledQueries);
+        Assert.Equal(2, fixture.ClickHouse.KilledQueries.Count(x => x == "backup-op-1"));
+        Assert.All(fixture.ClickHouse.KilledQueryEndpoints, endpoint => Assert.Equal(new ClickHouseNodeEndpoint("source", 9000, false), endpoint));
         Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "canceled" && x.EntityType == "backup" && x.EntityId == backup.Id.ToString()));
 
         await fixture.Services.GetRequiredService<BackupsGarbageCollectorBackgroundService>().RunOnceAsync();
@@ -2878,7 +2886,7 @@ public sealed class BackupRestoreExecutionTests
     [Fact]
     public async Task Backup_cancel_stops_inflight_worker_without_marking_later_shards_successful()
     {
-        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        await using var fixture = await TestFixture.CreateAsync(options: FastCancelOptions(maxDop: 1, pollInterval: TimeSpan.FromMilliseconds(1)));
         fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
         fixture.ClickHouse.Topology.Clear();
         fixture.ClickHouse.Topology.AddRange([
@@ -2899,7 +2907,8 @@ public sealed class BackupRestoreExecutionTests
         var canceled = await fixture.Services.GetRequiredService<BackupApplicationService>().CancelAsync(backupId);
         Assert.NotNull(canceled);
         Assert.Equal(BackupRunStatus.Canceled, canceled.Status);
-        Assert.Contains(startedShard.ClickHouseOperationId!, fixture.ClickHouse.KilledQueries);
+        Assert.Equal(2, fixture.ClickHouse.KilledQueries.Count(x => x == startedShard.ClickHouseOperationId!));
+        Assert.All(fixture.ClickHouse.KilledQueryEndpoints, endpoint => Assert.Equal(new ClickHouseNodeEndpoint(startedShard.Host, startedShard.Port, startedShard.UseTls), endpoint));
 
         fixture.ClickHouse.ReleaseBlockedStatus();
         await runTask;
@@ -2914,7 +2923,7 @@ public sealed class BackupRestoreExecutionTests
     [Fact]
     public async Task Backup_cancel_kills_table_operation_when_shards_have_no_operation_ids()
     {
-        await using var fixture = await TestFixture.CreateAsync();
+        await using var fixture = await TestFixture.CreateAsync(options: FastCancelOptions());
         var backup = await fixture.SeedBackupWithTablesAsync([
             new SeedBackupTable("sales", "orders", BackupTableStatus.Running, "backup-table-op", true)
         ]);
@@ -2931,13 +2940,14 @@ public sealed class BackupRestoreExecutionTests
 
         Assert.NotNull(canceled);
         Assert.Equal(BackupRunStatus.Canceled, canceled.Status);
-        Assert.Contains("backup-table-op", fixture.ClickHouse.KilledQueries);
+        Assert.Equal(2, fixture.ClickHouse.KilledQueries.Count(x => x == "backup-table-op"));
+        Assert.All(fixture.ClickHouse.KilledQueryEndpoints, endpoint => Assert.Equal(new ClickHouseNodeEndpoint("source", 9000, false), endpoint));
     }
 
     [Fact]
     public async Task Restore_cancel_marks_run_canceled_and_kills_queries()
     {
-        await using var fixture = await TestFixture.CreateAsync();
+        await using var fixture = await TestFixture.CreateAsync(options: FastCancelOptions());
         var backup = await fixture.SeedBackupWithTablesAsync([
             new SeedBackupTable("sales", "orders", BackupTableStatus.Succeeded, "backup-op", true)
         ]);
@@ -2953,13 +2963,14 @@ public sealed class BackupRestoreExecutionTests
 
         Assert.NotNull(canceled);
         Assert.Equal(RestoreRunStatus.Canceled, canceled.Status);
-        Assert.Contains("restore-op-1", fixture.ClickHouse.KilledQueries);
+        Assert.Equal(2, fixture.ClickHouse.KilledQueries.Count(x => x == "restore-op-1"));
+        Assert.All(fixture.ClickHouse.KilledQueryEndpoints, endpoint => Assert.Equal(new ClickHouseNodeEndpoint("restore", 9000, false), endpoint));
         Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "canceled" && x.EntityType == "restore" && x.EntityId == restore.Id.ToString()));
     }
     [Fact]
     public async Task Restore_cancel_stops_inflight_worker_without_marking_shard_successful()
     {
-        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        await using var fixture = await TestFixture.CreateAsync(options: FastCancelOptions(maxDop: 1, pollInterval: TimeSpan.FromMilliseconds(1)));
         fixture.ClickHouse.BlockOperationStatus = true;
         var backup = await fixture.SeedBackupWithTablesAsync([
             new SeedBackupTable("sales", "restore_cancel_inflight", BackupTableStatus.Succeeded, "backup-op", true)
@@ -2980,7 +2991,8 @@ public sealed class BackupRestoreExecutionTests
         var canceled = await fixture.Services.GetRequiredService<RestoreApplicationService>().CancelAsync(restore.Id);
         Assert.NotNull(canceled);
         Assert.Equal(RestoreRunStatus.Canceled, canceled.Status);
-        Assert.Contains(startedShard.ClickHouseOperationId!, fixture.ClickHouse.KilledQueries);
+        Assert.Equal(2, fixture.ClickHouse.KilledQueries.Count(x => x == startedShard.ClickHouseOperationId!));
+        Assert.All(fixture.ClickHouse.KilledQueryEndpoints, endpoint => Assert.Equal(new ClickHouseNodeEndpoint(startedShard.TargetHost, startedShard.TargetPort, startedShard.TargetUseTls), endpoint));
 
         fixture.ClickHouse.ReleaseBlockedStatus();
         await runTask;
@@ -4015,6 +4027,7 @@ public sealed class BackupRestoreExecutionTests
         public int GetTablesCallCount { get; private set; }
         public Dictionary<string, List<ClickHouseTableInfo>> InventoryByEndpoint { get; } = new(StringComparer.OrdinalIgnoreCase);
         public List<string> KilledQueries { get; } = [];
+        public List<ClickHouseNodeEndpoint> KilledQueryEndpoints { get; } = [];
         public List<ClickHouseNodeEndpoint> ExecuteEndpoints { get; } = [];
         public List<(ClickHouseNodeEndpoint Endpoint, string Sql)> EndpointExecuteSql { get; } = [];
         public HashSet<string> UnavailableVersionEndpoints { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -4265,18 +4278,23 @@ public sealed class BackupRestoreExecutionTests
             }
         }
 
-        public Task KillQueryAsync(ClickHouseClusterEntity cluster, string queryId, CancellationToken cancellationToken)
+        public Task KillBackupRestoreOperationAsync(ClickHouseClusterEntity cluster, string operationId, CancellationToken cancellationToken)
+        {
+            var node = cluster.AccessNodes.FirstOrDefault();
+            var endpoint = node is null ? new ClickHouseNodeEndpoint("source", 9000, false) : new ClickHouseNodeEndpoint(node.Host, node.Port, node.UseTls);
+            return KillBackupRestoreOperationAsync(endpoint, cluster, operationId, cancellationToken);
+        }
+
+        public Task KillBackupRestoreOperationAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string operationId, CancellationToken cancellationToken)
         {
             lock (_lock)
             {
-                KilledQueries.Add(queryId);
-                KnownOperations[queryId] = "CANCELLED";
+                KilledQueries.Add(operationId);
+                KilledQueryEndpoints.Add(endpoint);
+                KnownOperations[operationId] = "CANCELLED";
             }
             return Task.CompletedTask;
         }
-
-        public Task KillQueryAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string queryId, CancellationToken cancellationToken) =>
-            KillQueryAsync(cluster, queryId, cancellationToken);
 
         public Task WaitForBlockedStatusAsync() => _statusBlocked.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
