@@ -115,6 +115,7 @@ function baseBackup(overrides: Partial<BackupDto> = {}): BackupDto {
     tableCount: overrides.tableCount ?? 1,
     backupSizeBytes: overrides.backupSizeBytes ?? 0,
     relatedFullBackupIds: overrides.relatedFullBackupIds ?? [],
+    childBackupIds: overrides.childBackupIds ?? [],
     tables: overrides.tables ?? []
   };
 }

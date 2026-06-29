@@ -175,7 +175,8 @@ export function BackupDrawer({ backupId, onClose, onOpenBackup }: { backupId: st
           <Detail label="Initiated by" value={backupInitiator(current, scheduleById)} />
           <Detail label="Backup size" value={formatBytes(detailBackupSizeBytes)} />
           <Detail label="Table-shard completion" value={shardCompletion ? <ShardCompletionBadge completion={shardCompletion} /> : "Schema-only"} />
-          <Detail label="Related full backups" value={current.backupType === "Full" ? "-" : <RelatedFullBackupLinks backupIds={current.relatedFullBackupIds} onOpenBackup={onOpenBackup} />} />
+          <Detail label="Related full backups" value={current.backupType === "Full" ? "-" : <RelatedBackupLinks backupIds={current.relatedFullBackupIds} onOpenBackup={onOpenBackup} />} />
+          <Detail label="Child backups" value={<RelatedBackupLinks backupIds={current.childBackupIds} onOpenBackup={onOpenBackup} />} />
           <Detail className="detail-wide" label="Failure" value={current.failureReason || current.error ? <ExpandableErrorText text={current.failureReason ?? current.error} title={`Backup ${current.id} failure`} /> : "none"} />
         </div>
         <section className="detail-section detail-section-tables">
@@ -302,7 +303,7 @@ function ShardCompletionBadge({ completion }: { completion: BackupShardCompletio
   return <span className={`backup-completion ${completion.tone}`}>{completion.percent}% ({completion.succeeded}/{completion.total} table-shards)</span>;
 }
 
-function RelatedFullBackupLinks({ backupIds, onOpenBackup }: { backupIds: string[]; onOpenBackup?: (backupId: string) => void }) {
+function RelatedBackupLinks({ backupIds, onOpenBackup }: { backupIds: string[]; onOpenBackup?: (backupId: string) => void }) {
   if (backupIds.length === 0) return <>-</>;
   return <span className="related-backup-links">
     {backupIds.map((id, index) => <span key={id}>{index > 0 && <span>, </span>}{onOpenBackup ? <button className="link-button mono" onClick={() => onOpenBackup(id)}>{id}</button> : <Link className="mono" to={`/backups/${id}`}>{id}</Link>}</span>)}
@@ -334,12 +335,15 @@ function deleteBackupsMessage(backups: BackupDto[]) {
   if (backups.length === 1) {
     const backup = backups[0];
     const pinnedText = backup.isPinned ? " This backup is pinned, so confirming will force the delete request." : "";
-    return `Delete backup ${backup.id} and its stored backup data? This is destructive and cannot be undone.${pinnedText}`;
+    const childText = backup.childBackupIds.length === 0 ? " Any associated child backups will also be deleted." : ` ${backup.childBackupIds.length} associated child backup${backup.childBackupIds.length === 1 ? "" : "s"} will also be deleted.`;
+    return `Delete backup ${backup.id} and its stored backup data? This is destructive and cannot be undone.${childText}${pinnedText}`;
   }
 
   const pinnedCount = backups.filter((backup) => backup.isPinned).length;
   const pinnedText = pinnedCount > 0 ? ` ${pinnedCount} selected backup${pinnedCount === 1 ? " is" : "s are"} pinned, so confirming will force those delete requests.` : "";
-  return `Delete ${backups.length} backups and their stored backup data? This is destructive and cannot be undone.${pinnedText}`;
+  const childBackupCount = new Set(backups.flatMap((backup) => backup.childBackupIds)).size;
+  const childText = childBackupCount === 0 ? " Any associated child backups will also be deleted." : ` ${childBackupCount} associated child backup${childBackupCount === 1 ? "" : "s"} will also be deleted.`;
+  return `Delete ${backups.length} backups and their stored backup data? This is destructive and cannot be undone.${childText}${pinnedText}`;
 }
 
 function isBackupDeleted(backup: BackupDto) {

@@ -60,6 +60,7 @@ public sealed record BackupDto(
     long? BackupSizeBytes,
     IReadOnlyDictionary<string, JsonElement> ClickHouseBackupSettings,
     IReadOnlyList<Guid> RelatedFullBackupIds,
+    IReadOnlyList<Guid> ChildBackupIds,
     IReadOnlyList<BackupTableDto> Tables);
 
 public sealed record BackupTableDto(
