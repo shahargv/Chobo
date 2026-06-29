@@ -494,6 +494,23 @@ public sealed class BackupRestoreQueueApplicationService(
         concurrency.ReleaseOperation(BackupRestoreQueueKind.Backup, backupId);
     }
 
+    public async Task ResetIncompleteBackupNodeClaimsAsync(Guid backupId, CancellationToken cancellationToken = default)
+    {
+        await db.BackupRestoreQueueItems
+            .Where(x => x.Kind == BackupRestoreQueueKind.Backup &&
+                        x.OperationId == backupId &&
+                        x.StartedAt != null &&
+                        x.CompletedAt == null &&
+                        x.NodeHost != null &&
+                        x.NodePort != null &&
+                        x.NodeUseTls != null)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(x => x.StartedAt, (DateTimeOffset?)null)
+                .SetProperty(x => x.NodeHost, (string?)null)
+                .SetProperty(x => x.NodePort, (int?)null)
+                .SetProperty(x => x.NodeUseTls, (bool?)null), cancellationToken);
+        concurrency.ReleaseOperation(BackupRestoreQueueKind.Backup, backupId);
+    }
     public async Task ResetIncompleteRestoreClaimsAsync(Guid restoreId, CancellationToken cancellationToken = default)
     {
         await db.BackupRestoreQueueItems

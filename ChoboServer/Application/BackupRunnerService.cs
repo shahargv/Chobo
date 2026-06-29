@@ -15,6 +15,7 @@ public sealed class BackupRunnerService(
     IClickHouseAdapter clickHouse,
     IOptionsMonitor<ChoboBackupRestoreOptions> options,
     BackupPreparationService preparation,
+    BackupRestoreQueueApplicationService queue,
     IBackupStorageManifestService manifests,
     IAuditService audit,
     Serilog.ILogger logger)
@@ -58,6 +59,10 @@ public sealed class BackupRunnerService(
         try
         {
             _logger.Information("Starting backup run {BackupId}. Current status: {Status}.", backup.Id, backup.Status);
+            if (backup.Status == BackupRunStatus.Running)
+            {
+                await queue.ResetIncompleteBackupNodeClaimsAsync(backup.Id, cancellationToken);
+            }
             if (!await TryClaimBackupAsync(backup, cancellationToken))
             {
                 return;
