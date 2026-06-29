@@ -126,6 +126,28 @@ function Get-ChoboClusterName {
     ConvertTo-ChoboClusterSqlName -Value $Resource.Name
 }
 
+function Test-ChoboClusterNodeIsDown {
+    param(
+        [Parameter(Mandatory)] $Cluster,
+        [Parameter(Mandatory)] [int]$Shard,
+        [Parameter(Mandatory)] [int]$Replica
+    )
+
+    foreach ($node in @($Cluster.DownNodes)) {
+        if ($node -is [hashtable]) {
+            if ([int]$node.Shard -eq $Shard -and [int]$node.Replica -eq $Replica) {
+                return $true
+            }
+            continue
+        }
+
+        if ([string]$node -eq "s$Shard-r$Replica") {
+            return $true
+        }
+    }
+
+    return $false
+}
 function New-ChoboComposePlan {
     param([Parameter(Mandatory)] [hashtable[]]$Resources)
 
@@ -166,6 +188,7 @@ function New-ChoboComposePlan {
                         throw "Cluster resource '$name' is requested with conflicting layouts."
                     }
                 } else {
+                    $downNodes = if ($resource.DownNodes) { @($resource.DownNodes) } else { @() }
                     $clusters[$name] = [pscustomobject]@{
                         Name = $name
                         SafeName = ConvertTo-ChoboNamePart -Value $name
@@ -173,6 +196,7 @@ function New-ChoboComposePlan {
                         KeeperServiceName = Get-ChoboKeeperServiceName -ResourceName $name
                         Shards = $shards
                         Replicas = $replicas
+                        DownNodes = $downNodes
                     }
                 }
             }
@@ -445,6 +469,10 @@ function New-ChoboComposeEnvironment {
         for ($shard = 1; $shard -le $cluster.Shards; $shard++) {
             for ($replica = 1; $replica -le $cluster.Replicas; $replica++) {
                 $serviceName = Get-ChoboClusterServiceName -ResourceName $cluster.Name -Shard $shard -Replica $replica
+                if (Test-ChoboClusterNodeIsDown -Cluster $cluster -Shard $shard -Replica $replica) {
+                    continue
+                }
+
                 $macrosPath = Join-Path $configRoot "$serviceName-macros.xml"
                 Write-ChoboMacrosConfig -Path $macrosPath -ClusterName $cluster.ClusterName -Shard $shard -Replica $replica
                 $macrosVolume = "$(ConvertTo-ChoboComposePath -Path $macrosPath):/etc/clickhouse-server/config.d/macros.xml:ro"
