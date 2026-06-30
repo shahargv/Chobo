@@ -91,7 +91,10 @@ export function Backups() {
               <td>{formatBytes(backup.backupSizeBytes)}</td>
               <td>{backup.isPinned ? "yes" : "no"}</td>
               <td className="actions backup-history-actions">
-                <Link className="ghost icon-button" title="Open backup details" aria-label={`Open backup details for ${backup.id}`} to={`/backups/${backup.id}`}><ExternalLink size={16} /></Link>
+                <button className="ghost icon-button" title="Open backup details" aria-label={`Open backup details for ${backup.id}`} onClick={() => {
+                  setSelectedBackupId(backup.id);
+                  navigate(`/backups/${backup.id}`);
+                }}><ExternalLink size={16} /></button>
                 {!isBackupDeleted(backup) && <button className="ghost icon-button" title={backup.isPinned ? "Unpin backup" : "Pin backup"} aria-label={`${backup.isPinned ? "Unpin" : "Pin"} backup ${backup.id}`} onClick={() => mutation.mutate({ id: backup.id, action: backup.isPinned ? "unpin" : "pin" })}>{backup.isPinned ? <PinOff size={16} /> : <Pin size={16} />}</button>}
                 {isBackupInExecutionPhase(backup.status) && <button className="danger icon-button" title="Cancel backup" aria-label={`Cancel backup ${backup.id}`} onClick={() => mutation.mutate({ id: backup.id, action: "cancel" })}><Ban size={16} /></button>}
                 {!isBackupDeleted(backup) && <button className="danger icon-button" title="Delete backup" aria-label={`Delete backup ${backup.id}`} onClick={() => setDeleteTargets([backup])}><Trash2 size={16} /></button>}
@@ -434,3 +437,4 @@ function toDateTimeLocal(value: Date) {
 function toApiDateTime(value: string) {
   return value ? new Date(value).toISOString() : undefined;
 }
+

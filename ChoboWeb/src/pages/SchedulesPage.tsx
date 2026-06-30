@@ -68,7 +68,7 @@ export function Schedules() {
       <section className="panel">
         <DataTable headers={["Name", "Schedule id", "Policy", "Type", "Cron", "Timezone", "Enabled", "Actions"]} isLoading={schedules.isLoading}>
           {(schedules.data ?? []).map((schedule) => (
-            <tr key={schedule.id}>
+            <tr key={schedule.id} className={editing?.id === schedule.id ? "editing-row" : undefined}>
               <td>{schedule.name}</td>
               <td className="mono">{schedule.id}</td>
               <td>{nameOf(policies.data, schedule.policyId)}</td>

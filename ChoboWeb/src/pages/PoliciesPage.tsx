@@ -85,7 +85,7 @@ export function Policies() {
       <section className="panel">
         <DataTable headers={["Name", "Policy id", "Mode", "Source", "Backup Storage", "Rules", "Retention", "Actions"]} isLoading={policies.isLoading}>
           {(policies.data ?? []).map((policy) => (
-            <tr key={policy.id}>
+            <tr key={policy.id} className={editing?.id === policy.id ? "editing-row" : undefined}>
               <td>{policy.name}{policy.isSystemDefault && <span className="chip">system</span>}</td>
               <td className="mono">{policy.id}</td>
               <td>{policy.contentMode === "SchemaOnly" ? "Schema only" : "Schema + data"}</td>
@@ -112,19 +112,25 @@ export function Policies() {
         </div>
       </section>}
       {runPolicyTarget && <RunPolicyDialog policy={runPolicyTarget} busy={executePolicy.isPending} onCancel={() => setRunPolicyTarget(null)} onRun={(mode, clickHouseBackupSettings) => executePolicy.mutate({ policy: runPolicyTarget, mode, clickHouseBackupSettings })} />}
-      {showForm && <section className="panel form-panel">
+      {showForm && <section className="panel form-panel policy-form-panel">
         <div className="section-head"><h2>{editing ? "Edit policy" : "Create policy"}</h2><button className="ghost" onClick={reset}>Cancel</button></div>
-        <div className="form-grid">
+        <div className="form-grid policy-general-grid">
           <Input label="Name" value={draft.name} onChange={(value) => setDraft({ ...draft, name: value })} />
           <Select label="Source cluster" value={draft.sourceClusterId} onChange={(value) => setDraft({ ...draft, sourceClusterId: value })} options={(clusters.data ?? []).map((cluster) => [cluster.id, cluster.name])} />
           <Select label="Backup mode" value={draft.contentMode} onChange={(value) => setDraft({ ...draft, contentMode: value as BackupContentMode, targetId: value === "SchemaOnly" ? "" : draft.targetId })} options={[["SchemaAndData", "Schema + data"], ["SchemaOnly", "Schema only"]]} />
           {draft.contentMode === "SchemaAndData" && <Select label="Backup storage" value={draft.targetId} onChange={(value) => setDraft({ ...draft, targetId: value })} options={(targets.data ?? []).map((target) => [target.id, target.name])} />}
           <Select label="Failed backups" value={draft.failedBackupRetentionMode} onChange={(value) => setDraft({ ...draft, failedBackupRetentionMode: value as FailedBackupRetentionMode })} options={[["KeepAndExcludeFromMinBackupsToKeep", "Keep"], ["DeleteByGarbageCollectorAfterFailure", "Garbage collect failed backups"]]} />
         </div>
-        <SelectorBuilder selector={draft.selector} hasSource={draft.sourceClusterId.length > 0} inventory={simulation.data?.inventory ?? []} selected={simulation.data?.tables ?? []} isLoading={simulation.isFetching} error={simulation.error ? String(simulation.error) : null} onChange={(selector) => setDraft({ ...draft, selector })} />
-        <RetentionEditor value={draft.retention ?? { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 }} maxAgeHoursForBaseBackup={draft.maxAgeHoursForBaseBackup ?? null} onChange={(retention) => setDraft({ ...draft, retention })} onMaxAgeChange={(maxAgeHoursForBaseBackup) => setDraft({ ...draft, maxAgeHoursForBaseBackup })} />
-        <ClickHouseAdvancedSettingsEditor title="Backup advanced settings" value={(draft.clickHouseBackupSettings ?? {}) as Record<string, string | number | boolean>} onChange={(settings) => setDraft({ ...draft, clickHouseBackupSettings: settings })} />
-        <ClickHouseAdvancedSettingsEditor title="Default restore advanced settings" value={(draft.clickHouseRestoreSettings ?? {}) as Record<string, string | number | boolean>} onChange={(settings) => setDraft({ ...draft, clickHouseRestoreSettings: settings })} />
+        <div className="policy-form-section policy-selector-section">
+          <SelectorBuilder selector={draft.selector} hasSource={draft.sourceClusterId.length > 0} inventory={simulation.data?.inventory ?? []} selected={simulation.data?.tables ?? []} isLoading={simulation.isFetching} error={simulation.error ? String(simulation.error) : null} onChange={(selector) => setDraft({ ...draft, selector })} />
+        </div>
+        <div className="policy-form-section policy-retention-section">
+          <RetentionEditor value={draft.retention ?? { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 }} maxAgeHoursForBaseBackup={draft.maxAgeHoursForBaseBackup ?? null} onChange={(retention) => setDraft({ ...draft, retention })} onMaxAgeChange={(maxAgeHoursForBaseBackup) => setDraft({ ...draft, maxAgeHoursForBaseBackup })} />
+        </div>
+        <div className="policy-form-section policy-advanced-section">
+          <ClickHouseAdvancedSettingsEditor title="Backup advanced settings" value={(draft.clickHouseBackupSettings ?? {}) as Record<string, string | number | boolean>} onChange={(settings) => setDraft({ ...draft, clickHouseBackupSettings: settings })} />
+          <ClickHouseAdvancedSettingsEditor title="Default restore advanced settings" value={(draft.clickHouseRestoreSettings ?? {}) as Record<string, string | number | boolean>} onChange={(settings) => setDraft({ ...draft, clickHouseRestoreSettings: settings })} />
+        </div>
         {policyErrors.map((error) => <span className="field-error" key={error}>{error}</span>)}
         <button className="primary" disabled={policyErrors.length > 0 || save.isPending} onClick={() => {
           if (policyErrors.length === 0) save.mutate();
@@ -267,7 +273,7 @@ function RetentionEditor({ value, maxAgeHoursForBaseBackup, onChange, onMaxAgeCh
     <div className="retention-editor">
       <h3>Retention</h3>
       <span className="hint">Leave a retention minutes field empty for no time-based retention limit. Minimum counts of 0 mean no minimum backup count is protected.</span>
-      <div className="form-grid">
+      <div className="form-grid policy-general-grid">
         <Input label="Full retention minutes (empty = no retention)" type="number" value={retention.fullRetentionMinutes?.toString() ?? ""} onChange={(value) => onChange({ ...retention, fullRetentionMinutes: value ? Number(value) : null })} />
         <Input label="Incremental retention minutes (empty = no retention)" type="number" value={retention.incrementalRetentionMinutes?.toString() ?? ""} onChange={(value) => onChange({ ...retention, incrementalRetentionMinutes: value ? Number(value) : null })} />
         <Input label="Min backups to keep" type="number" value={`${retention.minBackupsToKeep}`} onChange={(value) => onChange({ ...retention, minBackupsToKeep: Number(value) || 0 })} />
@@ -293,3 +299,4 @@ function validatePolicyDraft(draft: UpsertPolicyRequest) {
   if (draft.maxAgeHoursForBaseBackup != null && draft.maxAgeHoursForBaseBackup <= 0) errors.push("Max base backup age hours must be greater than zero.");
   return errors;
 }
+

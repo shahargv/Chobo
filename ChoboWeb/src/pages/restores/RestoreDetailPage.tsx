@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, ArrowUpToLine, Ban, RefreshCw } from "lucide-react";
@@ -6,11 +6,13 @@ import { useApi } from "../../api-context";
 import { DataTable, Detail, Empty, Page, Status } from "../../components/ui";
 import { formatCompletionTime, formatTime } from "../../utils/format";
 import { formatRestoreLayout, formatTableOptions, formatTimeSeconds, isRestoreInExecutionPhase } from "./restoreUtils";
+import { BackupDrawer } from "../BackupsPage";
 
 export function RestoreDetailPage() {
   const { api, showToast } = useApi();
   const { restoreId = "" } = useParams();
   const queryClient = useQueryClient();
+  const [selectedBackupId, setSelectedBackupId] = useState<string | null>(null);
   const clusters = useQuery({ queryKey: ["clusters"], queryFn: () => api.clusters() });
   const backups = useQuery({ queryKey: ["backups", "summary"], queryFn: () => api.backups({}, { includeTables: false }) });
   const restore = useQuery({
@@ -49,7 +51,7 @@ export function RestoreDetailPage() {
     onError: (error) => showToast({ kind: "error", text: String(error) })
   });
 
-  return (
+  return <>
     <Page title="Restore details" subtitle="Inspect restore progress, table and shard results, and related logs or audit entries." action={<div className="actions"><Link className="secondary" to="/restores"><ArrowLeft size={16} /> History</Link>{active && <button className="secondary" disabled={bumpRestore.isPending} onClick={() => bumpRestore.mutate()}><ArrowUpToLine size={16} /> Bump queue</button>}{active && <button className="danger" disabled={cancelRestore.isPending} onClick={() => cancelRestore.mutate()}><Ban size={16} /> Cancel</button>}<button className="secondary" disabled={restore.isFetching || relatedLogs.isFetching || relatedAudits.isFetching} onClick={() => { restore.refetch(); relatedLogs.refetch(); relatedAudits.refetch(); }}><RefreshCw size={16} /> Refresh</button></div>}>
       {!current && restore.isLoading && <section className="panel"><Empty text="Loading restore details." /></section>}
       {!current && restore.error && <section className="panel"><Empty text={String(restore.error)} /></section>}
@@ -64,7 +66,7 @@ export function RestoreDetailPage() {
           </div>
           <div className="detail-list restore-review-details">
             <Detail label="Restore id" value={current.id} />
-            <Detail label="Backup" value={<Link to={`/backups/${current.backupId}`}>{backup ? `${backup.backupType} · ${formatTime(backup.createdAt)}` : current.backupId}</Link>} />
+            <Detail label="Backup" value={<button type="button" className="link-button" onClick={() => setSelectedBackupId(current.backupId)}>{backup ? `${backup.backupType} · ${formatTime(backup.createdAt)}` : current.backupId}</button>} />
             <Detail label="Target cluster" value={<Link to={`/clusters/${current.targetClusterId}`}>{clusterById.get(current.targetClusterId)?.name ?? current.targetClusterId}</Link>} />
             <Detail label="Layout" value={formatRestoreLayout(current.layout)} />
             <Detail label="Requested by" value={current.requestedByName} />
@@ -136,7 +138,8 @@ export function RestoreDetailPage() {
         </section>
       </>}
     </Page>
-  );
+    {selectedBackupId && <BackupDrawer backupId={selectedBackupId} onClose={() => setSelectedBackupId(null)} onOpenBackup={setSelectedBackupId} />}
+  </>;
 }
 
 function restoreCompletionType(status: string) {
@@ -150,11 +153,4 @@ function restoreCompletionType(status: string) {
     default: return status;
   }
 }
-
-
-
-
-
-
-
 
