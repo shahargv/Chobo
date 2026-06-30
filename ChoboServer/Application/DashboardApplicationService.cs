@@ -197,6 +197,19 @@ public sealed class DashboardApplicationService(ChoboDbContext db, TimeProvider 
                 .ToListAsync(cancellationToken);
         var lastSuccessfulRunByPolicyId = lastSuccessfulRuns.ToDictionary(x => x.PolicyId, x => x.CompletedAt);
 
+        var lastSemiSuccessfulRuns = policyIds.Count == 0
+            ? []
+            : await db.Backups
+                .AsNoTracking()
+                .Where(x => x.PolicyId != null &&
+                            policyIds.Contains(x.PolicyId.Value) &&
+                            (x.Status == BackupRunStatus.Succeeded || x.Status == BackupRunStatus.PartiallySucceeded) &&
+                            x.CompletedAt != null)
+                .GroupBy(x => x.PolicyId!.Value)
+                .Select(x => new { PolicyId = x.Key, CompletedAt = x.Max(b => b.CompletedAt) })
+                .ToListAsync(cancellationToken);
+        var lastSemiSuccessfulRunByPolicyId = lastSemiSuccessfulRuns.ToDictionary(x => x.PolicyId, x => x.CompletedAt);
+
         var statusCounts = policyIds.Count == 0
             ? []
             : await db.Backups
@@ -209,6 +222,57 @@ public sealed class DashboardApplicationService(ChoboDbContext db, TimeProvider 
                 .ToListAsync(cancellationToken);
         var statusCountsByPolicyAndStatus = statusCounts.ToDictionary(x => (x.PolicyId, x.Status), x => x.Count);
 
+        var oneHourAgo = generatedAt.AddHours(-1);
+        var twentyFourHoursAgo = generatedAt.AddHours(-24);
+        var recentFailedBackups = policyIds.Count == 0
+            ? []
+            : await db.Backups
+                .AsNoTracking()
+                .Where(x => x.PolicyId != null &&
+                            policyIds.Contains(x.PolicyId.Value) &&
+                            x.Status == BackupRunStatus.Failed &&
+                            x.CompletedAt != null &&
+                            x.CompletedAt >= twentyFourHoursAgo &&
+                            x.CompletedAt <= generatedAt)
+                .Select(x => new { PolicyId = x.PolicyId!.Value, CompletedAt = x.CompletedAt!.Value })
+                .ToListAsync(cancellationToken);
+        var failedBackupsLastHourByPolicyId = recentFailedBackups
+            .Where(x => x.CompletedAt >= oneHourAgo)
+            .GroupBy(x => x.PolicyId)
+            .ToDictionary(x => x.Key, x => x.Count());
+        var failedBackupsLast24HoursByPolicyId = recentFailedBackups
+            .GroupBy(x => x.PolicyId)
+            .ToDictionary(x => x.Key, x => x.Count());
+
+        var backupScheduleEntityType = AuditEntityTypes.ToStorageValue(AuditEntityType.BackupSchedule);
+        var recentMissedBackupScheduleIds = await db.AuditEntries
+            .AsNoTracking()
+            .Where(x => x.Action == "scheduled-backup-missed" &&
+                        x.EntityType == backupScheduleEntityType &&
+                        x.Timestamp >= twentyFourHoursAgo &&
+                        x.Timestamp <= generatedAt)
+            .Select(x => new { x.EntityId, x.Timestamp })
+            .ToListAsync(cancellationToken);
+        var scheduleIdsByPolicyId = policyIds.Count == 0
+            ? []
+            : await db.BackupSchedules
+                .AsNoTracking()
+                .Where(x => policyIds.Contains(x.PolicyId))
+                .Select(x => new { x.Id, x.PolicyId })
+                .ToListAsync(cancellationToken);
+        var policyIdByScheduleId = scheduleIdsByPolicyId.ToDictionary(x => x.Id, x => x.PolicyId);
+        var missedBackupsLastHourByPolicyId = recentMissedBackupScheduleIds
+            .Where(x => x.Timestamp >= oneHourAgo)
+            .Select(x => TryParseGuid(x.EntityId))
+            .Where(x => x is not null && policyIdByScheduleId.ContainsKey(x.Value))
+            .GroupBy(x => policyIdByScheduleId[x!.Value])
+            .ToDictionary(x => x.Key, x => x.Count());
+        var missedBackupsLast24HoursByPolicyId = recentMissedBackupScheduleIds
+            .Select(x => TryParseGuid(x.EntityId))
+            .Where(x => x is not null && policyIdByScheduleId.ContainsKey(x.Value))
+            .GroupBy(x => policyIdByScheduleId[x!.Value])
+            .ToDictionary(x => x.Key, x => x.Count());
+
         var metrics = new Dictionary<string, double?>(StringComparer.Ordinal);
         foreach (var policy in policies)
         {
@@ -216,10 +280,20 @@ public sealed class DashboardApplicationService(ChoboDbContext db, TimeProvider 
             var secondsSinceLastSuccessfulBackupEnded = lastSuccessfulBackupEndedAt is null
                 ? (double?)null
                 : Math.Max(0, (generatedAt - lastSuccessfulBackupEndedAt.Value).TotalSeconds);
+            lastSemiSuccessfulRunByPolicyId.TryGetValue(policy.Id, out var lastSemiSuccessfulBackupEndedAt);
+            var secondsSinceLastSemiSuccessfulBackupEnded = lastSemiSuccessfulBackupEndedAt is null
+                ? (double?)null
+                : Math.Max(0, (generatedAt - lastSemiSuccessfulBackupEndedAt.Value).TotalSeconds);
 
             metrics[$"Policies.TimeSecondsSinceLastPolicyBackup.{policy.Name}"] = secondsSinceLastSuccessfulBackupEnded;
             metrics[$"Policies.PartialBackups.{policy.Name}"] = statusCountsByPolicyAndStatus.GetValueOrDefault((policy.Id, BackupRunStatus.PartiallySucceeded));
             metrics[$"Policies.FailedBackups.{policy.Name}"] = statusCountsByPolicyAndStatus.GetValueOrDefault((policy.Id, BackupRunStatus.Failed));
+            metrics[$"TimeSecondsSinceLastPolicySuccessRun.{policy.Name}"] = secondsSinceLastSuccessfulBackupEnded;
+            metrics[$"TimeSecondsSinceLastPolicySemiSuccessRun.{policy.Name}"] = secondsSinceLastSemiSuccessfulBackupEnded;
+            metrics[$"MissedBackupsLastHour.{policy.Name}"] = missedBackupsLastHourByPolicyId.GetValueOrDefault(policy.Id);
+            metrics[$"MissedBackupsLast24Hours.{policy.Name}"] = missedBackupsLast24HoursByPolicyId.GetValueOrDefault(policy.Id);
+            metrics[$"NumFailedBackupsLastHour.{policy.Name}"] = failedBackupsLastHourByPolicyId.GetValueOrDefault(policy.Id);
+            metrics[$"NumFailedBackupsLast24Hours.{policy.Name}"] = failedBackupsLast24HoursByPolicyId.GetValueOrDefault(policy.Id);
         }
 
         return metrics;

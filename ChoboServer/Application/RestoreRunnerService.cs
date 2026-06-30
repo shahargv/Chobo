@@ -219,6 +219,10 @@ public sealed class RestoreRunnerService(
             var firstEndpoint = orderedShards.Count == 0
                 ? new ClickHouseNodeEndpoint(restore.TargetCluster!.AccessNodes[0].Host, restore.TargetCluster.AccessNodes[0].Port, restore.TargetCluster.AccessNodes[0].UseTls)
                 : new ClickHouseNodeEndpoint(orderedShards[0].TargetHost, orderedShards[0].TargetPort, orderedShards[0].TargetUseTls);
+            var firstShardNumber = orderedShards.Count == 0
+                ? (int?)null
+                : orderedShards[0].TargetShardNumber ?? orderedShards[0].SourceShardNumber;
+            firstEndpoint = await ResolveAvailableRestorePreparationEndpointAsync(scopedClickHouse, restore.TargetCluster!, firstEndpoint, firstShardNumber, cancellationToken);
             await scopedClickHouse.ExecuteAsync(firstEndpoint, restore.TargetCluster!, $"CREATE DATABASE IF NOT EXISTS {ClickHouseSql.Identifier(table.TargetDatabase)}", cancellationToken);
             var existing = await scopedClickHouse.GetTableAsync(firstEndpoint, restore.TargetCluster!, table.TargetDatabase, table.TargetTable, cancellationToken);
             if (!hasSubmittedOperations && existing is not null && !table.Append)
@@ -555,23 +559,83 @@ public sealed class RestoreRunnerService(
         }
         await scopedDb.SaveChangesAsync(cancellationToken);
     }
-    private static async Task EnsureTargetTableExistsOnAllShardsAsync(IClickHouseAdapter adapter, RestoreEntity restore, BackupTableEntity backupTable, RestoreTableEntity table, CancellationToken cancellationToken)
+    private async Task EnsureTargetTableExistsOnAllShardsAsync(IClickHouseAdapter adapter, RestoreEntity restore, BackupTableEntity backupTable, RestoreTableEntity table, CancellationToken cancellationToken)
     {
         var cluster = restore.TargetCluster!;
         var topology = await adapter.GetTopologyAsync(cluster, cancellationToken);
-        var endpoints = SelectShardRepresentativeEndpoints(topology);
-        if (endpoints.Count == 0 && cluster.AccessNodes.Count > 0)
+        var createTableSql = BuildCreateTableSql(restore, backupTable, table);
+
+        if (topology.Count == 0 && cluster.AccessNodes.Count > 0)
         {
-            endpoints = cluster.AccessNodes
-                .Select(x => new ClickHouseNodeEndpoint(x.Host, x.Port, x.UseTls))
-                .ToList();
+            foreach (var node in cluster.AccessNodes)
+            {
+                var endpoint = new ClickHouseNodeEndpoint(node.Host, node.Port, node.UseTls);
+                await adapter.ExecuteAsync(endpoint, cluster, $"CREATE DATABASE IF NOT EXISTS {ClickHouseSql.Identifier(table.TargetDatabase)}", cancellationToken);
+                await adapter.ExecuteAsync(endpoint, cluster, createTableSql, cancellationToken);
+            }
+            return;
         }
 
-        var createTableSql = BuildCreateTableSql(restore, backupTable, table);
-        foreach (var endpoint in endpoints)
+        foreach (var shard in topology.GroupBy(x => x.ShardNumber).OrderBy(x => x.Key))
         {
+            var preferred = shard
+                .OrderBy(x => x.ErrorsCount)
+                .ThenBy(x => x.ReplicaNumber)
+                .ThenBy(x => x.Host, StringComparer.Ordinal)
+                .ThenBy(x => x.Port)
+                .First()
+                .Endpoint;
+            var endpoint = await ResolveAvailableRestorePreparationEndpointAsync(adapter, cluster, preferred, shard.Key, cancellationToken);
             await adapter.ExecuteAsync(endpoint, cluster, $"CREATE DATABASE IF NOT EXISTS {ClickHouseSql.Identifier(table.TargetDatabase)}", cancellationToken);
             await adapter.ExecuteAsync(endpoint, cluster, createTableSql, cancellationToken);
+        }
+    }
+
+    private async Task<ClickHouseNodeEndpoint> ResolveAvailableRestorePreparationEndpointAsync(IClickHouseAdapter adapter, ClickHouseClusterEntity cluster, ClickHouseNodeEndpoint preferred, int? shardNumber, CancellationToken cancellationToken)
+    {
+        if (await IsRestorePreparationEndpointAvailableAsync(adapter, cluster, preferred, shardNumber, cancellationToken))
+        {
+            return preferred;
+        }
+
+        var topology = await adapter.GetTopologyAsync(cluster, cancellationToken);
+        var candidates = topology
+            .Where(x => shardNumber is null || x.ShardNumber == shardNumber.Value)
+            .OrderBy(x => x.ReplicaNumber)
+            .ThenBy(x => x.Host, StringComparer.Ordinal)
+            .ThenBy(x => x.Port)
+            .Select(x => x.Endpoint)
+            .Where(x => !string.Equals(EndpointKey(x), EndpointKey(preferred), StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        foreach (var candidate in candidates)
+        {
+            if (await IsRestorePreparationEndpointAvailableAsync(adapter, cluster, candidate, shardNumber, cancellationToken))
+            {
+                return candidate;
+            }
+        }
+
+        throw new InvalidOperationException(shardNumber is null
+            ? $"No available ClickHouse restore preparation endpoint was found for cluster {cluster.Id}."
+            : $"No available ClickHouse restore preparation endpoint was found for cluster {cluster.Id} shard {shardNumber.Value}.");
+    }
+
+    private async Task<bool> IsRestorePreparationEndpointAvailableAsync(IClickHouseAdapter adapter, ClickHouseClusterEntity cluster, ClickHouseNodeEndpoint endpoint, int? shardNumber, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await adapter.ExecuteAsync(endpoint, cluster, "SELECT version()", cancellationToken);
+            return true;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning(ex, "ClickHouse restore preparation endpoint {Host}:{Port} for cluster {ClusterId} shard {ShardNumber} is unavailable; trying another replica.", endpoint.Host, endpoint.Port, cluster.Id, shardNumber);
+            return false;
         }
     }
 

@@ -148,6 +148,49 @@ describe("BackupTablesTable", () => {
   });
 });
 describe("Backups destructive delete flow", () => {
+  it("sorts backup sizes by raw bytes instead of formatted text", async () => {
+    const smaller = baseBackup({ id: "backup-700-gb", backupSizeBytes: 700 * 1024 ** 3 });
+    const larger = baseBackup({ id: "backup-19-tb", backupSizeBytes: 19 * 1024 ** 4 });
+    const api = {
+      backups: vi.fn(async () => [smaller, larger]),
+      schedules: vi.fn(async () => []),
+      policies: vi.fn(async () => []),
+      deleteBackup: vi.fn(),
+      pinBackup: vi.fn(),
+      unpinBackup: vi.fn(),
+      cancelBackup: vi.fn()
+    };
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={["/backups"]}>
+            <ApiContext.Provider value={{ api: api as never, showToast: vi.fn() }}>
+              <Backups />
+            </ApiContext.Provider>
+          </MemoryRouter>
+        </QueryClientProvider>
+      );
+    });
+    await flushUi();
+
+    const sizeSort = host.querySelector('button[title="Sort Size"]') as HTMLButtonElement | null;
+    expect(sizeSort).toBeTruthy();
+    await act(async () => sizeSort!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    await act(async () => sizeSort!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+
+    const rows = Array.from(host.querySelectorAll("tbody tr"));
+    expect(rows[0]?.textContent).toContain("19 TB");
+    expect(rows[1]?.textContent).toContain("700 GB");
+
+    await act(async () => root.unmount());
+    queryClient.clear();
+    host.remove();
+  });
   it("shows confirmation and sends confirmDestructive for non-pinned backup deletes", async () => {
     const backup = baseBackup({ id: "backup-delete-id", isPinned: false });
     const deleteBackup = vi.fn(async () => ({ ...backup, status: "ManualDeleteRequested" as const }));
