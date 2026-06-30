@@ -238,6 +238,16 @@ button:disabled, .primary:disabled, .secondary:disabled, .ghost:disabled, .dange
 .policy-selector-section .preview-grid {
   grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
 }
+.policy-retention-summary {
+  margin: 0;
+  padding-left: 16px;
+  display: grid;
+  gap: 4px;
+  min-width: 230px;
+}
+.policy-retention-summary li {
+  padding-left: 2px;
+}
 .policy-advanced-section {
   display: grid;
   grid-template-columns: repeat(2, minmax(280px, 1fr));

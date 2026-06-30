@@ -1,7 +1,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
-import { backupTypeForPolicyRun, copyRule, excludeTableRule, SelectedTablesPreview } from "./PoliciesPage";
+import { backupTypeForPolicyRun, copyRule, excludeTableRule, formatPolicyRetentionSummary, SelectedTablesPreview } from "./PoliciesPage";
 
 describe("SelectedTablesPreview", () => {
   it("caps 1,000 selected table chips by default and can show all", async () => {
@@ -78,6 +78,29 @@ describe("policy selector rules", () => {
     expect(copy.table).not.toBe(rule.table);
   });
 });
+
+describe("policy retention summary", () => {
+  it("formats limited retention counts, times, and explicit full backup age", () => {
+    expect(formatPolicyRetentionSummary({
+      retention: { fullRetentionMinutes: 1440, incrementalRetentionMinutes: 720, minBackupsToKeep: 8, minFullBackupsToKeep: 3 },
+      maxAgeHoursForBaseBackup: 24
+    })).toEqual([
+      "Min backups to keep: full - 3, any - 8",
+      "Retention time: full - 1440 minutes, any - 720 minutes",
+      "New full backup every 24 hours"
+    ]);
+  });
+
+  it("formats missing or zero retention limits as unlimited", () => {
+    expect(formatPolicyRetentionSummary({
+      retention: { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 },
+      maxAgeHoursForBaseBackup: null
+    })).toEqual([
+      "Min backups to keep: full - unlimited, any - unlimited",
+      "Retention time: full - unlimited, any - unlimited"
+    ]);
+  });
+});
 describe("policy run options", () => {
   it("maps explicit run modes to the backup type sent to the API", () => {
     expect(backupTypeForPolicyRun({ contentMode: "SchemaAndData" }, "regular")).toBe("Incremental");
@@ -85,3 +108,4 @@ describe("policy run options", () => {
     expect(backupTypeForPolicyRun({ contentMode: "SchemaOnly" }, "regular")).toBe("Full");
   });
 });
+

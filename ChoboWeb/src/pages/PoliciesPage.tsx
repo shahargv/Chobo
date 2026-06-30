@@ -92,7 +92,7 @@ export function Policies() {
               <td>{nameOf(clusters.data, policy.sourceClusterId)}</td>
               <td>{policy.targetId ? nameOf(targets.data, policy.targetId) : "none"}</td>
               <td>{policy.selector.rules.length}</td>
-              <td>{policy.retention ? `${policy.retention.minBackupsToKeep} backups` : "default"}<br /><span className="muted">Base age {policy.effectiveMaxAgeHoursForBaseBackup}h{policy.maxAgeHoursForBaseBackup == null ? " inherited" : ""}</span></td>
+              <td><PolicyRetentionSummary policy={policy} /></td>
               <td className="actions"><button className="ghost" onClick={() => editPolicy(policy)}>Edit</button><button className="ghost" disabled={executePolicy.isPending} onClick={() => setRunPolicyTarget(policy)}><Play size={14} /> Run now</button></td>
             </tr>
           ))}
@@ -140,6 +140,30 @@ export function Policies() {
   );
 }
 
+
+export function formatPolicyRetentionSummary(policy: Pick<BackupPolicyDto, "retention" | "maxAgeHoursForBaseBackup">): string[] {
+  const retention = policy.retention ?? { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 };
+  const lines = [
+    `Min backups to keep: full - ${formatLimitedNumber(retention.minFullBackupsToKeep)}, any - ${formatLimitedNumber(retention.minBackupsToKeep)}`,
+    `Retention time: full - ${formatRetentionMinutes(retention.fullRetentionMinutes)}, any - ${formatRetentionMinutes(retention.incrementalRetentionMinutes)}`
+  ];
+  if (policy.maxAgeHoursForBaseBackup != null) lines.push(`New full backup every ${policy.maxAgeHoursForBaseBackup} hours`);
+  return lines;
+}
+
+function PolicyRetentionSummary({ policy }: { policy: BackupPolicyDto }) {
+  return <ul className="policy-retention-summary">
+    {formatPolicyRetentionSummary(policy).map((line) => <li key={line}>{line}</li>)}
+  </ul>;
+}
+
+function formatLimitedNumber(value: number | null | undefined) {
+  return value && value > 0 ? `${value}` : "unlimited";
+}
+
+function formatRetentionMinutes(value: number | null | undefined) {
+  return value && value > 0 ? `${value} minutes` : "unlimited";
+}
 type PolicyRunMode = "full" | "regular";
 
 function RunPolicyDialog({ policy, busy, onRun, onCancel }: { policy: BackupPolicyDto; busy: boolean; onRun: (mode: PolicyRunMode, clickHouseBackupSettings: ClickHouseSettings) => void; onCancel: () => void }) {
