@@ -802,6 +802,16 @@ button.advanced-active {
 }
 .restore-review-note span { color: var(--muted); font-size: 13px; line-height: 1.45; }
 .restore-warning-list { display: grid; gap: 6px; }
+.data-grid { min-width: 0; }
+.restore-main,
+.restore-review-plan,
+.restore-review-plan .data-grid,
+.restore-review-plan .table-wrap,
+.restore-review-plan textarea,
+.restore-review-note { min-width: 0; max-width: 100%; }
+.restore-review-plan .table-wrap { overflow-x: auto; }
+.restore-review-plan .data-grid table { min-width: 980px; }
+.restore-review-plan textarea { white-space: pre-wrap; overflow-wrap: anywhere; }
 .restore-review-details { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .restore-history-panel { margin-top: 2px; }
 .restore-history-panel .section-head p { margin-top: 4px; color: var(--muted); font-size: 13px; }
@@ -812,7 +822,7 @@ button.advanced-active {
 .restore-mapping-editor input,
 .restore-mapping-editor select { min-width: 150px; }
 
-@media (max-width: 1180px) {
+@media (max-width: 1400px) {
   .restore-workbench { grid-template-columns: 1fr; }
   .restore-impact-panel { position: static; }
 }
@@ -1025,3 +1035,89 @@ td code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-s
 .settings-row label { display: grid; gap: 4px; font-size: 0.85rem; color: var(--muted); }
 .settings-row input, .settings-row select { min-width: 0; }
 @media (max-width: 760px) { .settings-row { grid-template-columns: 1fr; align-items: stretch; } }
+
+.backup-date-filter {
+  display: grid;
+  grid-template-columns: minmax(220px, 320px) auto;
+  gap: 10px;
+  align-items: end;
+}
+.segmented-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.segmented-actions .selected { border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); }
+.restore-date-panel {
+  display: grid;
+  grid-template-columns: minmax(220px, 320px) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+.restore-date-picker { display: grid; gap: 6px; min-width: 0; }
+.restore-date-picker select,
+.restore-date-picker input { width: 100%; min-width: 0; }
+.shard-source-panel {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  min-width: 0;
+}
+.shard-source-table-wrap {
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.shard-source-table {
+  width: 100%;
+  min-width: 620px;
+  border-collapse: collapse;
+}
+.shard-source-table th,
+.shard-source-table td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: middle;
+}
+.shard-source-table th {
+  color: var(--muted);
+  font-size: 12px;
+  background: var(--surface-muted);
+}
+.shard-source-table tr:last-child td { border-bottom: 0; }
+.shard-source-table select { width: 100%; min-width: 260px; }
+
+@media (max-width: 760px) {
+  .backup-date-filter {
+  display: grid;
+  grid-template-columns: minmax(220px, 320px) auto;
+  gap: 10px;
+  align-items: end;
+}
+.segmented-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.segmented-actions .selected { border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); }
+.restore-date-panel { grid-template-columns: 1fr; align-items: stretch; }
+  .shard-source-table { min-width: 520px; }
+}
+.confirm-dialog.create-table-override-dialog {
+  width: min(920px, calc(100vw - 48px));
+}
+.confirm-dialog.create-table-override-dialog .confirm-content {
+  min-width: 0;
+}

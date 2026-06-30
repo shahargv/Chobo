@@ -60,6 +60,8 @@ export interface DashboardFutureScheduleDto { scheduleId: string; scheduleName?:
 export interface DashboardMissingBackupDto { auditId: number; scheduleId?: string | null; scheduleName?: string | null; policyId?: string | null; policyName?: string | null; backupType: BackupType; plannedRunAt: string; detectedAt: string; auditedAt: string; latenessSeconds: number; gracePeriodSeconds: number; }
 export interface DashboardRunningBackupDto { backupId: string; status: BackupRunStatus; triggerType: BackupTriggerType; policyId?: string | null; policyName?: string | null; scheduleId?: string | null; scheduleName?: string | null; createdAt: string; startedAt?: string | null; failureReason?: string | null; isPinned: boolean; deletionRequestedAt?: string | null; deletionReason?: string | null; tableCount: number; shardCount: number; succeededShardCount: number; failedShardCount: number; runningShardCount: number; }
 export interface DashboardScheduleDto { scheduleId: string; scheduleName?: string | null; policyId: string; policyName?: string | null; backupType: BackupType; cronExpression: string; timeZoneId: string; isEnabled: boolean; missedRunGracePeriod?: string | null; lastRunAt?: string | null; lastRunStatus: BackupRunStatus; lastRunFailureReason?: string | null; lastRunIsPinned: boolean; lastRunDeletionRequestedAt: string; lastSuccessfulRunCompletedAt?: string | null; }
+export interface EntityRestorePlanDto { policyId: string; anchorBackupId: string; targetClusterId: string; layout: RestoreLayout; tables: RestorePlanTableDto[]; queue: RestorePlanQueueItemDto[]; cliCommand: string; cliJson: string; }
+export interface EntityRestorePlanRequest { policyId?: string | null; anchorBackupId: string; targetClusterId: string; database: string; table: string; targetDatabase?: string | null; targetTable?: string | null; append: boolean; allowSchemaMismatch: boolean; layout: RestoreLayout; sourceShard?: number | null; targetShard?: number | null; tables: RestoreTableMappingRequest[]; schemaOnly: boolean; sourceShards?: number[] | null; targetShards?: number[] | null; confirmDestructive: boolean; clickHouseRestoreSettings?: Record<string, ClickHouseSettingValue> | null; }
 export interface ExportEnvelope { exportVersion: number; schemaVersion: number; generatedAt: string; productVersion: string; data: ExportPayload; }
 export interface ExportPayload { users: UserExport[]; accessTokens: AccessTokenExport[]; clusters: ClusterExport[]; backupTargets: BackupTargetExport[]; backupPolicies: BackupPolicyExport[]; backupSchedules: BackupScheduleExport[]; schemaDefinitions: SchemaDefinitionExport[]; backups: BackupExport[]; backupTables: BackupTableExport[]; backupTableShards: BackupTableShardExport[]; restores: RestoreExport[]; restoreTables: RestoreTableExport[]; restoreTableShards: RestoreTableShardExport[]; }
 export type FailedBackupRetentionMode = "KeepAndExcludeFromMinBackupsToKeep" | "DeleteByGarbageCollectorAfterFailure";
@@ -85,12 +87,17 @@ export interface RecoverBackupMetadataScanRequest { targetId: string; scanRoot?:
 export interface RestoreDto { id: string; backupId: string; targetClusterId: string; status: RestoreRunStatus; append: boolean; allowSchemaMismatch: boolean; layout: RestoreLayout; sourceShard?: number | null; targetShard?: number | null; requestedByUserId?: string | null; requestedByName: string; requestJson: string; createdAt: string; startedAt?: string | null; endedAt?: string | null; error?: string | null; failureReason?: string | null; clickHouseRestoreSettings?: Record<string, ClickHouseSettingValue> | null; tables: RestoreTableDto[]; }
 export interface RestoreExport { id: string; backupId: string; targetClusterId: string; status: RestoreRunStatus; append: boolean; allowSchemaMismatch: boolean; layout: RestoreLayout; sourceShard?: number | null; targetShard?: number | null; requestJson: string; requestedByUserId?: string | null; requestedByName: string; createdAt: string; queuedAt: string; startedAt?: string | null; completedAt: string; error?: string | null; failureReason?: string | null; clickHouseRestoreSettings?: Record<string, ClickHouseSettingValue> | null; }
 export type RestoreLayout = "Preserve" | "SingleNode" | "Redistribute";
+export interface RestorePlanQueueItemDto { backupTableId: string; backupTableShardId: string; database: string; table: string; logicalShardNumber: number; logicalShardName: string; targetNode: string; restoreStatement: string; }
+export interface RestorePlanShardDto { backupTableId: string; backupTableShardId: string; sourceBackupId: string; sourceBackupType: BackupType; sourceBackupCreatedAt: string; sourceShardNumber: number; sourceShardName?: string | null; targetShardNumber?: number | null; targetShardName?: string | null; targetReplicaNumber?: number | null; targetHost: string; targetPort: number; layoutRole: string; restoreStatement: string; }
+export interface RestorePlanTableDto { backupTableId: string; sourceDatabase: string; sourceTable: string; targetDatabase?: string | null; targetTable?: string | null; append: boolean; allowSchemaMismatch: boolean; schemaOnly: boolean; candidates: RestoreShardBackupCandidateDto[]; shards: RestorePlanShardDto[]; }
 export type RestoreRunStatus = "Queued" | "Running" | "Succeeded" | "PartiallySucceeded" | "Failed" | "Canceled";
 export interface RestoreSettingsPreviewRequest { backupId: string; targetClusterId: string; }
+export interface RestoreShardBackupCandidateDto { backupId: string; backupTableId: string; backupTableShardId: string; backupType: BackupType; backupStatus: BackupRunStatus; createdAt: string; sourceShardNumber: number; sourceShardName?: string | null; status: BackupTableStatus; isCompatible: boolean; isDefault: boolean; unavailableReason: string; }
+export interface RestoreShardSourceRequest { sourceShardNumber: number; backupTableShardId: string; }
 export interface RestoreTableDto { id: string; restoreId: string; backupTableId: string; sourceDatabase: string; sourceTable: string; targetDatabase?: string | null; targetTable?: string | null; append: boolean; allowSchemaMismatch: boolean; schemaOnly: boolean; status: RestoreTableStatus; clickHouseOperationId?: string | null; clickHouseStatus?: string | null; warning?: string | null; startedAt?: string | null; completedAt: string; error?: string | null; shards: RestoreTableShardDto[]; }
 export interface RestoreTableExport { id: string; restoreId: string; backupTableId: string; sourceDatabase: string; sourceTable: string; targetDatabase?: string | null; targetTable?: string | null; append: boolean; allowSchemaMismatch: boolean; schemaOnly: boolean; status: RestoreTableStatus; clickHouseOperationId?: string | null; clickHouseStatus?: string | null; warning?: string | null; startedAt?: string | null; completedAt: string; error?: string | null; }
-export interface RestoreTableMappingRequest { backupTableId: string; targetDatabase?: string | null; targetTable?: string | null; append?: boolean | null; allowSchemaMismatch?: boolean | null; schemaOnly?: boolean | null; createTableSqlOverride?: string | null; }
-export interface RestoreTableShardDto { id: string; restoreTableId: string; backupTableShardId: string; sourceShardNumber: number; targetShardNumber?: number | null; targetShardName?: string | null; targetReplicaNumber?: number | null; targetHost: string; targetPort: number; targetUseTls: boolean; layoutRole: string; restoreDatabase: string; restoreTableName: string; status: RestoreTableStatus; clickHouseOperationId?: string | null; clickHouseStatus?: string | null; warning?: string | null; startedAt?: string | null; completedAt: string; error?: string | null; }
+export interface RestoreTableMappingRequest { backupTableId: string; targetDatabase?: string | null; targetTable?: string | null; append?: boolean | null; allowSchemaMismatch?: boolean | null; schemaOnly?: boolean | null; createTableSqlOverride?: string | null; shardSources: RestoreShardSourceRequest[]; }
+export interface RestoreTableShardDto { id: string; restoreTableId: string; backupTableShardId: string; sourceBackupId: string; sourceBackupTableId: string; sourceBackupType: BackupType; sourceBackupCreatedAt: string; sourceShardNumber: number; targetShardNumber?: number | null; targetShardName?: string | null; targetReplicaNumber?: number | null; targetHost: string; targetPort: number; targetUseTls: boolean; layoutRole: string; restoreDatabase: string; restoreTableName: string; status: RestoreTableStatus; clickHouseOperationId?: string | null; clickHouseStatus?: string | null; warning?: string | null; startedAt?: string | null; completedAt: string; error?: string | null; }
 export interface RestoreTableShardExport { id: string; restoreTableId: string; backupTableShardId: string; sourceShardNumber: number; targetShardNumber?: number | null; targetShardName?: string | null; targetReplicaNumber?: number | null; targetHost: string; targetPort: number; targetUseTls: boolean; layoutRole: string; restoreDatabase: string; restoreTableName: string; status: RestoreTableStatus; clickHouseOperationId?: string | null; clickHouseStatus?: string | null; warning?: string | null; startedAt?: string | null; completedAt: string; error?: string | null; }
 export type RestoreTableStatus = "Queued" | "Running" | "Succeeded" | "PartiallySucceeded" | "Failed" | "Skipped";
 export type RuntimeSettingApplyMode = "Live" | "RestartRequired";
@@ -177,6 +184,8 @@ export const openApiSchemaNames = [
   "DashboardMissingBackupDto",
   "DashboardRunningBackupDto",
   "DashboardScheduleDto",
+  "EntityRestorePlanDto",
+  "EntityRestorePlanRequest",
   "ExportEnvelope",
   "ExportPayload",
   "FailedBackupRetentionMode",
@@ -202,8 +211,13 @@ export const openApiSchemaNames = [
   "RestoreDto",
   "RestoreExport",
   "RestoreLayout",
+  "RestorePlanQueueItemDto",
+  "RestorePlanShardDto",
+  "RestorePlanTableDto",
   "RestoreRunStatus",
   "RestoreSettingsPreviewRequest",
+  "RestoreShardBackupCandidateDto",
+  "RestoreShardSourceRequest",
   "RestoreTableDto",
   "RestoreTableExport",
   "RestoreTableMappingRequest",

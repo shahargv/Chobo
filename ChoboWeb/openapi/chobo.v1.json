@@ -2172,6 +2172,102 @@
         }
       }
     },
+    "/api/v1/restores/plan": {
+      "post": {
+        "tags": [
+          "Restores"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EntityRestorePlanRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EntityRestorePlanRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/EntityRestorePlanRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntityRestorePlanDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntityRestorePlanDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntityRestorePlanDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/restores/initiate-from-plan": {
+      "post": {
+        "tags": [
+          "Restores"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EntityRestorePlanRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EntityRestorePlanRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/EntityRestorePlanRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/restores/settings-preview": {
       "post": {
         "tags": [
@@ -5882,6 +5978,138 @@
         },
         "additionalProperties": false
       },
+      "EntityRestorePlanDto": {
+        "type": "object",
+        "properties": {
+          "policyId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "anchorBackupId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "targetClusterId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "layout": {
+            "$ref": "#/components/schemas/RestoreLayout"
+          },
+          "tables": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RestorePlanTableDto"
+            },
+            "nullable": true
+          },
+          "queue": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RestorePlanQueueItemDto"
+            },
+            "nullable": true
+          },
+          "cliCommand": {
+            "type": "string",
+            "nullable": true
+          },
+          "cliJson": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "EntityRestorePlanRequest": {
+        "type": "object",
+        "properties": {
+          "policyId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "anchorBackupId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "targetClusterId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "database": {
+            "type": "string",
+            "nullable": true
+          },
+          "table": {
+            "type": "string",
+            "nullable": true
+          },
+          "targetDatabase": {
+            "type": "string",
+            "nullable": true
+          },
+          "targetTable": {
+            "type": "string",
+            "nullable": true
+          },
+          "append": {
+            "type": "boolean"
+          },
+          "allowSchemaMismatch": {
+            "type": "boolean"
+          },
+          "layout": {
+            "$ref": "#/components/schemas/RestoreLayout"
+          },
+          "sourceShard": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "targetShard": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "tables": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RestoreTableMappingRequest"
+            },
+            "nullable": true
+          },
+          "schemaOnly": {
+            "type": "boolean"
+          },
+          "sourceShards": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "nullable": true
+          },
+          "targetShards": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "nullable": true
+          },
+          "confirmDestructive": {
+            "type": "boolean"
+          },
+          "clickHouseRestoreSettings": {
+            "type": "object",
+            "additionalProperties": { },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
       "ExportEnvelope": {
         "type": "object",
         "properties": {
@@ -6566,6 +6794,156 @@
         ],
         "type": "string"
       },
+      "RestorePlanQueueItemDto": {
+        "type": "object",
+        "properties": {
+          "backupTableId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "backupTableShardId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "database": {
+            "type": "string",
+            "nullable": true
+          },
+          "table": {
+            "type": "string",
+            "nullable": true
+          },
+          "logicalShardNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "logicalShardName": {
+            "type": "string",
+            "nullable": true
+          },
+          "targetNode": {
+            "type": "string",
+            "nullable": true
+          },
+          "restoreStatement": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "RestorePlanShardDto": {
+        "type": "object",
+        "properties": {
+          "backupTableId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "backupTableShardId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sourceBackupId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sourceBackupType": {
+            "$ref": "#/components/schemas/BackupType"
+          },
+          "sourceBackupCreatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "sourceShardNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "sourceShardName": {
+            "type": "string",
+            "nullable": true
+          },
+          "targetShardNumber": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "targetShardName": {
+            "type": "string",
+            "nullable": true
+          },
+          "targetReplicaNumber": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "targetHost": {
+            "type": "string",
+            "nullable": true
+          },
+          "targetPort": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "layoutRole": {
+            "type": "string",
+            "nullable": true
+          },
+          "restoreStatement": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "RestorePlanTableDto": {
+        "type": "object",
+        "properties": {
+          "backupTableId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sourceDatabase": {
+            "type": "string",
+            "nullable": true
+          },
+          "sourceTable": {
+            "type": "string",
+            "nullable": true
+          },
+          "targetDatabase": {
+            "type": "string",
+            "nullable": true
+          },
+          "targetTable": {
+            "type": "string",
+            "nullable": true
+          },
+          "append": {
+            "type": "boolean"
+          },
+          "allowSchemaMismatch": {
+            "type": "boolean"
+          },
+          "schemaOnly": {
+            "type": "boolean"
+          },
+          "candidates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RestoreShardBackupCandidateDto"
+            },
+            "nullable": true
+          },
+          "shards": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RestorePlanShardDto"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
       "RestoreRunStatus": {
         "enum": [
           "Queued",
@@ -6585,6 +6963,69 @@
             "format": "uuid"
           },
           "targetClusterId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
+      },
+      "RestoreShardBackupCandidateDto": {
+        "type": "object",
+        "properties": {
+          "backupId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "backupTableId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "backupTableShardId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "backupType": {
+            "$ref": "#/components/schemas/BackupType"
+          },
+          "backupStatus": {
+            "$ref": "#/components/schemas/BackupRunStatus"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "sourceShardNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "sourceShardName": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "$ref": "#/components/schemas/BackupTableStatus"
+          },
+          "isCompatible": {
+            "type": "boolean"
+          },
+          "isDefault": {
+            "type": "boolean"
+          },
+          "unavailableReason": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "RestoreShardSourceRequest": {
+        "type": "object",
+        "properties": {
+          "sourceShardNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "backupTableShardId": {
             "type": "string",
             "format": "uuid"
           }
@@ -6772,6 +7213,13 @@
           "createTableSqlOverride": {
             "type": "string",
             "nullable": true
+          },
+          "shardSources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RestoreShardSourceRequest"
+            },
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -6790,6 +7238,21 @@
           "backupTableShardId": {
             "type": "string",
             "format": "uuid"
+          },
+          "sourceBackupId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sourceBackupTableId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sourceBackupType": {
+            "$ref": "#/components/schemas/BackupType"
+          },
+          "sourceBackupCreatedAt": {
+            "type": "string",
+            "format": "date-time"
           },
           "sourceShardNumber": {
             "type": "integer",

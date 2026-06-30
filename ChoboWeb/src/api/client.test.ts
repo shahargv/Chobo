@@ -41,7 +41,7 @@ describe("ChoboApiClient destructive requests", () => {
       schemaOnly: false,
       confirmDestructive: true,
       clickHouseRestoreSettings: {},
-      tables: [{ backupTableId: "table-id", targetDatabase: "sales", targetTable: "orders", append: false, allowSchemaMismatch: false, schemaOnly: false }]
+      tables: [{ backupTableId: "table-id", targetDatabase: "sales", targetTable: "orders", append: false, allowSchemaMismatch: false, schemaOnly: false, shardSources: [] }]
     };
 
     await apiClient().initiateRestore(request);

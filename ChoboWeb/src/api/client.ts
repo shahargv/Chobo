@@ -28,6 +28,8 @@ import type {
   DashboardDto,
   DashboardMissingBackupDto,
   ExportEnvelope,
+  EntityRestorePlanDto,
+  EntityRestorePlanRequest,
   InitiateRestoreRequest,
   RestoreSettingsPreviewRequest,
   InstallRequest,
@@ -151,6 +153,8 @@ export class ChoboApiClient {
   restores() { return this.get<RestoreDto[]>("restores"); }
   restore(id: string) { return this.get<RestoreDto>(`restores/${id}`); }
   initiateRestore(request: InitiateRestoreRequest) { return this.post<RestoreDto>("restores/initiate", request); }
+  restorePlan(request: EntityRestorePlanRequest) { return this.post<EntityRestorePlanDto>("restores/plan", request); }
+  initiateRestoreFromPlan(request: EntityRestorePlanRequest) { return this.post<RestoreDto>("restores/initiate-from-plan", request); }
   restoreSettingsPreview(request: RestoreSettingsPreviewRequest) { return this.post<ClickHouseSettingsPreviewDto>("restores/settings-preview", request); }
   cancelRestore(id: string) { return this.post<RestoreDto>(`restores/${id}/cancel`, {}); }
 

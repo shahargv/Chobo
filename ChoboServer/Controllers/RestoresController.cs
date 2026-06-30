@@ -15,6 +15,20 @@ public sealed class RestoresController(RestoreApplicationService restores) : Con
         catch (ArgumentException ex) { return BadRequest(new ErrorResponse(ex.Message)); }
     }
 
+    [HttpPost("plan")]
+    public async Task<ActionResult<EntityRestorePlanDto>> Plan(EntityRestorePlanRequest request, CancellationToken cancellationToken)
+    {
+        try { return await restores.PlanEntityRestoreAsync(request, cancellationToken); }
+        catch (ArgumentException ex) { return BadRequest(new ErrorResponse(ex.Message)); }
+    }
+
+    [HttpPost("initiate-from-plan")]
+    public async Task<ActionResult<RestoreDto>> InitiateFromPlan(EntityRestorePlanRequest request, CancellationToken cancellationToken)
+    {
+        try { return await restores.InitiateFromPlanAsync(request, cancellationToken); }
+        catch (ArgumentException ex) { return BadRequest(new ErrorResponse(ex.Message)); }
+    }
+
     [HttpPost("settings-preview")]
     public async Task<ActionResult<ClickHouseSettingsPreviewDto>> SettingsPreview(RestoreSettingsPreviewRequest request, CancellationToken cancellationToken)
     {
