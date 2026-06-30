@@ -27,6 +27,12 @@ public sealed class BackupRestoreExecutionTests
 
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
+    private static IReadOnlyDictionary<string, JsonElement> Settings(params (string Name, object Value)[] settings) =>
+        settings.ToDictionary(
+            setting => setting.Name,
+            setting => JsonSerializer.SerializeToElement(setting.Value, setting.Value.GetType()),
+            StringComparer.OrdinalIgnoreCase);
+
     [Fact]
     public async Task Backup_paths_are_self_descriptive_and_unique()
     {
@@ -552,6 +558,53 @@ public sealed class BackupRestoreExecutionTests
         Assert.Contains("S3_ERROR", shard.Error);
         Assert.Single(fixture.ClickHouse.BackupStartTables);
         Assert.False(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "shard-retry-scheduled" && x.EntityId == shard.Id.ToString()));
+    }
+
+    [Fact]
+    public async Task Backup_statement_includes_cluster_and_policy_advanced_settings()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+        var cluster = await fixture.Db.ClickHouseClusters.SingleAsync(x => x.Id == fixture.SourceClusterId);
+        cluster.ClickHouseBackupSettingsJson = ClickHouseAdvancedSettings.Serialize(Settings(("max_backup_bandwidth", 100), ("backup_threads", 2)), ClickHouseAdvancedSettingsKind.Backup);
+        var policy = await fixture.SeedPolicyAsync();
+        policy.ClickHouseBackupSettingsJson = ClickHouseAdvancedSettings.Serialize(Settings(("backup_threads", 8), ("use_same_s3_credentials_for_base_backup", true)), ClickHouseAdvancedSettingsKind.Backup);
+        await fixture.Db.SaveChangesAsync();
+
+        var backup = await fixture.Services.GetRequiredService<BackupApplicationService>()
+            .ManualAsync(new ManualBackupRequest(Guid.Empty, null, PolicySelector.Empty, PolicyId: policy.Id));
+        await fixture.RunBackupAsync(backup.Id);
+
+        var sql = Assert.Single(fixture.ClickHouse.BackupStartSql);
+        Assert.Contains("BACKUP TABLE `sales`.`orders`", sql, StringComparison.Ordinal);
+        Assert.Contains("SETTINGS backup_threads = 8", sql, StringComparison.Ordinal);
+        Assert.Contains("max_backup_bandwidth = 100", sql, StringComparison.Ordinal);
+        Assert.Contains("use_same_s3_credentials_for_base_backup = 1", sql, StringComparison.Ordinal);
+        Assert.DoesNotContain("backup_threads = 2", sql, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Manual_backup_statement_uses_request_advanced_settings()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+        var cluster = await fixture.Db.ClickHouseClusters.SingleAsync(x => x.Id == fixture.SourceClusterId);
+        cluster.ClickHouseBackupSettingsJson = ClickHouseAdvancedSettings.Serialize(Settings(("max_backup_bandwidth", 100)), ClickHouseAdvancedSettingsKind.Backup);
+        await fixture.Db.SaveChangesAsync();
+
+        var backup = await fixture.Services.GetRequiredService<BackupApplicationService>()
+            .ManualAsync(new ManualBackupRequest(
+                fixture.SourceClusterId,
+                fixture.TargetId,
+                PolicySelector.Empty,
+                ClickHouseBackupSettings: Settings(("max_backup_bandwidth", 777), ("s3_storage_class", "STANDARD_IA"))));
+        await fixture.RunBackupAsync(backup.Id);
+
+        var sql = Assert.Single(fixture.ClickHouse.BackupStartSql);
+        Assert.Contains("BACKUP TABLE `sales`.`orders`", sql, StringComparison.Ordinal);
+        Assert.Contains("max_backup_bandwidth = 777", sql, StringComparison.Ordinal);
+        Assert.Contains("s3_storage_class = 'STANDARD_IA'", sql, StringComparison.Ordinal);
+        Assert.DoesNotContain("max_backup_bandwidth = 100", sql, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -3516,6 +3569,61 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Restore_statement_includes_cluster_and_policy_advanced_settings()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var targetCluster = await fixture.Db.ClickHouseClusters.SingleAsync(x => x.Id == fixture.TargetClusterId);
+        targetCluster.ClickHouseRestoreSettingsJson = ClickHouseAdvancedSettings.Serialize(Settings(("max_restore_bandwidth", 100), ("restore_threads", 2)), ClickHouseAdvancedSettingsKind.Restore);
+        var policy = await fixture.SeedPolicyAsync();
+        policy.ClickHouseRestoreSettingsJson = ClickHouseAdvancedSettings.Serialize(Settings(("restore_threads", 7), ("s3_storage_class", "STANDARD_IA")), ClickHouseAdvancedSettingsKind.Restore);
+        var backup = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, DateTimeOffset.UtcNow.AddMinutes(-1), tableName: "orders");
+        await fixture.Db.SaveChangesAsync();
+
+        var restore = await fixture.Services.GetRequiredService<RestoreApplicationService>().InitiateAsync(
+            new InitiateRestoreRequest(backup.Id, fixture.TargetClusterId, null, null, null, null, false, false));
+        await fixture.RunRestoreAsync(restore.Id);
+
+        var sql = Assert.Single(fixture.ClickHouse.RestoreStartSql);
+        Assert.Contains("RESTORE TABLE `sales`.`orders`", sql, StringComparison.Ordinal);
+        Assert.Contains("SETTINGS max_restore_bandwidth = 100", sql, StringComparison.Ordinal);
+        Assert.Contains("restore_threads = 7", sql, StringComparison.Ordinal);
+        Assert.Contains("s3_storage_class = 'STANDARD_IA'", sql, StringComparison.Ordinal);
+        Assert.DoesNotContain("restore_threads = 2", sql, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Restore_statement_uses_request_advanced_settings()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var targetCluster = await fixture.Db.ClickHouseClusters.SingleAsync(x => x.Id == fixture.TargetClusterId);
+        targetCluster.ClickHouseRestoreSettingsJson = ClickHouseAdvancedSettings.Serialize(Settings(("max_restore_bandwidth", 100)), ClickHouseAdvancedSettingsKind.Restore);
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Succeeded, "backup-op", true)
+        ]);
+        backup.Status = BackupRunStatus.Succeeded;
+        await fixture.Db.SaveChangesAsync();
+
+        var restore = await fixture.Services.GetRequiredService<RestoreApplicationService>().InitiateAsync(
+            new InitiateRestoreRequest(
+                backup.Id,
+                fixture.TargetClusterId,
+                null,
+                null,
+                null,
+                null,
+                false,
+                false,
+                ClickHouseRestoreSettings: Settings(("max_restore_bandwidth", 333), ("restore_threads", 4))));
+        await fixture.RunRestoreAsync(restore.Id);
+
+        var sql = Assert.Single(fixture.ClickHouse.RestoreStartSql);
+        Assert.Contains("RESTORE TABLE `sales`.`orders`", sql, StringComparison.Ordinal);
+        Assert.Contains("max_restore_bandwidth = 333", sql, StringComparison.Ordinal);
+        Assert.Contains("restore_threads = 4", sql, StringComparison.Ordinal);
+        Assert.DoesNotContain("max_restore_bandwidth = 100", sql, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Restore_shard_retries_transient_failure_and_succeeds()
     {
         await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions
@@ -4483,11 +4591,13 @@ public sealed class BackupRestoreExecutionTests
         public List<string> BackupStartTables { get; } = [];
         public List<int> BackupStartShardNumbers { get; } = [];
         public List<ClickHouseNodeEndpoint> BackupStartEndpoints { get; } = [];
+        public List<string> BackupStartSql { get; } = [];
         public List<string?> BackupBasePaths { get; } = [];
         public List<IReadOnlyDictionary<string, JsonElement>> BackupSettings { get; } = [];
         public List<string> RestoreStartTables { get; } = [];
         public List<int> RestoreStartShardNumbers { get; } = [];
         public List<ClickHouseNodeEndpoint> RestoreStartEndpoints { get; } = [];
+        public List<string> RestoreStartSql { get; } = [];
         public List<string> RestoreTargetTables { get; } = [];
         public List<bool> RestoreAllowNonEmptyTables { get; } = [];
         public List<IReadOnlyDictionary<string, JsonElement>> RestoreSettings { get; } = [];
@@ -4574,17 +4684,17 @@ public sealed class BackupRestoreExecutionTests
 
         public Task ExecuteAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string sql, CancellationToken cancellationToken)
         {
-            if (ExecuteException is not null)
-            {
-                throw ExecuteException;
-            }
-
             ExecuteSql.Add(sql);
             ExecuteEndpoints.Add(endpoint);
             EndpointExecuteSql.Add((endpoint, sql));
-            if (string.Equals(sql, "SELECT version()", StringComparison.OrdinalIgnoreCase) && UnavailableVersionEndpoints.Contains(EndpointKey(endpoint)))
+            var isVersionProbe = string.Equals(sql, "SELECT version()", StringComparison.OrdinalIgnoreCase);
+            if (isVersionProbe && UnavailableVersionEndpoints.Contains(EndpointKey(endpoint)))
             {
                 throw new TimeoutException($"simulated unavailable ClickHouse endpoint {endpoint.Host}:{endpoint.Port}");
+            }
+            if (!isVersionProbe && ExecuteException is not null)
+            {
+                throw ExecuteException;
             }
 
             return Task.CompletedTask;
@@ -4620,6 +4730,7 @@ public sealed class BackupRestoreExecutionTests
                 BackupStartTables.Add(table.Table);
                 BackupStartShardNumbers.Add(shard.SourceShardNumber);
                 BackupStartEndpoints.Add(endpoint);
+                BackupStartSql.Add($"BACKUP TABLE {ClickHouseSql.Qualified(table.Database, table.Table)} TO <target>{ClickHouseAdvancedSettings.ToSettingsClause(settings)} ASYNC");
                 BackupBasePaths.Add(baseBackupPath);
                 BackupSettings.Add(settings);
             }
@@ -4693,6 +4804,8 @@ public sealed class BackupRestoreExecutionTests
                 RestoreStartTables.Add(backupTable.Table);
                 RestoreStartShardNumbers.Add(table.TargetShardNumber ?? table.SourceShardNumber);
                 RestoreStartEndpoints.Add(endpoint);
+                var choboSettings = allowNonEmptyTables ? new[] { ("allow_non_empty_tables", "1") } : [];
+                RestoreStartSql.Add($"RESTORE TABLE {ClickHouseSql.Qualified(backupTable.Database, backupTable.Table)} AS {ClickHouseSql.Qualified(table.RestoreDatabase, table.RestoreTableName)} FROM <target>{ClickHouseAdvancedSettings.ToSettingsClause(settings, choboSettings)} ASYNC");
                 RestoreTargetTables.Add(table.RestoreTableName);
                 RestoreAllowNonEmptyTables.Add(allowNonEmptyTables);
                 RestoreSettings.Add(settings);
