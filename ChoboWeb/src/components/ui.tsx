@@ -22,7 +22,8 @@ export function CrudPage({ title, subtitle, showForm, onAdd, formTitle, saveLabe
   return <Page title={title} subtitle={subtitle} action={!showForm ? <button className="primary" onClick={onAdd}><Save size={16} /> Add</button> : undefined}><section className="panel">{table}</section>{showForm && <section className="panel form-panel"><div className="section-head">{formTitle && <h2>{formTitle}</h2>}{onCancel && <button className="ghost" onClick={onCancel}>Cancel</button>}</div><div className="form-grid">{form}</div><div className="actions"><button className="primary" onClick={onSave}><Save size={16} /> {saveLabel}</button></div></section>}</Page>;
 }
 
-type ParsedCell = { node: ReactNode; text: string; className?: string };
+type CellSortValue = string | number | null | undefined;
+type ParsedCell = { node: ReactNode; text: string; className?: string; sortValue?: CellSortValue };
 type ParsedRow = { id: string; cells: ParsedCell[] };
 
 export function DataTable({ headers, children, isLoading = false, loadingText = "Loading rows..." }: { headers: string[]; children: ReactNode; isLoading?: boolean; loadingText?: string }) {
@@ -38,6 +39,7 @@ export function DataTable({ headers, children, isLoading = false, loadingText = 
       header,
       accessorFn: (row) => row.cells[index]?.text ?? "",
       cell: ({ row }) => row.original.cells[index]?.node ?? null,
+      sortingFn: (left, right) => compareCellSortValues(left.original.cells[index], right.original.cells[index]),
       enableSorting: !isActionColumn,
       enableColumnFilter: !isActionColumn,
       enableGlobalFilter: !isActionColumn
@@ -120,11 +122,18 @@ function parseTableRows(children: ReactNode): ParsedRow[] {
     const row = rowNode as ReactElement<{ children?: ReactNode }>;
     const cells = Children.toArray(row.props.children).map((cellNode) => {
       if (!isValidElement(cellNode)) return { node: cellNode, text: textFromNode(cellNode) };
-      const cell = cellNode as ReactElement<{ children?: ReactNode; className?: string }>;
-      return { node: cell.props.children, text: textFromNode(cell.props.children), className: cell.props.className };
+      const cell = cellNode as ReactElement<{ children?: ReactNode; className?: string; "data-sort-value"?: CellSortValue }>;
+      return { node: cell.props.children, text: textFromNode(cell.props.children), className: cell.props.className, sortValue: cell.props["data-sort-value"] };
     });
     return [{ id: row.key?.toString() ?? `${rowIndex}`, cells }];
   });
+}
+
+function compareCellSortValues(left: ParsedCell | undefined, right: ParsedCell | undefined) {
+  const leftValue = left?.sortValue ?? left?.text ?? "";
+  const rightValue = right?.sortValue ?? right?.text ?? "";
+  if (typeof leftValue === "number" && typeof rightValue === "number") return leftValue - rightValue;
+  return String(leftValue).localeCompare(String(rightValue), undefined, { numeric: true, sensitivity: "base" });
 }
 
 function textFromNode(node: ReactNode): string {
@@ -214,4 +223,3 @@ export function Input({ label, value, onChange, type = "text", placeholder }: { 
 export function Select({ label, value, onChange, options }: { label: string; value: string; onChange: (value: string) => void; options: string[][] }) {
   return <label>{label}<select value={value} onChange={(event) => onChange(event.target.value)}><option value="">Select...</option>{options.map(([optionValue, optionLabel]) => <option key={optionValue} value={optionValue}>{optionLabel}</option>)}</select></label>;
 }
-
