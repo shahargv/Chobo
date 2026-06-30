@@ -4684,17 +4684,17 @@ public sealed class BackupRestoreExecutionTests
 
         public Task ExecuteAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, string sql, CancellationToken cancellationToken)
         {
-            if (ExecuteException is not null)
-            {
-                throw ExecuteException;
-            }
-
             ExecuteSql.Add(sql);
             ExecuteEndpoints.Add(endpoint);
             EndpointExecuteSql.Add((endpoint, sql));
-            if (string.Equals(sql, "SELECT version()", StringComparison.OrdinalIgnoreCase) && UnavailableVersionEndpoints.Contains(EndpointKey(endpoint)))
+            var isVersionProbe = string.Equals(sql, "SELECT version()", StringComparison.OrdinalIgnoreCase);
+            if (isVersionProbe && UnavailableVersionEndpoints.Contains(EndpointKey(endpoint)))
             {
                 throw new TimeoutException($"simulated unavailable ClickHouse endpoint {endpoint.Host}:{endpoint.Port}");
+            }
+            if (!isVersionProbe && ExecuteException is not null)
+            {
+                throw ExecuteException;
             }
 
             return Task.CompletedTask;
