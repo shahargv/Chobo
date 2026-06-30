@@ -178,7 +178,8 @@ describe("Backups destructive delete flow", () => {
     });
     await flushUi();
 
-    const deleteButton = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "Delete") as HTMLButtonElement | undefined;
+    expect(host.textContent).toContain("backup-d");
+    const deleteButton = host.querySelector('button[aria-label="Delete backup backup-delete-id"]') as HTMLButtonElement | undefined;
     expect(deleteButton).toBeTruthy();
     await act(async () => {
       deleteButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));

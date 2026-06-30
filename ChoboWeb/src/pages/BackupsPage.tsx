@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ArrowUpToLine, Ban, Info, Play, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
+import { ArrowUpToLine, Ban, ExternalLink, Info, Pin, PinOff, Play, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import type { BackupDto, BackupPolicyDto, BackupRunStatus, BackupTableDto, BackupTableShardDto, BackupType } from "../api/generated";
 import { useApi } from "../api-context";
 import { ConfirmDialog, DataTable, Detail, Drawer, Empty, ErrorDetailDialog, ExpandableErrorText, Input, Page, Select, Status } from "../components/ui";
@@ -76,10 +76,11 @@ export function Backups() {
           <button className="ghost" disabled={selectedBackups.length === 0} onClick={() => setSelectedBackupIds([])}>Clear</button>
           <button className="danger" disabled={selectedBackups.length === 0} onClick={() => setDeleteTargets(selectedBackups)}><Trash2 size={16} /> Delete selected</button>
         </div>
-        <DataTable headers={["Select", "Status", "Completion Time", "Type", "Initiated by", "Created", "Policy", "Tables", "Size", "Pinned", "Actions"]} isLoading={backups.isLoading}>
+        <DataTable headers={["Select", "Backup ID", "Status", "Completion Time", "Type", "Initiated by", "Created", "Policy", "Tables", "Size", "Pinned", "Actions"]} isLoading={backups.isLoading}>
           {backupRows.map((backup) => (
             <tr key={backup.id}>
               <td><input className="row-checkbox" aria-label={`Select backup ${backup.id}`} type="checkbox" checked={selectedBackupIds.includes(backup.id)} disabled={isBackupDeleted(backup)} onChange={(event) => setSelectedBackupIds((ids) => event.target.checked ? [...new Set([...ids, backup.id])] : ids.filter((id) => id !== backup.id))} /></td>
+              <td className="mono backup-id-cell" title={backup.id}>{shortBackupId(backup.id)}</td>
               <td><Status value={backup.status} /></td>
               <td>{formatCompletionTime(backup.endedAt ?? backup.deletedAt, backup.startedAt, backup.createdAt)}</td>
               <td>{backup.backupType}</td>
@@ -89,11 +90,11 @@ export function Backups() {
               <td>{backup.tableCount}</td>
               <td>{formatBytes(backup.backupSizeBytes)}</td>
               <td>{backup.isPinned ? "yes" : "no"}</td>
-              <td className="actions">
-                <Link className="ghost" to={`/backups/${backup.id}`}>Details</Link>
-                {!isBackupDeleted(backup) && <button className="ghost" onClick={() => mutation.mutate({ id: backup.id, action: backup.isPinned ? "unpin" : "pin" })}>{backup.isPinned ? "Unpin" : "Pin"}</button>}
-                {isBackupInExecutionPhase(backup.status) && <button className="danger" onClick={() => mutation.mutate({ id: backup.id, action: "cancel" })}><Ban size={16} /> Cancel</button>}
-                {!isBackupDeleted(backup) && <button className="danger" onClick={() => setDeleteTargets([backup])}>Delete</button>}
+              <td className="actions backup-history-actions">
+                <Link className="ghost icon-button" title="Open backup details" aria-label={`Open backup details for ${backup.id}`} to={`/backups/${backup.id}`}><ExternalLink size={16} /></Link>
+                {!isBackupDeleted(backup) && <button className="ghost icon-button" title={backup.isPinned ? "Unpin backup" : "Pin backup"} aria-label={`${backup.isPinned ? "Unpin" : "Pin"} backup ${backup.id}`} onClick={() => mutation.mutate({ id: backup.id, action: backup.isPinned ? "unpin" : "pin" })}>{backup.isPinned ? <PinOff size={16} /> : <Pin size={16} />}</button>}
+                {isBackupInExecutionPhase(backup.status) && <button className="danger icon-button" title="Cancel backup" aria-label={`Cancel backup ${backup.id}`} onClick={() => mutation.mutate({ id: backup.id, action: "cancel" })}><Ban size={16} /></button>}
+                {!isBackupDeleted(backup) && <button className="danger icon-button" title="Delete backup" aria-label={`Delete backup ${backup.id}`} onClick={() => setDeleteTargets([backup])}><Trash2 size={16} /></button>}
               </td>
             </tr>
           ))}
@@ -344,6 +345,10 @@ function deleteBackupsMessage(backups: BackupDto[]) {
   const childBackupCount = new Set(backups.flatMap((backup) => backup.childBackupIds)).size;
   const childText = childBackupCount === 0 ? " Any associated child backups will also be deleted." : ` ${childBackupCount} associated child backup${childBackupCount === 1 ? "" : "s"} will also be deleted.`;
   return `Delete ${backups.length} backups and their stored backup data? This is destructive and cannot be undone.${childText}${pinnedText}`;
+}
+
+function shortBackupId(id: string) {
+  return id.slice(0, 8);
 }
 
 function isBackupDeleted(backup: BackupDto) {
