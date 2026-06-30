@@ -23,7 +23,7 @@ export function CrudPage({ title, subtitle, showForm, onAdd, formTitle, saveLabe
 }
 
 type ParsedCell = { node: ReactNode; text: string; className?: string };
-type ParsedRow = { id: string; cells: ParsedCell[] };
+type ParsedRow = { id: string; cells: ParsedCell[]; className?: string };
 
 export function DataTable({ headers, children, isLoading = false, loadingText = "Loading rows..." }: { headers: string[]; children: ReactNode; isLoading?: boolean; loadingText?: string }) {
   const [sorting, setSorting] = useState<SortingState>([]);
@@ -88,7 +88,7 @@ export function DataTable({ headers, children, isLoading = false, loadingText = 
       </th>)}</tr>
     </Fragment>)}</thead><tbody>{visibleRows.length === 0
       ? <tr><td colSpan={headers.length}><Empty text={emptyText} /></td></tr>
-      : visibleRows.map((row) => <tr key={row.original.id}>{row.getVisibleCells().map((cell, index) => <td key={cell.id} className={row.original.cells[index]?.className}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>)}</tr>)}</tbody></table></div>
+      : visibleRows.map((row) => <tr key={row.original.id} className={row.original.className}>{row.getVisibleCells().map((cell, index) => <td key={cell.id} className={row.original.cells[index]?.className}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>)}</tr>)}</tbody></table></div>
   </div>;
 }
 
@@ -117,13 +117,13 @@ function ColumnFilter({ header }: { header: Header<ParsedRow, unknown> }) {
 function parseTableRows(children: ReactNode): ParsedRow[] {
   return Children.toArray(children).flatMap((rowNode, rowIndex) => {
     if (!isValidElement(rowNode)) return [];
-    const row = rowNode as ReactElement<{ children?: ReactNode }>;
+    const row = rowNode as ReactElement<{ children?: ReactNode; className?: string }>;
     const cells = Children.toArray(row.props.children).map((cellNode) => {
       if (!isValidElement(cellNode)) return { node: cellNode, text: textFromNode(cellNode) };
       const cell = cellNode as ReactElement<{ children?: ReactNode; className?: string }>;
       return { node: cell.props.children, text: textFromNode(cell.props.children), className: cell.props.className };
     });
-    return [{ id: row.key?.toString() ?? `${rowIndex}`, cells }];
+    return [{ id: row.key?.toString() ?? `${rowIndex}`, cells, className: row.props.className }];
   });
 }
 
