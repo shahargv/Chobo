@@ -2817,9 +2817,12 @@ public sealed class BackupRestoreExecutionTests
     [Fact]
     public async Task Dashboard_reports_active_runs_schedule_history_future_runs_and_policy_freshness()
     {
-        await using var fixture = await TestFixture.CreateAsync();
+        var now = new DateTimeOffset(2026, 5, 11, 10, 0, 0, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now));
         var schedule = await fixture.SeedPolicyAndScheduleAsync();
-        var completedAt = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var completedAt = now.AddMinutes(-5);
+        var partialCompletedAt = now.AddMinutes(-3);
+        var scheduleEntityType = AuditEntityTypes.ToStorageValue(AuditEntityType.BackupSchedule);
         fixture.Db.Backups.AddRange(
             new BackupEntity
             {
@@ -2836,13 +2839,89 @@ public sealed class BackupRestoreExecutionTests
             new BackupEntity
             {
                 TriggerType = BackupTriggerType.Scheduled,
+                Status = BackupRunStatus.PartiallySucceeded,
+                SourceClusterId = fixture.SourceClusterId,
+                TargetId = fixture.TargetId,
+                PolicyId = schedule.PolicyId,
+                ScheduleId = schedule.Id,
+                CreatedAt = partialCompletedAt.AddMinutes(-1),
+                StartedAt = partialCompletedAt.AddMinutes(-1),
+                CompletedAt = partialCompletedAt
+            },
+            new BackupEntity
+            {
+                TriggerType = BackupTriggerType.Scheduled,
+                Status = BackupRunStatus.Failed,
+                SourceClusterId = fixture.SourceClusterId,
+                TargetId = fixture.TargetId,
+                PolicyId = schedule.PolicyId,
+                ScheduleId = schedule.Id,
+                CreatedAt = now.AddMinutes(-31),
+                StartedAt = now.AddMinutes(-31),
+                CompletedAt = now.AddMinutes(-30)
+            },
+            new BackupEntity
+            {
+                TriggerType = BackupTriggerType.Scheduled,
+                Status = BackupRunStatus.Failed,
+                SourceClusterId = fixture.SourceClusterId,
+                TargetId = fixture.TargetId,
+                PolicyId = schedule.PolicyId,
+                ScheduleId = schedule.Id,
+                CreatedAt = now.AddHours(-2).AddMinutes(-1),
+                StartedAt = now.AddHours(-2).AddMinutes(-1),
+                CompletedAt = now.AddHours(-2)
+            },
+            new BackupEntity
+            {
+                TriggerType = BackupTriggerType.Scheduled,
+                Status = BackupRunStatus.Failed,
+                SourceClusterId = fixture.SourceClusterId,
+                TargetId = fixture.TargetId,
+                PolicyId = schedule.PolicyId,
+                ScheduleId = schedule.Id,
+                CreatedAt = now.AddHours(-25).AddMinutes(-1),
+                StartedAt = now.AddHours(-25).AddMinutes(-1),
+                CompletedAt = now.AddHours(-25)
+            },
+            new BackupEntity
+            {
+                TriggerType = BackupTriggerType.Scheduled,
                 Status = BackupRunStatus.Running,
                 SourceClusterId = fixture.SourceClusterId,
                 TargetId = fixture.TargetId,
                 PolicyId = schedule.PolicyId,
                 ScheduleId = schedule.Id,
-                CreatedAt = DateTimeOffset.UtcNow.AddSeconds(-10),
-                StartedAt = DateTimeOffset.UtcNow.AddSeconds(-8)
+                CreatedAt = now.AddSeconds(-10),
+                StartedAt = now.AddSeconds(-8)
+            });
+        fixture.Db.AuditEntries.AddRange(
+            new AuditEntryEntity
+            {
+                Timestamp = now.AddMinutes(-30),
+                ActorName = "system",
+                Action = "scheduled-backup-missed",
+                EntityType = scheduleEntityType,
+                EntityId = schedule.Id.ToString(),
+                Details = JsonSerializer.Serialize(new { plannedRunAt = now.AddMinutes(-40) })
+            },
+            new AuditEntryEntity
+            {
+                Timestamp = now.AddHours(-2),
+                ActorName = "system",
+                Action = "scheduled-backup-missed",
+                EntityType = scheduleEntityType,
+                EntityId = schedule.Id.ToString(),
+                Details = JsonSerializer.Serialize(new { plannedRunAt = now.AddHours(-2).AddMinutes(-10) })
+            },
+            new AuditEntryEntity
+            {
+                Timestamp = now.AddHours(-25),
+                ActorName = "system",
+                Action = "scheduled-backup-missed",
+                EntityType = scheduleEntityType,
+                EntityId = schedule.Id.ToString(),
+                Details = JsonSerializer.Serialize(new { plannedRunAt = now.AddHours(-25).AddMinutes(-10) })
             });
         await fixture.Db.SaveChangesAsync();
 
@@ -2860,15 +2939,20 @@ public sealed class BackupRestoreExecutionTests
         Assert.Equal("hourly", summary.PolicyName);
         Assert.Equal(BackupRunStatus.Running, summary.LastRunStatus);
         Assert.NotNull(summary.LastSuccessfulRunCompletedAt);
-        Assert.True(Math.Abs((summary.LastSuccessfulRunCompletedAt.Value - completedAt).TotalSeconds) < 1);
+        Assert.Equal(completedAt, summary.LastSuccessfulRunCompletedAt.Value);
         Assert.NotEmpty(dashboard.FutureSchedules);
         Assert.All(dashboard.FutureSchedules, x => Assert.Equal(schedule.Id, x.ScheduleId));
 
-        Assert.Equal(3, metrics.Count);
-        Assert.NotNull(metrics["Policies.TimeSecondsSinceLastPolicyBackup.hourly"]);
-        Assert.True(metrics["Policies.TimeSecondsSinceLastPolicyBackup.hourly"] >= 0);
-        Assert.Equal(0, metrics["Policies.PartialBackups.hourly"]);
-        Assert.Equal(0, metrics["Policies.FailedBackups.hourly"]);
+        Assert.Equal(9, metrics.Count);
+        Assert.Equal(300, metrics["Policies.TimeSecondsSinceLastPolicyBackup.hourly"]);
+        Assert.Equal(1, metrics["Policies.PartialBackups.hourly"]);
+        Assert.Equal(3, metrics["Policies.FailedBackups.hourly"]);
+        Assert.Equal(300, metrics["TimeSecondsSinceLastPolicySuccessRun.hourly"]);
+        Assert.Equal(180, metrics["TimeSecondsSinceLastPolicySemiSuccessRun.hourly"]);
+        Assert.Equal(1, metrics["MissedBackupsLastHour.hourly"]);
+        Assert.Equal(2, metrics["MissedBackupsLast24Hours.hourly"]);
+        Assert.Equal(1, metrics["NumFailedBackupsLastHour.hourly"]);
+        Assert.Equal(2, metrics["NumFailedBackupsLast24Hours.hourly"]);
     }
 
     [Fact]
