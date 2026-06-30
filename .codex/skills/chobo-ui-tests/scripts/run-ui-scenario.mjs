@@ -402,7 +402,7 @@ async function main() {
     await go('/backups');
     await page.locator('tbody tr').filter({ hasText: /Succeeded/i }).first().waitFor({ timeout: 30000 });
     await screenshot('backup-succeeded-list', 'Backups list shows the run succeeded.');
-    await page.getByRole('link', { name: /Details/i }).first().click();
+    await page.getByRole('button', { name: /Open backup details/i }).first().click();
     await expectText(/Backup detail|Tables and shards/i, 30000);
     await screenshot('backup-details', isLargeTableScenario ? 'Large backup detail remains usable and exposes size, table/shard state, related logs, and audit while handling a multi-GB table.' : 'Backup detail drawer exposes status, table/shard information, related logs, and audit sections.');
   }
@@ -463,7 +463,7 @@ async function main() {
     state.restoreId = restore.id;
     await go('/restores');
     await screenshot('restore-succeeded-list', 'Restore history shows the destructive restore succeeded after confirmation.');
-    await page.getByRole('link', { name: /Details/i }).first().click();
+    await page.locator(`a[href="/restores/${state.restoreId}"]`).first().click();
     await expectText(/Restore detail|Tables|Succeeded/i, 30000);
     await screenshot('restore-details', isLargeTableScenario ? 'Large restore detail exposes terminal status, affected table, logs, and audit after a multi-GB restore.' : 'Restore detail page exposes terminal status and affected tables.');
     await verifyRestoredRows();
@@ -476,10 +476,10 @@ async function main() {
     }
     if (!state.backupId) throw new Error('Backup delete confirmation scenario requires a completed backup id.');
     await go('/backups');
-    const row = page.locator('tbody tr').filter({ has: page.getByRole('button', { name: /^Delete$/i }) }).first();
+    const row = page.locator('tbody tr').filter({ has: page.getByRole('button', { name: /^Delete backup /i }) }).first();
     await row.waitFor({ timeout: 30000 });
     await screenshot('backup-delete-confirmation-ready', 'Backup row is ready; clicking Delete must show a visible destructive-action confirmation before the API request is sent.');
-    await row.getByRole('button', { name: /^Delete$/i }).click();
+    await row.getByRole('button', { name: /^Delete backup /i }).click();
     let dialog = page.getByRole('dialog', { name: /Delete backup/i });
     await dialog.waitFor({ timeout: 10000 });
     await screenshot('backup-delete-confirmation-dialog-cancel', 'Visible in-app delete confirmation dialog is shown before deleting backup data.');
@@ -491,7 +491,7 @@ async function main() {
     }
     await screenshot('backup-delete-canceled', 'Canceling the delete confirmation leaves the backup undeleted.');
 
-    await row.getByRole('button', { name: /^Delete$/i }).click();
+    await row.getByRole('button', { name: /^Delete backup /i }).click();
     dialog = page.getByRole('dialog', { name: /Delete backup/i });
     await dialog.waitFor({ timeout: 10000 });
     await screenshot('backup-delete-confirmation-dialog-confirm', 'Visible in-app delete confirmation dialog is shown before the confirmed destructive API request.');
@@ -552,10 +552,10 @@ async function main() {
 
   async function runDetails() {
     await go('/backups');
-    await page.getByRole('link', { name: /Details/i }).first().click();
+    await page.getByRole('button', { name: /Open backup details/i }).first().click();
     await screenshot('details-backup-route-reload', 'Backup detail remains understandable after returning to the list and reopening details.');
     await go('/restores');
-    await page.getByRole('link', { name: /Details/i }).first().click();
+    await page.locator(`a[href="/restores/${state.restoreId}"]`).first().click();
     await screenshot('details-restore-route-reload', 'Restore detail remains understandable after returning to history and reopening details.');
   }
 
