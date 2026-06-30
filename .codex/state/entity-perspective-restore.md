@@ -195,3 +195,11 @@ Not fully expanded in this pass:
 - Fixed restore review responsive behavior by moving the impact summary below the wizard earlier and keeping final queue/CLI overflow inside local containers instead of creating page-level horizontal scroll.
 - Extended the Chrome smoke to open Review at 1270px and assert the document has no horizontal overflow.
 - Reran focused backend test, `npm run typecheck`, `npm test`, and real Chrome restore wizard smoke.
+
+## GUI feedback fix 7 - 2026-06-30
+
+- Extracted restore SQL construction into `ClickHouseRestoreSqlBuilder` and routed actual ClickHouse restore execution through it.
+- Changed entity restore plan previews to resolve the actual storage destination through the selected shard backup's storage provider, then redact only destination credentials as `REDACTED`.
+- Fixed plan queue restore statements to use the selected target database/table from the row mapping instead of a guessed/default destination.
+- Added backend regression coverage for visible storage paths, credential-only redaction, and custom target table names in plan SQL previews.
+- Ran full backend unit suite after the final assertion: `dotnet test Chobo.Tests\Chobo.Tests.csproj -v minimal --blame-hang --blame-hang-timeout 30s` passed 231/231.

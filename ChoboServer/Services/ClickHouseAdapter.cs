@@ -213,11 +213,7 @@ public sealed class ClickHouseAdapter(ICredentialProtector protector, IEndpointR
     public async Task<ClickHouseOperationResult> StartRestoreShardAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, BackupTargetEntity target, RestoreTableShardEntity shard, BackupTableEntity backupTable, BackupTableShardEntity backupShard, bool allowNonEmptyTables, IReadOnlyDictionary<string, JsonElement> settings, CancellationToken cancellationToken)
     {
         var destination = await storageProviders.Get(target).CreateRestoreDestinationAsync(target, backupShard.StoragePath, cancellationToken);
-        var from = ClickHouseSql.Qualified(backupTable.Database, backupTable.Table);
-        var to = ClickHouseSql.Qualified(shard.RestoreDatabase, shard.RestoreTableName);
-        var choboSettings = allowNonEmptyTables ? new[] { ("allow_non_empty_tables", "1") } : [];
-        var settingsClause = ClickHouseAdvancedSettings.ToSettingsClause(settings, choboSettings.Concat(destination.Settings).ToArray());
-        var sql = $"RESTORE TABLE {from} AS {to} FROM {destination.Expression}{settingsClause} ASYNC";
+        var sql = ClickHouseRestoreSqlBuilder.Build(backupTable, shard, destination, allowNonEmptyTables, settings);
         _logger.Information("Submitting ClickHouse restore for {SourceDatabase}.{SourceTable} source shard {SourceShard} to {TargetDatabase}.{TargetTable} on {Host}:{Port}.", backupTable.Database, backupTable.Table, backupShard.SourceShardNumber, shard.RestoreDatabase, shard.RestoreTableName, endpoint.Host, endpoint.Port);
         return await StartOperationAsync(endpoint, cluster, sql, destination.SensitiveValues, cancellationToken);
     }

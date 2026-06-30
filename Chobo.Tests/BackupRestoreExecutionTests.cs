@@ -3851,20 +3851,23 @@ public sealed class BackupRestoreExecutionTests
         latest.Tables.Single().SchemaDefinitionId = older.Tables.Single().SchemaDefinitionId;
         await fixture.Db.SaveChangesAsync();
 
+        var selectedTable = latest.Tables.Single();
         var plan = await fixture.Services.GetRequiredService<RestoreApplicationService>().PlanEntityRestoreAsync(new EntityRestorePlanRequest(
             policy.Id,
             null,
             fixture.TargetClusterId,
-            Database: "sales",
-            Table: "orders"));
+            Tables: [new RestoreTableMappingRequest(selectedTable.Id, "restore_sales", "orders_restore_custom")]));
 
         var table = Assert.Single(plan.Tables);
         Assert.Equal(latest.Id, plan.AnchorBackupId);
         Assert.Equal([latest.Id, latest.Id], table.Shards.OrderBy(x => x.SourceShardNumber).Select(x => x.SourceBackupId).ToArray());
         Assert.Contains(plan.Queue, x => x.RestoreStatement.Contains("RESTORE TABLE", StringComparison.Ordinal));
         var restoreStatement = Assert.Single(plan.Queue, x => x.LogicalShardNumber == 1).RestoreStatement;
-        Assert.Contains(latest.Tables.Single().Shards.Single(x => x.SourceShardNumber == 1).StoragePath, restoreStatement);
+        Assert.Contains(selectedTable.Shards.Single(x => x.SourceShardNumber == 1).StoragePath, restoreStatement);
+        Assert.Contains("RESTORE TABLE `sales`.`orders` AS `restore_sales`.`orders_restore_custom`", restoreStatement);
         Assert.Contains("REDACTED", restoreStatement);
+        Assert.DoesNotContain("fake-access", restoreStatement);
+        Assert.DoesNotContain("fake-secret", restoreStatement);
         Assert.DoesNotContain("storage-path:redacted", restoreStatement);
         Assert.DoesNotContain("<backup-target:", restoreStatement);
         Assert.Contains("restore initiate-from-plan", plan.CliCommand);
@@ -5001,7 +5004,7 @@ public sealed class BackupRestoreExecutionTests
         public void ReleaseBlockedTopology() => _releaseTopology.TrySetResult();
     }
 
-    private sealed class FakeBackupStorageOperations : IBackupStorageOperations
+    private sealed class FakeBackupStorageOperations : IBackupStorageProvider
     {
         public List<string> DeletedDirectories { get; } = [];
         public List<string> DeletedObjects { get; } = [];
@@ -5011,6 +5014,39 @@ public sealed class BackupRestoreExecutionTests
         public int FailWriteCount { get; set; }
         public int WriteObjectCount { get; private set; }
         public bool DelayWritesUntilCanceled { get; set; }
+        public string Type => StorageProviderTypes.S3;
+        public IReadOnlyList<string> SecretFields { get; } = ["accessKey", "secretKey"];
+
+        public Task ConfigureNewTargetAsync(BackupTargetEntity target, UpsertBackupTargetRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task ConfigureExistingTargetAsync(BackupTargetEntity target, UpsertBackupTargetRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public BackupTargetDto ToDto(BackupTargetEntity target) =>
+            new(target.Id, target.Name, target.Type, new Dictionary<string, JsonElement>(), SecretFields, target.IsDeleted, target.CreatedAt, target.UpdatedAt);
+
+        public Task<ClickHouseStorageDestination> CreateBackupDestinationAsync(BackupTargetEntity target, string storagePath, string? baseBackupStoragePath, CancellationToken cancellationToken = default)
+        {
+            var destination = CreateDestination(target, storagePath);
+            if (string.IsNullOrWhiteSpace(baseBackupStoragePath))
+            {
+                return Task.FromResult(destination);
+            }
+
+            var baseDestination = CreateDestination(target, baseBackupStoragePath);
+            return Task.FromResult(destination with { Settings = [("base_backup", baseDestination.Expression)] });
+        }
+
+        public Task<ClickHouseStorageDestination> CreateRestoreDestinationAsync(BackupTargetEntity target, string storagePath, CancellationToken cancellationToken = default) =>
+            Task.FromResult(CreateDestination(target, storagePath));
+
+        private static ClickHouseStorageDestination CreateDestination(BackupTargetEntity target, string storagePath)
+        {
+            var settings = JsonSerializer.Deserialize<S3TargetSettingsDto>(target.SettingsJson, JsonOptions)
+                ?? new S3TargetSettingsDto("http://minio:9000", "us-east-1", "backups", null, true);
+            var endpoint = S3TargetUrlBuilder.BuildObjectUrl(settings, storagePath).ToString();
+            var expression = ClickHouseSql.S3(endpoint, "fake-access", "fake-secret");
+            return new ClickHouseStorageDestination(expression, [], ["fake-access", "fake-secret"], [expression, endpoint], [endpoint]);
+        }
 
         public Task DeleteDirectoryAsync(BackupTargetEntity target, string directoryPath, CancellationToken cancellationToken = default)
         {
@@ -5121,6 +5157,7 @@ public sealed class BackupRestoreExecutionTests
                 .AddScoped<IClickHouseAdapter>(provider => provider.GetRequiredService<FakeClickHouseAdapter>())
                 .AddSingleton(storageDeletion)
                 .AddScoped<IBackupStorageOperations>(provider => provider.GetRequiredService<FakeBackupStorageOperations>())
+                .AddScoped<IBackupStorageProvider>(provider => provider.GetRequiredService<FakeBackupStorageOperations>())
                 .AddScoped<IBackupStorageProviderRegistry, BackupStorageProviderRegistry>()
                 .AddScoped<PolicySelectorEvaluationService>()
                 .AddMemoryCache()

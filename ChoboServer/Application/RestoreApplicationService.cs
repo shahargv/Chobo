@@ -18,6 +18,7 @@ public sealed class RestoreApplicationService(
     IBackupRestoreQueues queues,
     BackupRestoreQueueApplicationService queueItems,
     IClickHouseAdapter clickHouse,
+    IBackupStorageProviderRegistry storageProviders,
     IOptionsMonitor<ChoboBackupRestoreOptions> options,
     IAuditService audit,
     ActorContext actor,
@@ -568,7 +569,7 @@ public sealed class RestoreApplicationService(
                         plan.Endpoint.Host,
                         plan.Endpoint.Port,
                         plan.LayoutRole,
-                        BuildRestoreStatementPreview(plan.BackupShard.BackupTable!, restoreTable, plan.BackupShard)));
+                        await BuildRestoreStatementPreviewAsync(plan.BackupShard.BackupTable!, restoreTable, plan.BackupShard, request.ClickHouseRestoreSettings ?? new Dictionary<string, JsonElement>(), cancellationToken)));
                 }
             }
 
@@ -755,53 +756,24 @@ public sealed class RestoreApplicationService(
     private static bool IsShardCandidateCompatible(BackupTableEntity anchorTable, BackupTableShardEntity shard) =>
         anchorTable.SchemaDefinition?.SchemaHash is { } anchorHash && shard.BackupTable?.SchemaDefinition?.SchemaHash == anchorHash;
 
-    private static string BuildRestoreStatementPreview(BackupTableEntity backupTable, RestoreTableEntity restoreTable, BackupTableShardEntity shard)
+    private async Task<string> BuildRestoreStatementPreviewAsync(
+        BackupTableEntity backupTable,
+        RestoreTableEntity restoreTable,
+        BackupTableShardEntity backupShard,
+        IReadOnlyDictionary<string, JsonElement> settings,
+        CancellationToken cancellationToken)
     {
-        var source = RestoreSourcePreview(backupTable.Backup?.Target, shard.StoragePath);
-        return $"RESTORE TABLE {ClickHouseSql.Qualified(backupTable.Database, backupTable.Table)} AS {ClickHouseSql.Qualified(restoreTable.TargetDatabase, restoreTable.TargetTable)} FROM {source} ASYNC -- source backup {backupTable.BackupId}, shard {shard.SourceShardNumber}";
-    }
-
-    private static string RestoreSourcePreview(BackupTargetEntity? target, string storagePath)
-    {
-        if (target is null || !string.Equals(target.Type, StorageProviderTypes.S3, StringComparison.OrdinalIgnoreCase))
+        var target = backupTable.Backup?.Target
+            ?? throw new ArgumentException($"Backup target for source backup {backupTable.BackupId} was not found.");
+        var destination = await storageProviders.Get(target).CreateRestoreDestinationAsync(target, backupShard.StoragePath, cancellationToken);
+        var previewShard = new RestoreTableShardEntity
         {
-            return $"<backup-target:{target?.Id.ToString() ?? "unknown"}>/{RedactCredentialLikeParts(storagePath)}";
-        }
-
-        var settings = string.IsNullOrWhiteSpace(target.SettingsJson)
-            ? new S3TargetSettingsDto("", "us-east-1", "", null, true)
-            : JsonSerializer.Deserialize<S3TargetSettingsDto>(target.SettingsJson, JsonOptions) ?? new S3TargetSettingsDto("", "us-east-1", "", null, true);
-        var endpoint = RedactCredentialLikeParts(S3TargetUrlBuilder.BuildObjectUrl(settings, storagePath).ToString());
-        return ClickHouseSql.S3(endpoint, "REDACTED", "REDACTED");
+            RestoreDatabase = restoreTable.TargetDatabase,
+            RestoreTableName = restoreTable.TargetTable
+        };
+        var sql = ClickHouseRestoreSqlBuilder.Build(backupTable, previewShard, destination, restoreTable.Append, settings);
+        return ClickHouseRestoreSqlBuilder.RedactForPreview(sql, destination.SensitiveValues);
     }
-
-    private static string RedactCredentialLikeParts(string value)
-    {
-        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)) return value;
-        var builder = new UriBuilder(uri) { UserName = string.IsNullOrEmpty(uri.UserInfo) ? "" : "REDACTED", Password = "" };
-        if (!string.IsNullOrWhiteSpace(builder.Query))
-        {
-            var query = builder.Query.TrimStart('?');
-            var parts = query.Split('&', StringSplitOptions.RemoveEmptyEntries)
-                .Select(part =>
-                {
-                    var separator = part.IndexOf('=', StringComparison.Ordinal);
-                    var name = separator >= 0 ? part[..separator] : part;
-                    return IsCredentialQueryName(Uri.UnescapeDataString(name)) ? $"{name}=REDACTED" : part;
-                });
-            builder.Query = string.Join("&", parts);
-        }
-        return builder.Uri.ToString();
-    }
-
-    private static bool IsCredentialQueryName(string name) =>
-        name.Contains("key", StringComparison.OrdinalIgnoreCase) ||
-        name.Contains("secret", StringComparison.OrdinalIgnoreCase) ||
-        name.Contains("token", StringComparison.OrdinalIgnoreCase) ||
-        name.Contains("credential", StringComparison.OrdinalIgnoreCase) ||
-        name.Contains("signature", StringComparison.OrdinalIgnoreCase) ||
-        name.Contains("password", StringComparison.OrdinalIgnoreCase);
-
     private static bool IsBackupRestorable(BackupRunStatus status) =>
         status is BackupRunStatus.Succeeded or BackupRunStatus.PartiallySucceeded;
 
