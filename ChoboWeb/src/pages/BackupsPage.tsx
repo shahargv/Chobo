@@ -87,7 +87,7 @@ export function Backups() {
               <td>{formatTime(backup.createdAt)}</td>
               <td>{backupPolicyLink(backup.policyId, policyById)}</td>
               <td>{backup.tableCount}</td>
-              <td>{formatBytes(backup.backupSizeBytes)}</td>
+              <td data-sort-value={backup.backupSizeBytes}>{formatBytes(backup.backupSizeBytes)}</td>
               <td>{backup.isPinned ? "yes" : "no"}</td>
               <td className="actions">
                 <Link className="ghost" to={`/backups/${backup.id}`}>Details</Link>
@@ -229,7 +229,7 @@ export function BackupTablesTable({ tableRows, isLoading }: { tableRows: BackupT
             <td>table</td>
             <td><Status value={table.status} /></td>
             <td>none</td>
-            <td>{formatBytes(calculateTableSizeBytes(table))}</td>
+            <td data-sort-value={calculateTableSizeBytes(table)}>{formatBytes(calculateTableSizeBytes(table))}</td>
             <td className="mono wide-cell">{table.storagePath}</td>
             <td>{table.error ? <ErrorDetailButton label={`${table.database}.${table.table}`} error={table.error} onOpen={setErrorDetail} /> : ""}</td>
           </tr>
@@ -246,7 +246,7 @@ export function BackupTablesTable({ tableRows, isLoading }: { tableRows: BackupT
             <td>{formatShardLabel(shard)}</td>
             <td><Status value={shard.status} /></td>
             <td>{formatShardEndpoint(shard)}</td>
-            <td>{formatBytes(shard.backupSizeBytes)}</td>
+            <td data-sort-value={shard.backupSizeBytes}>{formatBytes(shard.backupSizeBytes)}</td>
             <td className="mono wide-cell">{shard.storagePath}</td>
             <td>{shard.error ? <ErrorDetailButton label={`${table.database}.${table.table} ${formatShardLabel(shard)}`} error={shard.error} onOpen={setErrorDetail} /> : ""}</td>
           </tr>
