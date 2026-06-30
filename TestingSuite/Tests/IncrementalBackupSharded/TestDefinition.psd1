@@ -106,6 +106,40 @@
                 @{ Path = 'status'; Equals = 'Succeeded' }
             )
         }
+        @{
+            Name = 'entity-restore-plan-from-policy'
+            Type = 'Cli'
+            Args = @('restore', 'plan', '--policy-id', '{policy.id}', '--target-cluster-id', '{restoreCluster.id}', '--database', 'incremental_sharded_source', '--table', 'orders_local', '--target-database', 'incremental_entity_restore', '--target-table', 'orders_local', '--layout', 'preserve')
+            SaveJsonAs = 'entityPlan'
+            ExpectJson = @(
+                @{ Path = 'policyId'; Equals = '{policy.id}' }
+                @{ Path = 'targetClusterId'; Equals = '{restoreCluster.id}' }
+                @{ Path = 'tables[0].shards'; Count = 2 }
+                @{ Path = 'queue'; Count = 2 }
+                @{ Path = 'cliCommand'; Contains = 'restore initiate-from-plan' }
+                @{ Path = 'cliJson'; Contains = 'incremental_entity_restore' }
+            )
+        }
+        @{
+            Name = 'entity-restore-from-policy'
+            Type = 'Cli'
+            Args = @('restore', 'initiate-from-policy', '--policy-id', '{policy.id}', '--target-cluster-id', '{restoreCluster.id}', '--database', 'incremental_sharded_source', '--table', 'orders_local', '--target-database', 'incremental_entity_restore', '--target-table', 'orders_local', '--layout', 'preserve')
+            SaveJsonAs = 'entityRestore'
+            ExpectJson = @(
+                @{ Path = 'layout'; Equals = 'Preserve' }
+                @{ Path = 'tables[0].shards'; Count = 2 }
+            )
+        }
+        @{
+            Name = 'wait-entity-restore-from-policy'
+            Type = 'Cli'
+            Args = @('restores', 'wait', '--id', '{entityRestore.id}', '--timeout-seconds', '90', '--poll-seconds', '1')
+            ExpectJson = @(
+                @{ Path = 'status'; Equals = 'Succeeded' }
+                @{ Path = 'tables[0].shards'; ContainsObject = @{ sourceShardNumber = 1; targetShardNumber = 1; status = 'Succeeded' } }
+                @{ Path = 'tables[0].shards'; ContainsObject = @{ sourceShardNumber = 2; targetShardNumber = 2; status = 'Succeeded' } }
+            )
+        }
     )
 
     Verify = @(
@@ -113,6 +147,8 @@
         @{ Name = 'verify-restored-orders-shard-two'; Type = 'Csv'; Resource = 'restore'; Host = 'clickhouse-restore-s2-r1'; Path = 'Sql/select-restored-orders.sql'; Expected = 'Expected/orders-shard-two.csv'; Actual = 'orders-shard-two.csv' }
         @{ Name = 'verify-restored-new-orders-shard-one'; Type = 'Csv'; Resource = 'restore'; Host = 'clickhouse-restore-s1-r1'; Path = 'Sql/select-restored-new-orders.sql'; Expected = 'Expected/new-orders-shard-one.csv'; Actual = 'new-orders-shard-one.csv' }
         @{ Name = 'verify-restored-new-orders-shard-two'; Type = 'Csv'; Resource = 'restore'; Host = 'clickhouse-restore-s2-r1'; Path = 'Sql/select-restored-new-orders.sql'; Expected = 'Expected/new-orders-shard-two.csv'; Actual = 'new-orders-shard-two.csv' }
+        @{ Name = 'verify-entity-policy-restore-shard-one'; Type = 'Csv'; Resource = 'restore'; Host = 'clickhouse-restore-s1-r1'; Path = 'Sql/select-entity-policy-orders.sql'; Expected = 'Expected/orders-shard-one.csv'; Actual = 'entity-policy-orders-shard-one.csv' }
+        @{ Name = 'verify-entity-policy-restore-shard-two'; Type = 'Csv'; Resource = 'restore'; Host = 'clickhouse-restore-s2-r1'; Path = 'Sql/select-entity-policy-orders.sql'; Expected = 'Expected/orders-shard-two.csv'; Actual = 'entity-policy-orders-shard-two.csv' }
     )
 
     Cleanup = @()

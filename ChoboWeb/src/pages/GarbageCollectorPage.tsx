@@ -1,19 +1,19 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
 import { Clock, Play, RefreshCw, Trash2 } from "lucide-react";
 import { useApi } from "../api-context";
 import { DataTable, Input, Page, Stat, Status } from "../components/ui";
 import { formatTime } from "../utils/format";
+import { BackupDrawer } from "./BackupsPage";
 
 const cleanupActions = ["garbage", "cleanup", "delete", "retention"];
 const gcLogCategories = ["BackupsGarbageCollectorBackgroundService", "BackupCleanupService"];
 
 type AuditWindow = { startTime: string; endTime: string; limit: number };
 
-function formatEntity(entityType: string, entityId?: string | null) {
-  if (entityType === "backup" && entityId) {
-    return <Link to={`/backups/${entityId}`}>{entityType}:{entityId}</Link>;
+function formatEntity(entityType: string, entityId?: string | null, onOpenBackup?: (backupId: string) => void) {
+  if (entityType === "backup" && entityId && onOpenBackup) {
+    return <button type="button" className="link-button" onClick={() => onOpenBackup(entityId)}>{entityType}:{entityId}</button>;
   }
 
   return `${entityType}:${entityId ?? ""}`;
@@ -22,6 +22,7 @@ function formatEntity(entityType: string, entityId?: string | null) {
 export function GarbageCollectorPage() {
   const { api, showToast } = useApi();
   const [auditWindow, setAuditWindow] = useState<AuditWindow>(() => defaultAuditWindow());
+  const [selectedBackupId, setSelectedBackupId] = useState<string | null>(null);
   const auditQueryParams = {
     startTime: localDateTimeToIso(auditWindow.startTime),
     endTime: localDateTimeToIso(auditWindow.endTime),
@@ -63,7 +64,7 @@ export function GarbageCollectorPage() {
   const updateAuditWindow = (patch: Partial<AuditWindow>) => setAuditWindow((currentWindow) => ({ ...currentWindow, ...patch }));
   const resetToLastHour = () => setAuditWindow(defaultAuditWindow());
 
-  return (
+  return <>
     <Page title="Garbage Collector" subtitle="Review cleanup activity and run cleanup for expired or failed backup remains." action={<div className="actions"><button className="secondary" disabled={status.isFetching || queue.isFetching || logs.isFetching || audits.isFetching} onClick={refreshAll}><RefreshCw size={16} /> Refresh</button><button className="primary" disabled={run.isPending || current?.isRunning} onClick={() => run.mutate()}><Play size={16} /> Manual Execute</button></div>}>
       <section className="panel">
         <div className="section-head">
@@ -91,7 +92,7 @@ export function GarbageCollectorPage() {
         <DataTable headers={["Entity", "Status", "Final status", "Reason", "Requested", "Attempts", "Last error", "Actions"]} isLoading={queue.isLoading}>
           {(queue.data ?? []).map((item) => (
             <tr key={`${item.entityType}:${item.entityId}:${item.reason}`}>
-              <td>{formatEntity(item.entityType, item.entityId)}</td>
+              <td>{formatEntity(item.entityType, item.entityId, setSelectedBackupId)}</td>
               <td><Status value={item.status} /></td>
               <td><Status value={item.finalStatus} /></td>
               <td>{item.reason}</td>
@@ -111,7 +112,7 @@ export function GarbageCollectorPage() {
               <td>{formatTime(entry.timestamp)}</td>
               <td>{entry.actorName}</td>
               <td>{entry.action}</td>
-              <td>{formatEntity(entry.entityType, entry.entityId)}</td>
+              <td>{formatEntity(entry.entityType, entry.entityId, setSelectedBackupId)}</td>
               <td className="mono wide-cell">{JSON.stringify(entry.details)}</td>
             </tr>
           ))}
@@ -138,7 +139,8 @@ export function GarbageCollectorPage() {
         </DataTable>
       </section>
     </Page>
-  );
+    {selectedBackupId && <BackupDrawer backupId={selectedBackupId} onClose={() => setSelectedBackupId(null)} onOpenBackup={setSelectedBackupId} />}
+  </>;
 }
 
 function defaultAuditWindow(): AuditWindow {
@@ -157,3 +159,4 @@ function localDateTimeToIso(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
+

@@ -136,6 +136,12 @@ th {
 }
 td { padding: 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
 tr:last-child td { border-bottom: 0; }
+tbody tr.editing-row td {
+  background: #eef2f6;
+}
+tbody tr.editing-row:hover td {
+  background: #e6edf4;
+}
 
 .status, .chip {
   display: inline-flex;
@@ -185,6 +191,14 @@ button:disabled, .primary:disabled, .secondary:disabled, .ghost:disabled, .dange
 .danger { background: #fde3df; color: var(--bad); }
 .selected { background: #d7eef4; color: var(--accent-strong); border: 1px solid #8dc9d6; }
 .actions, .actions-panel { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.backup-id-cell {
+  max-width: 92px;
+  white-space: nowrap;
+}
+.backup-history-actions {
+  flex-wrap: nowrap;
+  gap: 6px;
+}
 .backup-history-filter {
   align-items: end;
   gap: 16px;
@@ -208,6 +222,41 @@ button:disabled, .primary:disabled, .secondary:disabled, .ghost:disabled, .dange
 .bulk-actions span { color: var(--muted); font-size: 13px; font-weight: 700; }
 
 .form-panel { align-items: start; }
+.policy-form-panel {
+  gap: 16px;
+}
+.policy-form-section {
+  width: 100%;
+  min-width: 0;
+}
+.policy-selector-section {
+  padding-top: 4px;
+}
+.policy-selector-section .selector-builder {
+  width: 100%;
+}
+.policy-selector-section .preview-grid {
+  grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
+}
+.policy-retention-summary {
+  margin: 0;
+  padding-left: 16px;
+  display: grid;
+  gap: 4px;
+  min-width: 230px;
+}
+.policy-retention-summary li {
+  padding-left: 2px;
+}
+.policy-advanced-section {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(280px, 1fr));
+  gap: 14px;
+  align-items: start;
+  width: 100%;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
 .form-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(180px, 1fr));
@@ -520,7 +569,7 @@ button.advanced-active {
   nav { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .nav-item { justify-content: center; }
   .nav-item span, .sidebar-github span { display: none; }
-  .stat-grid, .two-col, .form-grid, .preview-grid, .detail-list, .onboarding-list, .monitoring-links { grid-template-columns: 1fr; }
+  .stat-grid, .two-col, .form-grid, .preview-grid, .detail-list, .onboarding-list, .monitoring-links, .policy-advanced-section, .policy-selector-section .preview-grid { grid-template-columns: 1fr; }
   .field-wide { grid-column: auto; }
   .rule-row { grid-template-columns: 1fr; align-items: stretch; }
   .page { padding: 16px; }
@@ -802,6 +851,16 @@ button.advanced-active {
 }
 .restore-review-note span { color: var(--muted); font-size: 13px; line-height: 1.45; }
 .restore-warning-list { display: grid; gap: 6px; }
+.data-grid { min-width: 0; }
+.restore-main,
+.restore-review-plan,
+.restore-review-plan .data-grid,
+.restore-review-plan .table-wrap,
+.restore-review-plan textarea,
+.restore-review-note { min-width: 0; max-width: 100%; }
+.restore-review-plan .table-wrap { overflow-x: auto; }
+.restore-review-plan .data-grid table { min-width: 980px; }
+.restore-review-plan textarea { white-space: pre-wrap; overflow-wrap: anywhere; }
 .restore-review-details { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .restore-history-panel { margin-top: 2px; }
 .restore-history-panel .section-head p { margin-top: 4px; color: var(--muted); font-size: 13px; }
@@ -812,7 +871,7 @@ button.advanced-active {
 .restore-mapping-editor input,
 .restore-mapping-editor select { min-width: 150px; }
 
-@media (max-width: 1180px) {
+@media (max-width: 1400px) {
   .restore-workbench { grid-template-columns: 1fr; }
   .restore-impact-panel { position: static; }
 }
@@ -1025,3 +1084,90 @@ td code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-s
 .settings-row label { display: grid; gap: 4px; font-size: 0.85rem; color: var(--muted); }
 .settings-row input, .settings-row select { min-width: 0; }
 @media (max-width: 760px) { .settings-row { grid-template-columns: 1fr; align-items: stretch; } }
+
+.backup-date-filter {
+  display: grid;
+  grid-template-columns: minmax(220px, 320px) auto;
+  gap: 10px;
+  align-items: end;
+}
+.segmented-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.segmented-actions .selected { border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); }
+.restore-date-panel {
+  display: grid;
+  grid-template-columns: minmax(220px, 320px) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+.restore-date-picker { display: grid; gap: 6px; min-width: 0; }
+.restore-date-picker select,
+.restore-date-picker input { width: 100%; min-width: 0; }
+.shard-source-panel {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  min-width: 0;
+}
+.shard-source-table-wrap {
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.shard-source-table {
+  width: 100%;
+  min-width: 620px;
+  border-collapse: collapse;
+}
+.shard-source-table th,
+.shard-source-table td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: middle;
+}
+.shard-source-table th {
+  color: var(--muted);
+  font-size: 12px;
+  background: var(--surface-muted);
+}
+.shard-source-table tr:last-child td { border-bottom: 0; }
+.shard-source-table select { width: 100%; min-width: 260px; }
+
+@media (max-width: 760px) {
+  .backup-date-filter {
+  display: grid;
+  grid-template-columns: minmax(220px, 320px) auto;
+  gap: 10px;
+  align-items: end;
+}
+.segmented-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.segmented-actions .selected { border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); }
+.restore-date-panel { grid-template-columns: 1fr; align-items: stretch; }
+  .shard-source-table { min-width: 520px; }
+}
+.confirm-dialog.create-table-override-dialog {
+  width: min(920px, calc(100vw - 48px));
+}
+.confirm-dialog.create-table-override-dialog .confirm-content {
+  min-width: 0;
+}
+

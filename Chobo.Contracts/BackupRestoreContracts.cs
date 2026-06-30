@@ -225,6 +225,10 @@ public sealed record RestoreTableShardDto(
     Guid Id,
     Guid RestoreTableId,
     Guid BackupTableShardId,
+    Guid SourceBackupId,
+    Guid SourceBackupTableId,
+    BackupType SourceBackupType,
+    DateTimeOffset SourceBackupCreatedAt,
     int SourceShardNumber,
     int? TargetShardNumber,
     string? TargetShardName,
@@ -269,4 +273,91 @@ public sealed record RestoreTableMappingRequest(
     bool? Append = null,
     bool? AllowSchemaMismatch = null,
     bool? SchemaOnly = null,
-    string? CreateTableSqlOverride = null);
+    string? CreateTableSqlOverride = null,
+    IReadOnlyList<RestoreShardSourceRequest>? ShardSources = null);
+
+public sealed record RestoreShardSourceRequest(
+    int SourceShardNumber,
+    Guid BackupTableShardId);
+
+public sealed record EntityRestorePlanRequest(
+    Guid? PolicyId,
+    Guid? AnchorBackupId,
+    Guid TargetClusterId,
+    string? Database = null,
+    string? Table = null,
+    string? TargetDatabase = null,
+    string? TargetTable = null,
+    bool Append = false,
+    bool AllowSchemaMismatch = false,
+    RestoreLayout? Layout = null,
+    int? SourceShard = null,
+    int? TargetShard = null,
+    IReadOnlyList<RestoreTableMappingRequest>? Tables = null,
+    bool SchemaOnly = false,
+    IReadOnlyList<int>? SourceShards = null,
+    IReadOnlyList<int>? TargetShards = null,
+    bool ConfirmDestructive = false,
+    IReadOnlyDictionary<string, JsonElement>? ClickHouseRestoreSettings = null);
+
+public sealed record EntityRestorePlanDto(
+    Guid PolicyId,
+    Guid AnchorBackupId,
+    Guid TargetClusterId,
+    RestoreLayout Layout,
+    IReadOnlyList<RestorePlanTableDto> Tables,
+    IReadOnlyList<RestorePlanQueueItemDto> Queue,
+    string CliCommand,
+    string CliJson);
+
+public sealed record RestorePlanTableDto(
+    Guid BackupTableId,
+    string SourceDatabase,
+    string SourceTable,
+    string TargetDatabase,
+    string TargetTable,
+    bool Append,
+    bool AllowSchemaMismatch,
+    bool SchemaOnly,
+    IReadOnlyList<RestoreShardBackupCandidateDto> Candidates,
+    IReadOnlyList<RestorePlanShardDto> Shards);
+
+public sealed record RestoreShardBackupCandidateDto(
+    Guid BackupId,
+    Guid BackupTableId,
+    Guid BackupTableShardId,
+    BackupType BackupType,
+    BackupRunStatus BackupStatus,
+    DateTimeOffset CreatedAt,
+    int SourceShardNumber,
+    string? SourceShardName,
+    BackupTableStatus Status,
+    bool IsCompatible,
+    bool IsDefault,
+    string? UnavailableReason);
+
+public sealed record RestorePlanShardDto(
+    Guid BackupTableId,
+    Guid BackupTableShardId,
+    Guid SourceBackupId,
+    BackupType SourceBackupType,
+    DateTimeOffset SourceBackupCreatedAt,
+    int SourceShardNumber,
+    string? SourceShardName,
+    int? TargetShardNumber,
+    string? TargetShardName,
+    int? TargetReplicaNumber,
+    string TargetHost,
+    int TargetPort,
+    string LayoutRole,
+    string RestoreStatement);
+
+public sealed record RestorePlanQueueItemDto(
+    Guid BackupTableId,
+    Guid BackupTableShardId,
+    string Database,
+    string Table,
+    int LogicalShardNumber,
+    string? LogicalShardName,
+    string TargetNode,
+    string RestoreStatement);

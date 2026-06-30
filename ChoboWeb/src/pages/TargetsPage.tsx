@@ -52,7 +52,7 @@ export function Targets() {
     </>}
   </>} table={<DataTable headers={["Name", "Type", "Endpoint", "Bucket", "Addressing", "Prefix", "Actions"]} isLoading={targets.isLoading}>{(targets.data ?? []).map((target) => {
     const settings = s3Settings(target);
-    return <tr key={target.id}><td>{target.name}</td><td>{target.type}</td><td>{settings.endpoint}</td><td>{settings.bucket}</td><td>{settings.forcePathStyle ? "Path style" : "Virtual-host style"}</td><td>{settings.pathPrefix ?? ""}</td><td className="actions"><button className="ghost" onClick={() => {
+    return <tr key={target.id} className={editing?.id === target.id ? "editing-row" : undefined}><td>{target.name}</td><td>{target.type}</td><td>{settings.endpoint}</td><td>{settings.bucket}</td><td>{settings.forcePathStyle ? "Path style" : "Virtual-host style"}</td><td>{settings.pathPrefix ?? ""}</td><td className="actions"><button className="ghost" onClick={() => {
       setEditing(target);
       setShowForm(true);
       setStorageType(target.type);
@@ -87,3 +87,4 @@ function nullableStringSetting(value: JsonValue | undefined) {
 function booleanSetting(value: JsonValue | undefined, fallback: boolean) {
   return typeof value === "boolean" ? value : fallback;
 }
+

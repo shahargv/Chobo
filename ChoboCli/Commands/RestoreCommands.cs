@@ -9,6 +9,9 @@ public sealed class RestoreCommand : CliSubject
     public RestoreCommand()
     {
         Verb("initiate", "Start a restore.", InitiateAsync);
+        Verb("plan", "Preview an entity-perspective restore plan.", PlanAsync);
+        Verb("initiate-from-plan", "Start a restore from a restore plan JSON file.", InitiateFromPlanAsync);
+        Verb("initiate-from-policy", "Start a restore from the latest policy/entity plan defaults.", InitiateFromPolicyAsync);
     }
 
     public override string Name => "restore";
@@ -49,6 +52,69 @@ public sealed class RestoreCommand : CliSubject
         return await CommandHelpers.WithClient(context, client => client.PostAsync("restores/initiate", request));
     }
 
+
+    private static async Task<object?> PlanAsync(CommandContext context)
+    {
+        var request = BuildEntityRestorePlanRequest(context, confirmDestructive: context.Command.Options.Has("--confirm-destructive"));
+        return await CommandHelpers.WithClient(context, client => client.PostAsync("restores/plan", request));
+    }
+
+    private static async Task<object?> InitiateFromPlanAsync(CommandContext context)
+    {
+        var path = context.Command.Options.Required("--file");
+        var json = File.ReadAllText(path);
+        var request = ReadEntityRestorePlanRequest(json);
+        return await CommandHelpers.WithClient(context, client => client.PostAsync("restores/initiate-from-plan", request));
+    }
+
+    private static async Task<object?> InitiateFromPolicyAsync(CommandContext context)
+    {
+        var request = BuildEntityRestorePlanRequest(context, confirmDestructive: context.Command.Options.Has("--confirm-destructive"));
+        return await CommandHelpers.WithClient(context, client => client.PostAsync("restores/initiate-from-plan", request));
+    }
+
+
+    private static EntityRestorePlanRequest ReadEntityRestorePlanRequest(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        if (document.RootElement.ValueKind == JsonValueKind.Object && document.RootElement.TryGetProperty("cliJson", out var cliJson) && cliJson.ValueKind == JsonValueKind.String)
+        {
+            json = cliJson.GetString() ?? throw new InvalidOperationException("Restore plan cliJson was empty.");
+        }
+
+        return JsonSerializer.Deserialize<EntityRestorePlanRequest>(json, new JsonSerializerOptions(JsonSerializerDefaults.Web))
+            ?? throw new InvalidOperationException("Restore plan file was empty or invalid.");
+    }
+    private static EntityRestorePlanRequest BuildEntityRestorePlanRequest(CommandContext context, bool confirmDestructive)
+    {
+        var options = context.Command.Options;
+        var policyIdText = options.Optional("--policy-id");
+        var anchorBackupIdText = options.Optional("--anchor-backup-id") ?? options.Optional("--backup-id");
+        if (string.IsNullOrWhiteSpace(policyIdText) && string.IsNullOrWhiteSpace(anchorBackupIdText))
+        {
+            throw new InvalidOperationException("Use --policy-id or --anchor-backup-id.");
+        }
+        var targetClusterId = Guid.Parse(options.Required("--target-cluster-id"));
+        return new EntityRestorePlanRequest(
+            string.IsNullOrWhiteSpace(policyIdText) ? null : Guid.Parse(policyIdText),
+            string.IsNullOrWhiteSpace(anchorBackupIdText) ? null : Guid.Parse(anchorBackupIdText),
+            targetClusterId,
+            options.Optional("--database"),
+            options.Optional("--table"),
+            options.Optional("--target-database"),
+            options.Optional("--target-table"),
+            options.Has("--append"),
+            options.Has("--allow-schema-mismatch"),
+            options.Optional("--layout") is { } layout ? ParseLayout(layout) : null,
+            options.Optional("--source-shard") is { } sourceShard ? int.Parse(sourceShard) : null,
+            options.Optional("--target-shard") is { } targetShard ? int.Parse(targetShard) : null,
+            ParseTableMappings(options),
+            options.Has("--schema-only"),
+            ParseShards(options.Optional("--source-shards")),
+            ParseShards(options.Optional("--target-shards")),
+            confirmDestructive,
+            null);
+    }
     private static IReadOnlyList<int>? ParseShards(string? value) =>
         string.IsNullOrWhiteSpace(value)
             ? null

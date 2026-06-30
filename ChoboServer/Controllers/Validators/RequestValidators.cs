@@ -326,6 +326,10 @@ public sealed class RestoreTableMappingRequestValidator : AbstractValidator<Rest
         RuleFor(x => x)
             .Must(x => string.IsNullOrWhiteSpace(x.TargetDatabase) == string.IsNullOrWhiteSpace(x.TargetTable))
             .WithMessage("TargetDatabase and TargetTable must be provided together for each table mapping.");
+        RuleForEach(x => x.ShardSources).SetValidator(new RestoreShardSourceRequestValidator()).When(x => x.ShardSources is not null);
+        RuleFor(x => x)
+            .Must(x => x.ShardSources is null || x.ShardSources.Select(s => s.SourceShardNumber).Distinct().Count() == x.ShardSources.Count)
+            .WithMessage("Shard source mappings must not contain duplicate source shard numbers.");
     }
 
     private static bool IsSingleCreateTableStatement(string? sql)
@@ -346,6 +350,65 @@ public sealed class RestoreTableMappingRequestValidator : AbstractValidator<Rest
     }
 }
 
+
+public sealed class RestoreShardSourceRequestValidator : AbstractValidator<RestoreShardSourceRequest>
+{
+    public RestoreShardSourceRequestValidator()
+    {
+        RuleFor(x => x.SourceShardNumber).GreaterThan(0);
+        RuleFor(x => x.BackupTableShardId).NotEmpty();
+    }
+}
+
+public sealed class EntityRestorePlanRequestValidator : AbstractValidator<EntityRestorePlanRequest>
+{
+    public EntityRestorePlanRequestValidator()
+    {
+        RuleFor(x => x.TargetClusterId).NotEmpty();
+        RuleFor(x => x.PolicyId).NotEmpty().When(x => x.PolicyId is not null);
+        RuleFor(x => x.AnchorBackupId).NotEmpty().When(x => x.AnchorBackupId is not null);
+        RuleFor(x => x)
+            .Must(x => x.PolicyId is not null || x.AnchorBackupId is not null)
+            .WithMessage("PolicyId or AnchorBackupId is required.");
+        RuleFor(x => x.Database).MaximumLength(512).When(x => x.Database is not null);
+        RuleFor(x => x.Table).MaximumLength(512).When(x => x.Table is not null);
+        RuleFor(x => x.TargetDatabase).MaximumLength(512).When(x => x.TargetDatabase is not null);
+        RuleFor(x => x.TargetTable).MaximumLength(512).When(x => x.TargetTable is not null);
+        RuleFor(x => x.Layout).IsInEnum().When(x => x.Layout is not null);
+        RuleFor(x => x.SourceShard).GreaterThan(0).When(x => x.SourceShard is not null);
+        RuleFor(x => x.SourceShards).Must(x => x is null || x.Count > 0).WithMessage("SourceShards must not be empty when provided.");
+        RuleForEach(x => x.SourceShards).GreaterThan(0).When(x => x.SourceShards is not null);
+        RuleFor(x => x.TargetShard).GreaterThan(0).When(x => x.TargetShard is not null);
+        RuleFor(x => x.TargetShards).Must(x => x is null || x.Count > 0).WithMessage("TargetShards must not be empty when provided.");
+        RuleForEach(x => x.TargetShards).GreaterThan(0).When(x => x.TargetShards is not null);
+        RuleFor(x => x.Tables).Must(x => x is null || x.Count > 0).WithMessage("Tables must not be empty when provided.");
+        RuleForEach(x => x.Tables).SetValidator(new RestoreTableMappingRequestValidator()).When(x => x.Tables is not null);
+        RuleFor(x => x)
+            .Must(x => x.SourceShard is null || x.SourceShards is null)
+            .WithMessage("Use either SourceShard or SourceShards, not both.");
+        RuleFor(x => x)
+            .Must(x => x.SourceShards is null || x.SourceShards.Distinct().Count() == x.SourceShards.Count)
+            .WithMessage("SourceShards must not contain duplicates.");
+        RuleFor(x => x)
+            .Must(x => x.TargetShard is null || x.TargetShards is null)
+            .WithMessage("Use either TargetShard or TargetShards, not both.");
+        RuleFor(x => x)
+            .Must(x => x.TargetShards is null || x.TargetShards.Distinct().Count() == x.TargetShards.Count)
+            .WithMessage("TargetShards must not contain duplicates.");
+        RuleFor(x => x)
+            .Must(x => x.TargetShards is null || x.Layout == RestoreLayout.Redistribute)
+            .WithMessage("TargetShards can only be used with redistribute layout.");
+        RuleFor(x => x)
+            .Must(x => string.IsNullOrWhiteSpace(x.TargetDatabase) == string.IsNullOrWhiteSpace(x.TargetTable))
+            .WithMessage("TargetDatabase and TargetTable must be provided together.");
+        RuleFor(x => x)
+            .Must(x => x.Tables is null || x.Tables.Select(t => t.BackupTableId).Distinct().Count() == x.Tables.Count)
+            .WithMessage("Restore table mappings must not contain duplicate backup table ids.");
+        RuleFor(x => x)
+            .Must(x => x.Tables is null || (string.IsNullOrWhiteSpace(x.Database) && string.IsNullOrWhiteSpace(x.Table) && string.IsNullOrWhiteSpace(x.TargetDatabase) && string.IsNullOrWhiteSpace(x.TargetTable)))
+            .WithMessage("Database, Table, TargetDatabase, and TargetTable are not supported when explicit table mappings are provided.");
+    }
+}
 public sealed class RecoverBackupMetadataFromPathRequestValidator : AbstractValidator<RecoverBackupMetadataFromPathRequest>
 {
     public RecoverBackupMetadataFromPathRequestValidator()

@@ -254,7 +254,7 @@ public sealed class RestoreRunnerService(
                 await EnsureTargetTableExistsOnAllShardsAsync(scopedClickHouse, restore, backupTable, table, cancellationToken);
             }
 
-            if (!backupTable.DataBackedUp || orderedShards.Count == 0)
+            if (orderedShards.Count == 0)
             {
                 if (existing is null)
                 {
@@ -271,7 +271,7 @@ public sealed class RestoreRunnerService(
                 }
                 await scopedDb.SaveChangesAsync(cancellationToken);
                 _logger.Information("Restore table {RestoreTableId} {TargetDatabase}.{TargetTable} completed as schema-only.", table.Id, table.TargetDatabase, table.TargetTable);
-                await scopedAudit.RecordAsync("table-skipped", AuditEntityType.RestoreTable, table.Id.ToString(), new { reason = "schema-only", requested = orderedShards.Count == 0 && backupTable.DataBackedUp });
+                await scopedAudit.RecordAsync("table-skipped", AuditEntityType.RestoreTable, table.Id.ToString(), new { reason = "schema-only", requested = orderedShards.Count == 0 });
                 return;
             }
 
@@ -382,7 +382,8 @@ public sealed class RestoreRunnerService(
         }
 
         var backupTable = await scopedDb.BackupTables.Include(x => x.SchemaDefinition).Include(x => x.Shards).FirstAsync(x => x.Id == table.BackupTableId, cancellationToken);
-        var backupShard = backupTable.Shards.Single(x => x.Id == shard.BackupTableShardId);
+        var backupShard = await scopedDb.BackupTableShards.Include(x => x.BackupTable).ThenInclude(x => x!.Backup).ThenInclude(x => x!.Target).FirstAsync(x => x.Id == shard.BackupTableShardId, cancellationToken);
+        var sourceTarget = backupShard.BackupTable?.Backup?.Target ?? throw new InvalidOperationException("Restore source backup target was not found.");
         var usesTemporaryShardTables = table.Shards.Any(x => !string.Equals(x.RestoreTableName, table.TargetTable, StringComparison.Ordinal));
         var endpoint = new ClickHouseNodeEndpoint(shard.TargetHost, shard.TargetPort, shard.TargetUseTls);
         var nodeReserved = false;
@@ -442,7 +443,7 @@ public sealed class RestoreRunnerService(
             shard.Status = RestoreTableStatus.Running;
             shard.StartedAt ??= DateTimeOffset.UtcNow;
             await scopedDb.SaveChangesAsync(cancellationToken);
-            await scopedAudit.RecordAsync("shard-started", AuditEntityType.RestoreTableShard, shard.Id.ToString(), new { sourceShard = shard.SourceShardNumber, targetShard = shard.TargetShardNumber, targetNode = $"{shard.TargetHost}:{shard.TargetPort}", layout = restore.Layout, forced = isForcedQueueItem });
+            await scopedAudit.RecordAsync("shard-started", AuditEntityType.RestoreTableShard, shard.Id.ToString(), new { sourceShard = shard.SourceShardNumber, sourceBackupId = backupShard.BackupTable!.BackupId, sourceBackupType = backupShard.BackupTable.Backup!.BackupType, targetShard = shard.TargetShardNumber, targetNode = $"{shard.TargetHost}:{shard.TargetPort}", layout = restore.Layout, forced = isForcedQueueItem });
 
             if (!string.IsNullOrWhiteSpace(shard.ClickHouseOperationId))
             {
@@ -465,13 +466,13 @@ public sealed class RestoreRunnerService(
             {
                 var allowNonEmptyTables = string.Equals(shard.RestoreTableName, table.TargetTable, StringComparison.Ordinal);
                 var settings = ClickHouseAdvancedSettings.Deserialize(restore.ClickHouseRestoreSettingsJson, ClickHouseAdvancedSettingsKind.Restore);
-                var operation = await scopedClickHouse.StartRestoreShardAsync(endpoint, restore.TargetCluster!, restore.Backup!.Target!, shard, backupTable, backupShard, allowNonEmptyTables, settings, cancellationToken);
+                var operation = await scopedClickHouse.StartRestoreShardAsync(endpoint, restore.TargetCluster!, sourceTarget, shard, backupShard.BackupTable!, backupShard, allowNonEmptyTables, settings, cancellationToken);
                 shard.ClickHouseOperationId = operation.OperationId;
                 shard.ClickHouseStatus = operation.Status;
                 table.ClickHouseOperationId ??= operation.OperationId;
                 table.ClickHouseStatus = operation.Status;
                 await scopedDb.SaveChangesAsync(cancellationToken);
-                await scopedAudit.RecordAsync("clickhouse-operation-submitted", AuditEntityType.RestoreTableShard, shard.Id.ToString(), new { operation.OperationId, operation.Status, sourceShard = shard.SourceShardNumber, targetShard = shard.TargetShardNumber });
+                await scopedAudit.RecordAsync("clickhouse-operation-submitted", AuditEntityType.RestoreTableShard, shard.Id.ToString(), new { operation.OperationId, operation.Status, sourceShard = shard.SourceShardNumber, sourceBackupId = backupShard.BackupTable!.BackupId, targetShard = shard.TargetShardNumber });
                 await scopedTestHooks.MaybeDelayRestoreBeforePollAsync(cancellationToken);
                 if (!await PollRestoreShardAsync(scopedDb, restore.Id, scopedClickHouse, endpoint, restore.TargetCluster!, shard, new ClickHouseOperationStatus(true, operation.Status, null), scopedOptions.CurrentValue.PollInterval, cancellationToken))
                 {
@@ -494,7 +495,7 @@ public sealed class RestoreRunnerService(
             shard.Error = null;
             shard.CompletedAt = DateTimeOffset.UtcNow;
             await scopedDb.SaveChangesAsync(cancellationToken);
-            await scopedAudit.RecordAsync("shard-succeeded", AuditEntityType.RestoreTableShard, shard.Id.ToString(), new { sourceShard = shard.SourceShardNumber, targetShard = shard.TargetShardNumber, shard.ClickHouseStatus });
+            await scopedAudit.RecordAsync("shard-succeeded", AuditEntityType.RestoreTableShard, shard.Id.ToString(), new { sourceShard = shard.SourceShardNumber, sourceBackupId = backupShard.BackupTable!.BackupId, targetShard = shard.TargetShardNumber, shard.ClickHouseStatus });
             await scopedQueue.MarkCompletedAsync(BackupRestoreQueueKind.Restore, shard.Id, cancellationToken);
             return RestoreShardRunResult.Completed;
         }

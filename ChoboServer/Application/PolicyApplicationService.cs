@@ -283,7 +283,7 @@ public sealed class PolicyApplicationService(
             x.ContentMode,
             x.SelectorJsonVersion,
             Deserialize(x.SelectorJson),
-            x.FullRetentionMinutes is null && x.IncrementalRetentionMinutes is null
+            x.FullRetentionMinutes is null && x.IncrementalRetentionMinutes is null && x.MinBackupsToKeep == 0 && x.MinFullBackupsToKeep == 0
                 ? null
                 : new BackupRetentionDto(x.FullRetentionMinutes, x.IncrementalRetentionMinutes, x.MinBackupsToKeep, x.MinFullBackupsToKeep),
             x.FailedBackupRetentionMode,
@@ -312,3 +312,4 @@ public sealed class PolicyApplicationService(
         return options;
     }
 }
+

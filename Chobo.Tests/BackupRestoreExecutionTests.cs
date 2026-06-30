@@ -4029,6 +4029,187 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Entity_restore_plan_policy_defaults_to_latest_compatible_backup_per_shard()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        fixture.ClickHouse.Topology.Clear();
+        fixture.ClickHouse.Topology.AddRange([
+            new ClickHouseShardReplicaInfo(1, "shard-1", 1, "restore-s1", 9000, false, 0),
+            new ClickHouseShardReplicaInfo(2, "shard-2", 1, "restore-s2", 9000, false, 0)
+        ]);
+        var policy = await fixture.SeedPolicyAsync();
+        var older = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, DateTimeOffset.UtcNow.AddHours(-2), shardCount: 2, tableName: "orders");
+        var latest = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, DateTimeOffset.UtcNow.AddHours(-1), shardCount: 2, tableName: "orders");
+        latest.Tables.Single().SchemaDefinitionId = older.Tables.Single().SchemaDefinitionId;
+        await fixture.Db.SaveChangesAsync();
+
+        var selectedTable = latest.Tables.Single();
+        var plan = await fixture.Services.GetRequiredService<RestoreApplicationService>().PlanEntityRestoreAsync(new EntityRestorePlanRequest(
+            policy.Id,
+            null,
+            fixture.TargetClusterId,
+            Tables: [new RestoreTableMappingRequest(selectedTable.Id, "restore_sales", "orders_restore_custom")]));
+
+        var table = Assert.Single(plan.Tables);
+        Assert.Equal(latest.Id, plan.AnchorBackupId);
+        Assert.Equal([latest.Id, latest.Id], table.Shards.OrderBy(x => x.SourceShardNumber).Select(x => x.SourceBackupId).ToArray());
+        Assert.Contains(plan.Queue, x => x.RestoreStatement.Contains("RESTORE TABLE", StringComparison.Ordinal));
+        var restoreStatement = Assert.Single(plan.Queue, x => x.LogicalShardNumber == 1).RestoreStatement;
+        Assert.Contains(selectedTable.Shards.Single(x => x.SourceShardNumber == 1).StoragePath, restoreStatement);
+        Assert.Contains("RESTORE TABLE `sales`.`orders` AS `restore_sales`.`orders_restore_custom`", restoreStatement);
+        Assert.Contains("REDACTED", restoreStatement);
+        Assert.DoesNotContain("fake-access", restoreStatement);
+        Assert.DoesNotContain("fake-secret", restoreStatement);
+        Assert.DoesNotContain("storage-path:redacted", restoreStatement);
+        Assert.DoesNotContain("<backup-target:", restoreStatement);
+        Assert.Contains("restore initiate-from-plan", plan.CliCommand);
+    }
+
+    [Fact]
+    public async Task Entity_restore_plan_backup_start_uses_anchor_or_closest_earlier_shard()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        fixture.ClickHouse.Topology.Clear();
+        fixture.ClickHouse.Topology.AddRange([
+            new ClickHouseShardReplicaInfo(1, "shard-1", 1, "restore-s1", 9000, false, 0),
+            new ClickHouseShardReplicaInfo(2, "shard-2", 1, "restore-s2", 9000, false, 0)
+        ]);
+        var policy = await fixture.SeedPolicyAsync();
+        var older = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, DateTimeOffset.UtcNow.AddHours(-2), shardCount: 2, tableName: "orders");
+        var anchor = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, DateTimeOffset.UtcNow.AddHours(-1), shardCount: 1, tableName: "orders");
+        anchor.Tables.Single().SchemaDefinitionId = older.Tables.Single().SchemaDefinitionId;
+        await fixture.Db.SaveChangesAsync();
+
+        var plan = await fixture.Services.GetRequiredService<RestoreApplicationService>().PlanEntityRestoreAsync(new EntityRestorePlanRequest(
+            policy.Id,
+            anchor.Id,
+            fixture.TargetClusterId,
+            Database: "sales",
+            Table: "orders"));
+
+        var sources = Assert.Single(plan.Tables).Shards.OrderBy(x => x.SourceShardNumber).Select(x => x.SourceBackupId).ToArray();
+        Assert.Equal([anchor.Id, older.Id], sources);
+    }
+    [Fact]
+    public async Task Entity_restore_plan_can_choose_succeeded_shards_from_partially_succeeded_backup()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        fixture.ClickHouse.Topology.Clear();
+        fixture.ClickHouse.Topology.AddRange([
+            new ClickHouseShardReplicaInfo(1, "shard-1", 1, "restore-s1", 9000, false, 0)
+        ]);
+        var policy = await fixture.SeedPolicyAsync();
+        var anchor = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, DateTimeOffset.UtcNow.AddHours(-2), shardCount: 1, tableName: "orders");
+        var partial = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.PartiallySucceeded, DateTimeOffset.UtcNow.AddHours(-1), shardCount: 1, tableName: "orders");
+        var anchorTable = anchor.Tables.Single();
+        var partialTable = partial.Tables.Single();
+        partialTable.Status = BackupTableStatus.PartiallySucceeded;
+        partialTable.SchemaDefinitionId = anchorTable.SchemaDefinitionId;
+        await fixture.Db.SaveChangesAsync();
+
+        var plan = await fixture.Services.GetRequiredService<RestoreApplicationService>().PlanEntityRestoreAsync(new EntityRestorePlanRequest(
+            policy.Id,
+            null,
+            fixture.TargetClusterId,
+            Database: "sales",
+            Table: "orders"));
+
+        Assert.Equal(partial.Id, plan.AnchorBackupId);
+        var table = Assert.Single(plan.Tables);
+        var candidate = Assert.Single(table.Candidates, x => x.BackupId == partial.Id);
+        Assert.Equal(BackupRunStatus.PartiallySucceeded, candidate.BackupStatus);
+        Assert.True(candidate.IsCompatible);
+        Assert.Equal(partial.Id, Assert.Single(table.Shards).SourceBackupId);
+    }
+    [Fact]
+    public async Task Entity_restore_plan_cli_json_replays_without_selector_fields()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        fixture.ClickHouse.Topology.Clear();
+        fixture.ClickHouse.Topology.AddRange([
+            new ClickHouseShardReplicaInfo(1, "shard-1", 1, "restore-s1", 9000, false, 0)
+        ]);
+        var policy = await fixture.SeedPolicyAsync();
+        var backup = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, DateTimeOffset.UtcNow.AddHours(-1), tableName: "orders");
+
+        var plan = await fixture.Services.GetRequiredService<RestoreApplicationService>().PlanEntityRestoreAsync(new EntityRestorePlanRequest(
+            policy.Id,
+            backup.Id,
+            fixture.TargetClusterId,
+            Database: "sales",
+            Table: "orders",
+            TargetDatabase: "sales_restore",
+            TargetTable: "orders_restore"));
+
+        var replay = JsonSerializer.Deserialize<EntityRestorePlanRequest>(plan.CliJson, JsonOptions);
+        Assert.NotNull(replay);
+        Assert.Null(replay!.Database);
+        Assert.Null(replay.Table);
+        Assert.Null(replay.TargetDatabase);
+        Assert.Null(replay.TargetTable);
+        Assert.NotNull(replay.Tables);
+        var restore = await fixture.Services.GetRequiredService<RestoreApplicationService>().InitiateFromPlanAsync(replay);
+        var shard = Assert.Single(Assert.Single(restore.Tables).Shards);
+        Assert.Equal(backup.Id, shard.SourceBackupId);
+    }
+
+    [Fact]
+    public async Task Entity_restore_plan_schema_only_anchor_can_restore_from_data_shard_source()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        fixture.ClickHouse.Topology.Clear();
+        fixture.ClickHouse.Topology.AddRange([
+            new ClickHouseShardReplicaInfo(1, "shard-1", 1, "restore-s1", 9000, false, 0)
+        ]);
+        var policy = await fixture.SeedPolicyAsync();
+        var dataBackup = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, DateTimeOffset.UtcNow.AddHours(-2), shardCount: 1, tableName: "orders");
+        var schemaAnchor = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, DateTimeOffset.UtcNow.AddHours(-1), shardCount: 1, tableName: "orders");
+        var anchorTable = schemaAnchor.Tables.Single();
+        var dataTable = dataBackup.Tables.Single();
+        anchorTable.DataBackedUp = false;
+        anchorTable.SchemaDefinitionId = dataTable.SchemaDefinitionId;
+        await fixture.Db.SaveChangesAsync();
+        var dataShard = dataTable.Shards.Single();
+
+        var plan = await fixture.Services.GetRequiredService<RestoreApplicationService>().PlanEntityRestoreAsync(new EntityRestorePlanRequest(
+            policy.Id,
+            schemaAnchor.Id,
+            fixture.TargetClusterId,
+            Tables: [new RestoreTableMappingRequest(anchorTable.Id, "sales_restore", "orders_restore", false, false, false, null, [new RestoreShardSourceRequest(1, dataShard.Id)])]));
+
+        var table = Assert.Single(plan.Tables);
+        var shard = Assert.Single(table.Shards);
+        Assert.Equal(dataBackup.Id, shard.SourceBackupId);
+        Assert.Single(plan.Queue);
+
+        var restore = await fixture.Services.GetRequiredService<RestoreApplicationService>().InitiateFromPlanAsync(JsonSerializer.Deserialize<EntityRestorePlanRequest>(plan.CliJson, JsonOptions)!);
+        Assert.False(Assert.Single(restore.Tables).SchemaOnly);
+        Assert.Equal(dataShard.Id, Assert.Single(Assert.Single(restore.Tables).Shards).BackupTableShardId);
+    }
+    [Fact]
+    public async Task Entity_restore_plan_rejects_incompatible_selected_shard_source()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        fixture.ClickHouse.Topology.Clear();
+        fixture.ClickHouse.Topology.AddRange([
+            new ClickHouseShardReplicaInfo(1, "shard-1", 1, "restore-s1", 9000, false, 0)
+        ]);
+        var policy = await fixture.SeedPolicyAsync();
+        var incompatible = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, DateTimeOffset.UtcNow.AddHours(-2), shardCount: 1, tableName: "orders");
+        var anchor = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, DateTimeOffset.UtcNow.AddHours(-1), shardCount: 1, tableName: "orders");
+        var anchorTable = anchor.Tables.Single();
+        var incompatibleShard = incompatible.Tables.Single().Shards.Single();
+        await fixture.Db.SaveChangesAsync();
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(() => fixture.Services.GetRequiredService<RestoreApplicationService>().PlanEntityRestoreAsync(new EntityRestorePlanRequest(
+            policy.Id,
+            null,
+            fixture.TargetClusterId,
+            Tables: [new RestoreTableMappingRequest(anchorTable.Id, null, null, false, false, false, null, [new RestoreShardSourceRequest(1, incompatibleShard.Id)])])));
+
+        Assert.Contains("schema does not match", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+    [Fact]
     public async Task Restore_redistribute_can_limit_target_shards_to_one_shard()
     {
         await using var fixture = await TestFixture.CreateAsync();
@@ -4559,7 +4740,8 @@ public sealed class BackupRestoreExecutionTests
         Assert.Null(dto.PolicyId);
         Assert.Equal("operator", dto.RequestedByName);
         Assert.NotNull(dto.RequestedByUserId);
-        Assert.Contains("\"clusterId\"", dto.ManualRequestJson);
+        var manualRequest = JsonSerializer.Deserialize<ManualBackupRequest>(dto.ManualRequestJson!, JsonOptions)!;
+        Assert.Equal(fixture.SourceClusterId, manualRequest.ClusterId);
         Assert.Equal(fixture.SourceClusterId, dto.SourceClusterId);
         Assert.Equal(fixture.TargetId, dto.TargetId);
         Assert.True(dto.CreatedAt <= DateTimeOffset.UtcNow);
@@ -5019,7 +5201,7 @@ public sealed class BackupRestoreExecutionTests
         public void ReleaseBlockedTopology() => _releaseTopology.TrySetResult();
     }
 
-    private sealed class FakeBackupStorageOperations : IBackupStorageOperations
+    private sealed class FakeBackupStorageOperations : IBackupStorageProvider
     {
         public List<string> DeletedDirectories { get; } = [];
         public List<string> DeletedObjects { get; } = [];
@@ -5029,6 +5211,39 @@ public sealed class BackupRestoreExecutionTests
         public int FailWriteCount { get; set; }
         public int WriteObjectCount { get; private set; }
         public bool DelayWritesUntilCanceled { get; set; }
+        public string Type => StorageProviderTypes.S3;
+        public IReadOnlyList<string> SecretFields { get; } = ["accessKey", "secretKey"];
+
+        public Task ConfigureNewTargetAsync(BackupTargetEntity target, UpsertBackupTargetRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task ConfigureExistingTargetAsync(BackupTargetEntity target, UpsertBackupTargetRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public BackupTargetDto ToDto(BackupTargetEntity target) =>
+            new(target.Id, target.Name, target.Type, new Dictionary<string, JsonElement>(), SecretFields, target.IsDeleted, target.CreatedAt, target.UpdatedAt);
+
+        public Task<ClickHouseStorageDestination> CreateBackupDestinationAsync(BackupTargetEntity target, string storagePath, string? baseBackupStoragePath, CancellationToken cancellationToken = default)
+        {
+            var destination = CreateDestination(target, storagePath);
+            if (string.IsNullOrWhiteSpace(baseBackupStoragePath))
+            {
+                return Task.FromResult(destination);
+            }
+
+            var baseDestination = CreateDestination(target, baseBackupStoragePath);
+            return Task.FromResult(destination with { Settings = [("base_backup", baseDestination.Expression)] });
+        }
+
+        public Task<ClickHouseStorageDestination> CreateRestoreDestinationAsync(BackupTargetEntity target, string storagePath, CancellationToken cancellationToken = default) =>
+            Task.FromResult(CreateDestination(target, storagePath));
+
+        private static ClickHouseStorageDestination CreateDestination(BackupTargetEntity target, string storagePath)
+        {
+            var settings = JsonSerializer.Deserialize<S3TargetSettingsDto>(target.SettingsJson, JsonOptions)
+                ?? new S3TargetSettingsDto("http://minio:9000", "us-east-1", "backups", null, true);
+            var endpoint = S3TargetUrlBuilder.BuildObjectUrl(settings, storagePath).ToString();
+            var expression = ClickHouseSql.S3(endpoint, "fake-access", "fake-secret");
+            return new ClickHouseStorageDestination(expression, [], ["fake-access", "fake-secret"], [expression, endpoint], [endpoint]);
+        }
 
         public Task DeleteDirectoryAsync(BackupTargetEntity target, string directoryPath, CancellationToken cancellationToken = default)
         {
@@ -5139,6 +5354,7 @@ public sealed class BackupRestoreExecutionTests
                 .AddScoped<IClickHouseAdapter>(provider => provider.GetRequiredService<FakeClickHouseAdapter>())
                 .AddSingleton(storageDeletion)
                 .AddScoped<IBackupStorageOperations>(provider => provider.GetRequiredService<FakeBackupStorageOperations>())
+                .AddScoped<IBackupStorageProvider>(provider => provider.GetRequiredService<FakeBackupStorageOperations>())
                 .AddScoped<IBackupStorageProviderRegistry, BackupStorageProviderRegistry>()
                 .AddScoped<PolicySelectorEvaluationService>()
                 .AddMemoryCache()
@@ -5578,6 +5794,10 @@ public sealed class BackupRestoreExecutionTests
                         shard.Id,
                         shard.RestoreTableId,
                         shard.BackupTableShardId,
+                        shard.BackupTableShard?.BackupTable?.BackupId ?? Guid.Empty,
+                        shard.BackupTableShard?.BackupTableId ?? Guid.Empty,
+                        shard.BackupTableShard?.BackupTable?.Backup?.BackupType ?? BackupType.Full,
+                        shard.BackupTableShard?.BackupTable?.Backup?.CreatedAt ?? DateTimeOffset.UnixEpoch,
                         shard.SourceShardNumber,
                         shard.TargetShardNumber,
                         shard.TargetShardName,

@@ -18,6 +18,7 @@ public sealed class RestoreApplicationService(
     IBackupRestoreQueues queues,
     BackupRestoreQueueApplicationService queueItems,
     IClickHouseAdapter clickHouse,
+    IBackupStorageProviderRegistry storageProviders,
     IOptionsMonitor<ChoboBackupRestoreOptions> options,
     IAuditService audit,
     ActorContext actor,
@@ -145,15 +146,7 @@ public sealed class RestoreApplicationService(
         };
         foreach (var (table, mapping) in selected)
         {
-            var backupShards = table.Shards
-                .Where(x => x.Status == BackupTableStatus.Succeeded)
-                .Where(x => MatchesRequestedSourceShard(x.SourceShardNumber, request))
-                .OrderBy(x => x.SourceShardNumber)
-                .ToList();
-            if (table.DataBackedUp && !request.SchemaOnly && backupShards.Count == 0)
-            {
-                throw new ArgumentException($"No succeeded backup shards match {table.Database}.{table.Table}.");
-            }
+            var backupShards = await ResolveRestoreSourceShardsAsync(table, mapping, request, cancellationToken);
 
             var restoreTable = new RestoreTableEntity
             {
@@ -166,7 +159,11 @@ public sealed class RestoreApplicationService(
                 AllowSchemaMismatch = mapping?.AllowSchemaMismatch ?? request.AllowSchemaMismatch,
                 SchemaOnly = mapping?.SchemaOnly ?? request.SchemaOnly
             };
-            if (table.DataBackedUp && !restoreTable.SchemaOnly)
+            if (table.DataBackedUp && !restoreTable.SchemaOnly && backupShards.Count == 0)
+            {
+                throw new ArgumentException($"No succeeded backup shards match {table.Database}.{table.Table}.");
+            }
+            if (!restoreTable.SchemaOnly && backupShards.Count > 0)
             {
                 if (layout == RestoreLayout.Preserve && request.SourceShard is null && request.SourceShards is null && request.TargetShard is null && request.TargetShards is null)
                 {
@@ -228,13 +225,58 @@ public sealed class RestoreApplicationService(
     }
 
     public async Task<IReadOnlyList<RestoreDto>> ListAsync(CancellationToken cancellationToken = default) =>
-        (await db.Restores.AsNoTracking().Include(x => x.Tables).ThenInclude(x => x.Shards).AsSplitQuery().OrderByDescending(x => x.CreatedAt).Take(200).ToListAsync(cancellationToken))
+        (await db.Restores.AsNoTracking().Include(x => x.Tables).ThenInclude(x => x.Shards).ThenInclude(x => x.BackupTableShard).ThenInclude(x => x!.BackupTable).ThenInclude(x => x!.Backup).AsSplitQuery().OrderByDescending(x => x.CreatedAt).Take(200).ToListAsync(cancellationToken))
         .Select(BackupRestoreMapping.ToDto)
         .ToList();
 
     public async Task<RestoreDto?> GetAsync(Guid id, CancellationToken cancellationToken = default) =>
         await LoadAsync(id, cancellationToken) is { } restore ? BackupRestoreMapping.ToDto(restore) : null;
 
+
+    public async Task<EntityRestorePlanDto> PlanEntityRestoreAsync(EntityRestorePlanRequest request, CancellationToken cancellationToken = default)
+    {
+        var planned = await BuildEntityRestorePlanAsync(request, cancellationToken);
+        return planned.Dto;
+    }
+
+    public async Task<RestoreDto> InitiateFromPlanAsync(EntityRestorePlanRequest request, CancellationToken cancellationToken = default)
+    {
+        var planned = await BuildEntityRestorePlanAsync(request, cancellationToken);
+        var sourceMappingsByTableId = request.Tables?.ToDictionary(x => x.BackupTableId) ?? [];
+        var tables = planned.Dto.Tables.Select(table =>
+        {
+            sourceMappingsByTableId.TryGetValue(table.BackupTableId, out var sourceMapping);
+            return new RestoreTableMappingRequest(
+                table.BackupTableId,
+                table.TargetDatabase,
+                table.TargetTable,
+                table.Append,
+                table.AllowSchemaMismatch,
+                table.SchemaOnly,
+                sourceMapping?.CreateTableSqlOverride,
+                table.Shards.Select(shard => new RestoreShardSourceRequest(shard.SourceShardNumber, shard.BackupTableShardId)).ToList());
+        }).ToList();
+
+        var restoreRequest = new InitiateRestoreRequest(
+            planned.AnchorBackupId,
+            request.TargetClusterId,
+            null,
+            null,
+            null,
+            null,
+            request.Append,
+            request.AllowSchemaMismatch,
+            request.Layout,
+            request.SourceShard,
+            request.TargetShard,
+            tables,
+            request.SchemaOnly,
+            request.SourceShards,
+            request.TargetShards,
+            request.ConfirmDestructive,
+            request.ClickHouseRestoreSettings);
+        return await InitiateAsync(restoreRequest, cancellationToken);
+    }
     public async Task<RestoreDto?> CancelAsync(Guid id, CancellationToken cancellationToken = default)
     {
         var restore = await db.Restores
@@ -377,7 +419,7 @@ public sealed class RestoreApplicationService(
         endpoint is null ? "default" : $"{endpoint.Host}:{endpoint.Port}:{endpoint.UseTls}";
 
     private Task<RestoreEntity?> LoadAsync(Guid id, CancellationToken cancellationToken) =>
-        db.Restores.Include(x => x.Tables).ThenInclude(x => x.Shards).FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+        db.Restores.Include(x => x.Tables).ThenInclude(x => x.Shards).ThenInclude(x => x.BackupTableShard).ThenInclude(x => x!.BackupTable).ThenInclude(x => x!.Backup).FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
 
     private static void ValidateCreateTableSqlOverrides(InitiateRestoreRequest request)
     {
@@ -427,6 +469,321 @@ public sealed class RestoreApplicationService(
             sha256 = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized))).ToLowerInvariant()
         };
     }
+    private async Task<PlannedEntityRestore> BuildEntityRestorePlanAsync(EntityRestorePlanRequest request, CancellationToken cancellationToken)
+    {
+        if (request.PolicyId is null && request.AnchorBackupId is null)
+        {
+            throw new ArgumentException("Choose a policy or anchor backup.");
+        }
+
+        var anchor = request.AnchorBackupId is { } anchorId
+            ? await db.Backups
+                .Include(x => x.Tables).ThenInclude(x => x.Shards)
+                .Include(x => x.Tables).ThenInclude(x => x.SchemaDefinition)
+                .FirstOrDefaultAsync(x => x.Id == anchorId, cancellationToken)
+            : await db.Backups
+                .Include(x => x.Tables).ThenInclude(x => x.Shards)
+                .Include(x => x.Tables).ThenInclude(x => x.SchemaDefinition)
+                .Where(x => x.PolicyId == request.PolicyId && x.Tables.Any(t => t.SchemaDefinitionId != null))
+                .Where(x => x.Status == BackupRunStatus.Succeeded || x.Status == BackupRunStatus.PartiallySucceeded)
+                .OrderByDescending(x => x.CreatedAt)
+                .FirstOrDefaultAsync(cancellationToken);
+        if (anchor is null)
+        {
+            throw new ArgumentException("Anchor backup was not found.");
+        }
+        if (!IsBackupRestorable(anchor.Status))
+        {
+            throw new ArgumentException("Only succeeded or partially succeeded backups can be used as restore anchors.");
+        }
+        var policyId = request.PolicyId ?? anchor.PolicyId ?? throw new ArgumentException("Entity restore requires a policy-backed anchor backup.");
+        if (anchor.PolicyId != policyId)
+        {
+            throw new ArgumentException("Anchor backup does not belong to the selected policy.");
+        }
+
+        var targetCluster = await db.ClickHouseClusters.Include(x => x.AccessNodes).FirstOrDefaultAsync(x => x.Id == request.TargetClusterId && !x.IsDeleted, cancellationToken)
+            ?? throw new ArgumentException("Target cluster was not found.");
+        var initiateRequest = ToInitiateRequest(request, anchor.Id);
+        ValidateCreateTableSqlOverrides(initiateRequest);
+        var selected = SelectTables(anchor.Tables, initiateRequest);
+        if (selected.Count == 0)
+        {
+            throw new ArgumentException("No anchor backup tables match the restore request.");
+        }
+
+        var targetRepresentatives = SelectShardRepresentatives(await clickHouse.GetTopologyAsync(targetCluster, cancellationToken));
+        var layout = request.Layout ?? RestoreLayout.Preserve;
+        var dtoTables = new List<RestorePlanTableDto>();
+        foreach (var (table, rawMapping) in selected)
+        {
+            var mapping = rawMapping is null ? null : NormalizeMapping(rawMapping, table);
+            var restoreTable = new RestoreTableEntity
+            {
+                BackupTableId = table.Id,
+                SourceDatabase = table.Database,
+                SourceTable = table.Table,
+                TargetDatabase = mapping?.TargetDatabase ?? request.TargetDatabase ?? table.Database,
+                TargetTable = mapping?.TargetTable ?? request.TargetTable ?? table.Table,
+                Append = mapping?.Append ?? request.Append,
+                AllowSchemaMismatch = mapping?.AllowSchemaMismatch ?? request.AllowSchemaMismatch,
+                SchemaOnly = mapping?.SchemaOnly ?? request.SchemaOnly
+            };
+
+            var candidates = await LoadShardCandidatesAsync(policyId, anchor, table, request.AnchorBackupId is not null, cancellationToken);
+            var defaults = ChooseDefaultShardSources(table, candidates, mapping);
+            var selectedShards = defaults.Values
+                .Where(x => MatchesRequestedSourceShard(x.SourceShardNumber, initiateRequest))
+                .OrderBy(x => x.SourceShardNumber)
+                .ToList();
+            var shardDtos = new List<RestorePlanShardDto>();
+            if (!restoreTable.SchemaOnly)
+            {
+                if (selectedShards.Count == 0)
+                {
+                    throw new ArgumentException($"No compatible backup shards match {table.Database}.{table.Table}.");
+                }
+                if (layout == RestoreLayout.Preserve && request.SourceShard is null && request.SourceShards is null && request.TargetShard is null && request.TargetShards is null)
+                {
+                    var sourceShardCount = selectedShards.Select(x => x.SourceShardNumber).Distinct().Count();
+                    if (sourceShardCount != targetRepresentatives.Count)
+                    {
+                        throw new ArgumentException($"Preserve layout requires matching source and target shard counts. Source has {sourceShardCount}; target has {targetRepresentatives.Count}. Choose redistribute for different topologies.");
+                    }
+                }
+                var plans = PlanShardRestores(layout, selectedShards, targetRepresentatives, request.TargetShard, request.TargetShards);
+                foreach (var plan in plans)
+                {
+                    var sourceBackup = plan.BackupShard.BackupTable!.Backup!;
+                    shardDtos.Add(new RestorePlanShardDto(
+                        table.Id,
+                        plan.BackupShard.Id,
+                        sourceBackup.Id,
+                        sourceBackup.BackupType,
+                        sourceBackup.CreatedAt,
+                        plan.BackupShard.SourceShardNumber,
+                        plan.BackupShard.SourceShardName,
+                        plan.Target?.ShardNumber,
+                        plan.Target?.ShardName,
+                        plan.Target?.ReplicaNumber,
+                        plan.Endpoint.Host,
+                        plan.Endpoint.Port,
+                        plan.LayoutRole,
+                        await BuildRestoreStatementPreviewAsync(plan.BackupShard.BackupTable!, restoreTable, plan.BackupShard, request.ClickHouseRestoreSettings ?? new Dictionary<string, JsonElement>(), cancellationToken)));
+                }
+            }
+
+            var candidateDtos = candidates
+                .Select(candidate => new RestoreShardBackupCandidateDto(
+                    candidate.BackupTable!.BackupId,
+                    candidate.BackupTableId,
+                    candidate.Id,
+                    candidate.BackupTable.Backup!.BackupType,
+                    candidate.BackupTable.Backup.Status,
+                    candidate.BackupTable.Backup.CreatedAt,
+                    candidate.SourceShardNumber,
+                    candidate.SourceShardName,
+                    candidate.Status,
+                    IsShardCandidateCompatible(table, candidate),
+                    defaults.TryGetValue(candidate.SourceShardNumber, out var selectedDefault) && selectedDefault.Id == candidate.Id,
+                    IsShardCandidateCompatible(table, candidate) ? null : "Schema does not match the anchor table."))
+                .OrderBy(x => x.SourceShardNumber)
+                .ThenByDescending(x => x.CreatedAt)
+                .ToList();
+            dtoTables.Add(new RestorePlanTableDto(
+                table.Id,
+                table.Database,
+                table.Table,
+                restoreTable.TargetDatabase,
+                restoreTable.TargetTable,
+                restoreTable.Append,
+                restoreTable.AllowSchemaMismatch,
+                restoreTable.SchemaOnly,
+                candidateDtos,
+                shardDtos));
+        }
+
+        var queue = dtoTables.SelectMany(table => table.Shards.Select(shard => new RestorePlanQueueItemDto(
+            table.BackupTableId,
+            shard.BackupTableShardId,
+            table.TargetDatabase,
+            table.TargetTable,
+            shard.TargetShardNumber ?? shard.SourceShardNumber,
+            shard.TargetShardName,
+            $"{shard.TargetHost}:{shard.TargetPort}",
+            shard.RestoreStatement))).ToList();
+        var replayRequest = request with
+        {
+            AnchorBackupId = anchor.Id,
+            PolicyId = policyId,
+            Database = null,
+            Table = null,
+            TargetDatabase = null,
+            TargetTable = null,
+            Tables = dtoTables.Select(table => new RestoreTableMappingRequest(
+                table.BackupTableId,
+                table.TargetDatabase,
+                table.TargetTable,
+                table.Append,
+                table.AllowSchemaMismatch,
+                table.SchemaOnly,
+                request.Tables?.FirstOrDefault(x => x.BackupTableId == table.BackupTableId)?.CreateTableSqlOverride,
+                table.Shards.Select(shard => new RestoreShardSourceRequest(shard.SourceShardNumber, shard.BackupTableShardId)).ToList())).ToList()
+        };
+        var cliJson = JsonSerializer.Serialize(replayRequest, JsonOptions);
+        var cliCommand = "restore initiate-from-plan --file entity-restore-plan.json";
+        var dto = new EntityRestorePlanDto(policyId, anchor.Id, request.TargetClusterId, layout, dtoTables, queue, cliCommand, cliJson);
+        return new PlannedEntityRestore(anchor.Id, dto);
+    }
+
+    private static InitiateRestoreRequest ToInitiateRequest(EntityRestorePlanRequest request, Guid backupId) =>
+        new(
+            backupId,
+            request.TargetClusterId,
+            request.Database,
+            request.Table,
+            request.TargetDatabase,
+            request.TargetTable,
+            request.Append,
+            request.AllowSchemaMismatch,
+            request.Layout,
+            request.SourceShard,
+            request.TargetShard,
+            request.Tables,
+            request.SchemaOnly,
+            request.SourceShards,
+            request.TargetShards,
+            request.ConfirmDestructive,
+            request.ClickHouseRestoreSettings);
+
+    private async Task<IReadOnlyList<BackupTableShardEntity>> ResolveRestoreSourceShardsAsync(BackupTableEntity anchorTable, RestoreTableMappingRequest? mapping, InitiateRestoreRequest request, CancellationToken cancellationToken)
+    {
+        if (mapping?.ShardSources is not { Count: > 0 } shardSources)
+        {
+            return anchorTable.Shards
+                .Where(x => x.Status == BackupTableStatus.Succeeded)
+                .Where(x => MatchesRequestedSourceShard(x.SourceShardNumber, request))
+                .OrderBy(x => x.SourceShardNumber)
+                .ToList();
+        }
+        if (shardSources.Select(x => x.SourceShardNumber).Distinct().Count() != shardSources.Count)
+        {
+            throw new ArgumentException("Shard source mappings must not contain duplicate source shard numbers.");
+        }
+        var ids = shardSources.Select(x => x.BackupTableShardId).ToList();
+        var selected = await db.BackupTableShards
+            .Include(x => x.BackupTable).ThenInclude(x => x!.Backup).ThenInclude(x => x!.Target)
+            .Include(x => x.BackupTable).ThenInclude(x => x!.SchemaDefinition)
+            .Where(x => ids.Contains(x.Id))
+            .ToListAsync(cancellationToken);
+        if (selected.Count != ids.Count)
+        {
+            throw new ArgumentException("One or more shard source backups were not found.");
+        }
+        foreach (var source in shardSources)
+        {
+            var shard = selected.Single(x => x.Id == source.BackupTableShardId);
+            ValidateShardSource(anchorTable, shard, source.SourceShardNumber);
+        }
+        return selected
+            .Where(x => MatchesRequestedSourceShard(x.SourceShardNumber, request))
+            .OrderBy(x => x.SourceShardNumber)
+            .ToList();
+    }
+
+    private async Task<List<BackupTableShardEntity>> LoadShardCandidatesAsync(Guid policyId, BackupEntity anchor, BackupTableEntity anchorTable, bool startedFromAnchorBackup, CancellationToken cancellationToken)
+    {
+        var query = db.BackupTableShards
+            .Include(x => x.BackupTable).ThenInclude(x => x!.Backup).ThenInclude(x => x!.Target)
+            .Include(x => x.BackupTable).ThenInclude(x => x!.SchemaDefinition)
+            .Where(x => x.Status == BackupTableStatus.Succeeded)
+            .Where(x => x.BackupTable != null && (x.BackupTable.Status == BackupTableStatus.Succeeded || x.BackupTable.Status == BackupTableStatus.PartiallySucceeded) && x.BackupTable.DataBackedUp)
+            .Where(x => x.BackupTable!.Backup != null && x.BackupTable.Backup.PolicyId == policyId)
+            .Where(x => x.BackupTable!.Backup!.Status == BackupRunStatus.Succeeded || x.BackupTable.Backup.Status == BackupRunStatus.PartiallySucceeded)
+            .Where(x => x.BackupTable!.Database == anchorTable.Database && x.BackupTable.Table == anchorTable.Table)
+            .Where(x => x.BackupTable!.Backup!.TargetId != null)
+            ;
+        if (startedFromAnchorBackup)
+        {
+            query = query.Where(x => x.BackupTable!.Backup!.CreatedAt <= anchor.CreatedAt);
+        }
+        return await query.OrderBy(x => x.SourceShardNumber).ThenByDescending(x => x.BackupTable!.Backup!.CreatedAt).ToListAsync(cancellationToken);
+    }
+
+    private static Dictionary<int, BackupTableShardEntity> ChooseDefaultShardSources(BackupTableEntity anchorTable, IReadOnlyList<BackupTableShardEntity> candidates, RestoreTableMappingRequest? mapping)
+    {
+        var defaults = candidates
+            .Where(candidate => IsShardCandidateCompatible(anchorTable, candidate))
+            .GroupBy(x => x.SourceShardNumber)
+            .ToDictionary(group => group.Key, group => group.OrderByDescending(x => x.BackupTable!.Backup!.CreatedAt).First());
+        foreach (var source in mapping?.ShardSources ?? [])
+        {
+            var shard = candidates.FirstOrDefault(x => x.Id == source.BackupTableShardId)
+                ?? throw new ArgumentException($"Shard source {source.BackupTableShardId} was not found in the available candidates.");
+            ValidateShardSource(anchorTable, shard, source.SourceShardNumber);
+            defaults[source.SourceShardNumber] = shard;
+        }
+        return defaults;
+    }
+
+    private static void ValidateShardSource(BackupTableEntity anchorTable, BackupTableShardEntity shard, int requestedSourceShard)
+    {
+        if (shard.SourceShardNumber != requestedSourceShard)
+        {
+            throw new ArgumentException($"Shard source {shard.Id} is for source shard {shard.SourceShardNumber}, not {requestedSourceShard}.");
+        }
+        if (shard.Status != BackupTableStatus.Succeeded || shard.BackupTable is null || shard.BackupTable.Status is not (BackupTableStatus.Succeeded or BackupTableStatus.PartiallySucceeded) || shard.BackupTable.Backup is null || !IsBackupRestorable(shard.BackupTable.Backup.Status) || IsDeletedOrDeletePendingBackupStatus(shard.BackupTable.Backup.Status))
+        {
+            throw new ArgumentException($"Shard source {shard.Id} is not restorable.");
+        }
+        if (anchorTable.Backup is { } anchorBackup)
+        {
+            if (shard.BackupTable.Backup.PolicyId != anchorBackup.PolicyId || shard.BackupTable.Backup.SourceClusterId != anchorBackup.SourceClusterId)
+            {
+                throw new ArgumentException($"Shard source {shard.Id} does not belong to the same policy and source cluster as the anchor backup.");
+            }
+        }
+        if (shard.BackupTable.Database != anchorTable.Database || shard.BackupTable.Table != anchorTable.Table)
+        {
+            throw new ArgumentException($"Shard source {shard.Id} does not match anchor table {anchorTable.Database}.{anchorTable.Table}.");
+        }
+        if (!IsShardCandidateCompatible(anchorTable, shard))
+        {
+            throw new ArgumentException($"Shard source {shard.Id} schema does not match the anchor table.");
+        }
+    }
+
+    private static bool IsShardCandidateCompatible(BackupTableEntity anchorTable, BackupTableShardEntity shard) =>
+        anchorTable.SchemaDefinition?.SchemaHash is { } anchorHash && shard.BackupTable?.SchemaDefinition?.SchemaHash == anchorHash;
+
+    private async Task<string> BuildRestoreStatementPreviewAsync(
+        BackupTableEntity backupTable,
+        RestoreTableEntity restoreTable,
+        BackupTableShardEntity backupShard,
+        IReadOnlyDictionary<string, JsonElement> settings,
+        CancellationToken cancellationToken)
+    {
+        var target = backupTable.Backup?.Target
+            ?? throw new ArgumentException($"Backup target for source backup {backupTable.BackupId} was not found.");
+        var destination = await storageProviders.Get(target).CreateRestoreDestinationAsync(target, backupShard.StoragePath, cancellationToken);
+        var previewShard = new RestoreTableShardEntity
+        {
+            RestoreDatabase = restoreTable.TargetDatabase,
+            RestoreTableName = restoreTable.TargetTable
+        };
+        var sql = ClickHouseRestoreSqlBuilder.Build(backupTable, previewShard, destination, restoreTable.Append, settings);
+        return ClickHouseRestoreSqlBuilder.RedactForPreview(sql, destination.SensitiveValues);
+    }
+    private static bool IsBackupRestorable(BackupRunStatus status) =>
+        status is BackupRunStatus.Succeeded or BackupRunStatus.PartiallySucceeded;
+
+    private static bool IsDeletedOrDeletePendingBackupStatus(BackupRunStatus status) =>
+        status is BackupRunStatus.ManualDeleteRequested or
+            BackupRunStatus.ManualDeleted or
+            BackupRunStatus.FailedBackupDeleteRequested or
+            BackupRunStatus.FailedBackupDeletedByGarbageCollector or
+            BackupRunStatus.BackupExpiredDeleteStarted or
+            BackupRunStatus.BackupExpiredDeleted;
     private static IReadOnlyList<(BackupTableEntity Table, RestoreTableMappingRequest? Mapping)> SelectTables(IEnumerable<BackupTableEntity> tables, InitiateRestoreRequest request)
     {
         var available = tables.ToDictionary(x => x.Id);
@@ -537,6 +894,7 @@ public sealed class RestoreApplicationService(
     }
 
     private sealed record ShardRestorePlan(BackupTableShardEntity BackupShard, ClickHouseShardReplicaInfo? Target, ClickHouseNodeEndpoint Endpoint, string LayoutRole);
+    private sealed record PlannedEntityRestore(Guid AnchorBackupId, EntityRestorePlanDto Dto);
 
     private static JsonSerializerOptions CreateJsonOptions()
     {

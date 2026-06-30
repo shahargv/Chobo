@@ -76,7 +76,7 @@ export function Clusters() {
       {(!editing || modifyCredentials) && <Input label="Password" type="password" value={draft.password ?? ""} onChange={(value) => setDraft({ ...draft, password: value || null })} />}
       <ClickHouseAdvancedSettingsEditor title="Backup advanced settings" value={(draft.clickHouseBackupSettings ?? {}) as Record<string, string | number | boolean>} onChange={(settings) => setDraft({ ...draft, clickHouseBackupSettings: settings })} />
       <ClickHouseAdvancedSettingsEditor title="Restore advanced settings" value={(draft.clickHouseRestoreSettings ?? {}) as Record<string, string | number | boolean>} onChange={(settings) => setDraft({ ...draft, clickHouseRestoreSettings: settings })} />
-    </>} table={<DataTable headers={["Name", "Mode", "Access nodes", "Max DOP", "Node DOP", "Shard DOP", "Actions"]} isLoading={clusters.isLoading}>{(clusters.data ?? []).map((cluster) => <tr key={cluster.id}><td>{cluster.name}</td><td>{cluster.mode}</td><td>{cluster.accessNodes.map((node) => `${node.host}:${node.port}`).join(", ")}</td><td>{cluster.backupRestoreMaxDop}</td><td>{cluster.nodeMaxDopDefault}</td><td>{cluster.shardMaxDopDefault}</td><td className="actions"><button className="ghost" onClick={() => editCluster(cluster)}>Edit</button><button className="ghost" onClick={() => api.testCluster(cluster.id).then((x) => showToast({ kind: x.succeeded ? "success" : "error", text: x.message }))}>Test</button></td></tr>)}</DataTable>} />
+    </>} table={<DataTable headers={["Name", "Mode", "Access nodes", "Max DOP", "Node DOP", "Shard DOP", "Actions"]} isLoading={clusters.isLoading}>{(clusters.data ?? []).map((cluster) => <tr key={cluster.id} className={editing?.id === cluster.id ? "editing-row" : undefined}><td>{cluster.name}</td><td>{cluster.mode}</td><td>{cluster.accessNodes.map((node) => `${node.host}:${node.port}`).join(", ")}</td><td>{cluster.backupRestoreMaxDop}</td><td>{cluster.nodeMaxDopDefault}</td><td>{cluster.shardMaxDopDefault}</td><td className="actions"><button className="ghost" onClick={() => editCluster(cluster)}>Edit</button><button className="ghost" onClick={() => api.testCluster(cluster.id).then((x) => showToast({ kind: x.succeeded ? "success" : "error", text: x.message }))}>Test</button></td></tr>)}</DataTable>} />
   );
 }
 
@@ -102,3 +102,4 @@ function clickHouseClusterNameOptions(names: string[], current?: string | null) 
   if (current && !options.includes(current)) options.unshift(current);
   return options.map((name) => [name, name]);
 }
+

@@ -782,6 +782,47 @@ public sealed class ChoboFoundationTests
         Assert.Contains(listed!, x => x.Id == created.Id && x.MaxAgeHoursForBaseBackup == 12 && x.EffectiveMaxAgeHoursForBaseBackup == 12);
     }
     [Fact]
+    public async Task Policy_update_returns_count_only_retention_limits()
+    {
+        await using var factory = CreateFactory();
+        var client = AuthenticatedClient(factory);
+        var cluster = await Post<ClusterDto>(client, "/api/v1/clusters", new UpsertClusterRequest(
+            "policy-count-retention-source",
+            ClusterMode.SingleInstance,
+            [new UpsertAccessNodeRequest("clickhouse-1")],
+            null,
+            null,
+            3));
+        var target = await Post<BackupTargetDto>(client, "/api/v1/targets/s3", new UpsertS3TargetRequest("s3", "http://minio:9000", "us-east-1", "bucket", null, true, "access", "secret"));
+        var created = await Post<BackupPolicyDto>(client, "/api/v1/policies", new UpsertPolicyRequest(
+            "policy-count-retention",
+            cluster.Id,
+            target.Id,
+            PolicySelector.Empty));
+
+        Assert.Null(created.Retention);
+
+        var updated = await Put<BackupPolicyDto>(client, $"/api/v1/policies/{created.Id}", new UpsertPolicyRequest(
+            "policy-count-retention",
+            cluster.Id,
+            target.Id,
+            PolicySelector.Empty,
+            Retention: new BackupRetentionDto(null, null, 2, 2)));
+
+        Assert.NotNull(updated.Retention);
+        Assert.Null(updated.Retention!.FullRetentionMinutes);
+        Assert.Null(updated.Retention.IncrementalRetentionMinutes);
+        Assert.Equal(2, updated.Retention.MinBackupsToKeep);
+        Assert.Equal(2, updated.Retention.MinFullBackupsToKeep);
+
+        var listed = await client.GetFromJsonAsync<List<BackupPolicyDto>>("/api/v1/policies", JsonOptions);
+        var listedPolicy = Assert.Single(listed!, x => x.Id == created.Id);
+        Assert.NotNull(listedPolicy.Retention);
+        Assert.Equal(2, listedPolicy.Retention!.MinBackupsToKeep);
+        Assert.Equal(2, listedPolicy.Retention.MinFullBackupsToKeep);
+    }
+
+    [Fact]
     public async Task Users_can_add_list_and_deactivate_named_access_tokens()
     {
         await using var factory = CreateFactory();
@@ -2315,3 +2356,4 @@ public sealed class ChoboFoundationTests
         }
     }
 }
+
