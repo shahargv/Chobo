@@ -6,6 +6,7 @@ import type { EntityRestorePlanRequest, InitiateRestoreRequest, SchemaTableDto }
 import { useApi } from "../../api-context";
 import { ConfirmDialog, Page } from "../../components/ui";
 import { ClickHouseAdvancedSettingsEditor, type ClickHouseSettings } from "../../components/ClickHouseAdvancedSettingsEditor";
+import { BackupDrawer } from "../BackupsPage";
 import type { RestoreMappingDraft, RestoreStep } from "./restoreTypes";
 import { BackupChoiceStep, DestinationStep, ImpactSummary, RestoreStepper, ReviewStep, ScopeStep } from "./RestoreWizardSteps";
 import { getMissingPreserveTargetShards, getRequestedBackupId, getSourceShardOptions, getTargetShardOptions, isBackupRestorable, restoreTargetTableName, validateRestoreRequest, validateStep } from "./restoreUtils";
@@ -17,6 +18,7 @@ export function RestoreWizard() {
   const queryClient = useQueryClient();
   const backups = useQuery({ queryKey: ["backups", "restore"], queryFn: () => api.backups({}, { includeTables: true }) });
   const clusters = useQuery({ queryKey: ["clusters"], queryFn: () => api.clusters() });
+  const policies = useQuery({ queryKey: ["policies"], queryFn: () => api.policies() });
   const [step, setStep] = useState<RestoreStep>(0);
   const [backupDateFilter, setBackupDateFilter] = useState(() => backupDateFromHours(72));
   const [activeBackupWindowHours, setActiveBackupWindowHours] = useState<number | null>(72);
@@ -25,6 +27,7 @@ export function RestoreWizard() {
   const [selectedSourceShards, setSelectedSourceShards] = useState<number[]>([]);
   const [selectedTargetShards, setSelectedTargetShards] = useState<number[]>([]);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [selectedBackupDetailId, setSelectedBackupDetailId] = useState<string | null>(null);
   const [clickHouseSettings, setClickHouseSettings] = useState<ClickHouseSettings>({});
   const [restoreToDate, setRestoreToDate] = useState("");
   const [settingsValid, setSettingsValid] = useState(true);
@@ -47,6 +50,7 @@ export function RestoreWizard() {
     enabled: Boolean(request.targetClusterId)
   });
   const clusterById = useMemo(() => new Map((clusters.data ?? []).map((cluster) => [cluster.id, cluster])), [clusters.data]);
+  const policyById = useMemo(() => new Map((policies.data ?? []).map((policy) => [policy.id, policy])), [policies.data]);
   const restorableBackups = useMemo(() => (backups.data ?? []).filter(isBackupRestorable).filter((backup) => backupMatchesDateFilter(backup.createdAt, backupDateFilter)), [backups.data, backupDateFilter]);
   const selectedBackup = restorableBackups.find((backup) => backup.id === request.backupId) ?? null;
   const sourceShardOptions = useMemo(() => getSourceShardOptions(selectedBackup), [selectedBackup]);
@@ -203,7 +207,7 @@ export function RestoreWizard() {
         <div className="restore-main panel">
           <RestoreStepper step={step} errors={restoreErrors} onStep={setStep} />
           <div className="restore-step-body">
-            {step === 0 && <BackupChoiceStep isLoading={backups.isLoading} backups={restorableBackups} selectedBackupId={request.backupId} onSelect={(backupId) => setRequest({ ...request, backupId })} clusterName={(clusterId) => clusterById.get(clusterId)?.name ?? clusterId} dateFilterValue={backupDateFilter} activeWindowHours={activeBackupWindowHours} onDateFilterChange={(value) => { setBackupDateFilter(value); setActiveBackupWindowHours(null); }} onPreset={(hours) => { setBackupDateFilter(backupDateFromHours(hours)); setActiveBackupWindowHours(hours); }} />}
+            {step === 0 && <BackupChoiceStep isLoading={backups.isLoading} backups={restorableBackups} selectedBackupId={request.backupId} onSelect={(backupId) => setRequest({ ...request, backupId })} onOpenBackup={setSelectedBackupDetailId} clusterName={(clusterId) => clusterById.get(clusterId)?.name ?? clusterId} policyName={(policyId) => policyId ? policyById.get(policyId)?.name ?? policyId : "Manual"} dateFilterValue={backupDateFilter} activeWindowHours={activeBackupWindowHours} onDateFilterChange={(value) => { setBackupDateFilter(value); setActiveBackupWindowHours(null); }} onPreset={(hours) => { setBackupDateFilter(backupDateFromHours(hours)); setActiveBackupWindowHours(hours); }} />}
             {step === 1 && <DestinationStep request={request} onChange={setRequest} clusters={clusters.data ?? []} targetShardOptions={targetShardOptions} selectedTargetShards={selectedTargetShards} onTargetShardsChange={setSelectedTargetShards} targetShardsLoading={targetTopology.isFetching} preserveLayoutDisabled={preserveLayoutDisabled} preserveLayoutReason={preserveLayoutReason} />}
             {step === 2 && <ScopeStep backup={selectedBackup} mappings={mappings} onMappingsChange={setMappings} sourceShardOptions={sourceShardOptions} selectedSourceShards={selectedSourceShards} onSourceShardsChange={setSelectedSourceShards} schemaByTableId={schemaByTableId} schemaLoading={backupSchema.isFetching} plan={restorePlan.data ?? null} planLoading={restorePlan.isLoading || restorePlan.isFetching} planError={restorePlan.error ? String(restorePlan.error) : null} restoreToDate={restoreToDate} onRestoreToDateChange={setRestoreToDate} />}
             {step === 3 && <>
@@ -222,6 +226,7 @@ export function RestoreWizard() {
         <ImpactSummary backup={selectedBackup} targetClusterName={clusterById.get(request.targetClusterId)?.name ?? "Not selected"} request={request} mappings={selectedMappings} sourceShardOptions={sourceShardOptions} selectedSourceShards={selectedSourceShards} targetShardOptions={targetShardOptions} selectedTargetShards={selectedTargetShards} errors={restoreErrors} />
       </section>
       {showConfirm && <ConfirmDialog title="Confirm destructive restore" message="Queue this restore? It may append data, allow schema mismatch, or write into an existing target table." confirmLabel="Confirm restore" busy={mutation.isPending} onConfirm={confirmRestore} onCancel={() => setShowConfirm(false)} />}
+      {selectedBackupDetailId && <BackupDrawer backupId={selectedBackupDetailId} onClose={() => setSelectedBackupDetailId(null)} onOpenBackup={setSelectedBackupDetailId} />}
     </Page>
   );
 }
