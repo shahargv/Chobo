@@ -506,6 +506,9 @@ function New-ChoboComposeEnvironment {
         if (-not $plan.ChoboServerEnvironment.Contains('Chobo__BackupRestore__PollInterval')) {
             $lines.Add('      Chobo__BackupRestore__PollInterval: "00:00:01"')
         }
+        if (-not $plan.ChoboServerEnvironment.Contains('Chobo__DatabaseLogging__SlowQueryThreshold')) {
+            $lines.Add('      Chobo__DatabaseLogging__SlowQueryThreshold: "00:00:00.100"')
+        }
         if (-not $plan.ChoboServerEnvironment.Contains('Chobo__RetentionManagement__Interval')) {
             $lines.Add('      Chobo__RetentionManagement__Interval: "00:00:01"')
         }

@@ -469,6 +469,318 @@ public sealed class TestHooksController(
         await db.SaveChangesAsync(cancellationToken);
         return Ok(new { clusterId, targetId, policyId, scheduleId, backupId, backupTableId, backupTableShardId, failureReason });
     }
+
+    [HttpPost("seed-large-metadata-graph")]
+    public async Task<IActionResult> SeedLargeMetadataGraph(SeedLargeMetadataGraphRequest request, CancellationToken cancellationToken)
+    {
+        if (!TestHooksAvailable()) return NotFound();
+
+        var backupCount = Math.Clamp(request.BackupCount ?? 300, 1, 600);
+        var tablesPerBackup = Math.Clamp(request.TablesPerBackup ?? 10, 1, 50);
+        var shardsPerTable = Math.Clamp(request.ShardsPerTable ?? 4, 1, 16);
+        var restoreCount = Math.Clamp(request.RestoreCount ?? 60, 0, backupCount);
+        var completedQueueRows = Math.Clamp(request.CompletedQueueRows ?? 1000, 0, backupCount * tablesPerBackup * shardsPerTable);
+        var now = DateTimeOffset.UtcNow;
+        var user = await db.Users.AsNoTracking().SingleAsync(x => x.UserName == "admin", cancellationToken);
+        var previousAutoDetectChanges = db.ChangeTracker.AutoDetectChangesEnabled;
+        db.ChangeTracker.AutoDetectChangesEnabled = false;
+
+        try
+        {
+            var clusterId = Guid.NewGuid();
+            var targetId = Guid.NewGuid();
+            var policyId = Guid.NewGuid();
+            var scheduleId = Guid.NewGuid();
+            var sampleBackupId = Guid.Empty;
+            var sampleTableName = "";
+            var backups = new List<BackupEntity>(backupCount);
+            var schemas = new List<SchemaDefinitionEntity>(backupCount * tablesPerBackup);
+            var backupTables = new List<BackupTableEntity>(backupCount * tablesPerBackup);
+            var backupShards = new List<BackupTableShardEntity>(backupCount * tablesPerBackup * shardsPerTable);
+            var restores = new List<RestoreEntity>(restoreCount);
+            var restoreTables = new List<RestoreTableEntity>(restoreCount * Math.Min(tablesPerBackup, 5));
+            var restoreShards = new List<RestoreTableShardEntity>(restoreCount * Math.Min(tablesPerBackup, 5) * shardsPerTable);
+            var queueItems = new List<BackupRestoreQueueItemEntity>(completedQueueRows);
+            var backupTablesByBackup = new Dictionary<Guid, List<BackupTableEntity>>(backupCount);
+            var backupShardsByTable = new Dictionary<Guid, List<BackupTableShardEntity>>(backupCount * tablesPerBackup);
+
+            db.ClickHouseClusters.Add(new ClickHouseClusterEntity
+            {
+                Id = clusterId,
+                Name = "large-metadata-source",
+                Mode = ClusterMode.Cluster,
+                ClickHouseClusterName = "large_metadata_cluster",
+                BackupRestoreMaxDop = 8,
+                CreatedAt = now,
+                AccessNodes =
+                [
+                    new ClickHouseAccessNodeEntity { Id = Guid.NewGuid(), Host = "large-metadata-node-1", Port = 9000, UseTls = false },
+                    new ClickHouseAccessNodeEntity { Id = Guid.NewGuid(), Host = "large-metadata-node-2", Port = 9000, UseTls = false }
+                ]
+            });
+            db.BackupTargets.Add(new BackupTargetEntity
+            {
+                Id = targetId,
+                Name = "large-metadata-target",
+                Type = StorageProviderTypes.S3,
+                SettingsJson = JsonSerializer.Serialize(new S3TargetSettingsDto("http://backup-s3:9000", "us-east-1", "backups", "large-metadata", true)),
+                SecretsJson = "{}",
+                CreatedAt = now
+            });
+            db.BackupPolicies.Add(new BackupPolicyEntity
+            {
+                Id = policyId,
+                Name = "large-metadata-policy",
+                SourceClusterId = clusterId,
+                TargetId = targetId,
+                SelectorJsonVersion = 1,
+                SelectorJson = JsonSerializer.Serialize(PolicySelector.Empty),
+                FullRetentionMinutes = 7 * 24 * 60,
+                IncrementalRetentionMinutes = 7 * 24 * 60,
+                MinBackupsToKeep = 20,
+                MinFullBackupsToKeep = 10,
+                CreatedAt = now
+            });
+            db.BackupSchedules.Add(new BackupScheduleEntity
+            {
+                Id = scheduleId,
+                Name = "large-metadata-schedule",
+                PolicyId = policyId,
+                BackupType = BackupType.Full,
+                CronExpression = "0 0 2 * * ?",
+                TimeZoneId = "UTC",
+                IsEnabled = true,
+                CreatedAt = now
+            });
+
+            for (var backupIndex = 0; backupIndex < backupCount; backupIndex++)
+            {
+                var backupId = Guid.NewGuid();
+                if (backupIndex == 0)
+                {
+                    sampleBackupId = backupId;
+                }
+
+                var completedAt = now.AddMinutes(-(backupCount - backupIndex));
+                backups.Add(new BackupEntity
+                {
+                    Id = backupId,
+                    TriggerType = BackupTriggerType.Scheduled,
+                    Status = BackupRunStatus.Succeeded,
+                    BackupType = BackupType.Full,
+                    ContentMode = BackupContentMode.SchemaAndData,
+                    SourceClusterId = clusterId,
+                    TargetId = targetId,
+                    PolicyId = policyId,
+                    ScheduleId = scheduleId,
+                    RequestedByUserId = user.Id,
+                    RequestedByName = user.UserName,
+                    CreatedAt = completedAt.AddMinutes(-2),
+                    QueuedAt = completedAt.AddMinutes(-2),
+                    StartedAt = completedAt.AddMinutes(-1),
+                    CompletedAt = completedAt
+                });
+                backupTablesByBackup[backupId] = new List<BackupTableEntity>(tablesPerBackup);
+
+                for (var tableIndex = 0; tableIndex < tablesPerBackup; tableIndex++)
+                {
+                    var database = $"stress_db_{backupIndex % 12:00}";
+                    var tableName = $"table_{backupIndex:0000}_{tableIndex:0000}";
+                    sampleTableName = sampleTableName.Length == 0 ? $"{database}.{tableName}" : sampleTableName;
+                    var schemaId = Guid.NewGuid();
+                    var tableId = Guid.NewGuid();
+                    schemas.Add(new SchemaDefinitionEntity
+                    {
+                        Id = schemaId,
+                        SchemaHash = $"large-metadata-{backupIndex:0000}-{tableIndex:0000}-{Guid.NewGuid():N}",
+                        Database = database,
+                        Table = tableName,
+                        Engine = "ReplicatedMergeTree",
+                        CreateTableSql = $"CREATE TABLE {ClickHouseSql.Qualified(database, tableName)} (id UInt64, value String) ENGINE = ReplicatedMergeTree('/clickhouse/tables/{{shard}}/{tableName}', '{{replica}}') ORDER BY id",
+                        ColumnsJson = """[{""name"":""id"",""type"":""UInt64""},{""name"":""value"",""type"":""String""}]""",
+                        CreatedAt = completedAt.AddMinutes(-2)
+                    });
+                    var backupTable = new BackupTableEntity
+                    {
+                        Id = tableId,
+                        BackupId = backupId,
+                        EffectiveBackupType = BackupType.Full,
+                        Database = database,
+                        Table = tableName,
+                        Engine = "ReplicatedMergeTree",
+                        DataBackedUp = true,
+                        SchemaDefinitionId = schemaId,
+                        StoragePath = $"s3://backups/large-metadata/{backupId:N}/{database}/{tableName}",
+                        BackupSizeBytes = 8L * 1024 * 1024,
+                        Status = BackupTableStatus.Succeeded,
+                        StartedAt = completedAt.AddMinutes(-1),
+                        CompletedAt = completedAt
+                    };
+                    backupTables.Add(backupTable);
+                    backupTablesByBackup[backupId].Add(backupTable);
+                    backupShardsByTable[tableId] = new List<BackupTableShardEntity>(shardsPerTable);
+
+                    for (var shardIndex = 1; shardIndex <= shardsPerTable; shardIndex++)
+                    {
+                        var shard = new BackupTableShardEntity
+                        {
+                            Id = Guid.NewGuid(),
+                            BackupTableId = tableId,
+                            EffectiveBackupType = backupTable.EffectiveBackupType,
+                            SourceShardNumber = shardIndex,
+                            SourceShardName = $"shard-{shardIndex:0000}",
+                            ReplicaNumber = 1,
+                            Host = shardIndex % 2 == 0 ? "large-metadata-node-2" : "large-metadata-node-1",
+                            Port = 9000,
+                            UseTls = false,
+                            StoragePath = $"{backupTable.StoragePath}/shards/shard-{shardIndex:0000}",
+                            BackupSizeBytes = 2L * 1024 * 1024,
+                            Status = BackupTableStatus.Succeeded,
+                            StartedAt = completedAt.AddMinutes(-1),
+                            CompletedAt = completedAt
+                        };
+                        backupShards.Add(shard);
+                        backupShardsByTable[tableId].Add(shard);
+                        if (queueItems.Count < completedQueueRows)
+                        {
+                            queueItems.Add(new BackupRestoreQueueItemEntity
+                            {
+                                Kind = BackupRestoreQueueKind.Backup,
+                                Position = (queueItems.Count + 1) * 1000L,
+                                OperationId = backupId,
+                                TableId = tableId,
+                                ShardId = shard.Id,
+                                ClusterId = clusterId,
+                                LogicalShardNumber = shard.SourceShardNumber,
+                                LogicalShardName = shard.SourceShardName,
+                                NodeHost = shard.Host,
+                                NodePort = shard.Port,
+                                NodeUseTls = shard.UseTls,
+                                CreatedAt = completedAt.AddMinutes(-2),
+                                StartedAt = completedAt.AddMinutes(-1),
+                                CompletedAt = completedAt
+                            });
+                        }
+                    }
+                }
+            }
+
+            for (var restoreIndex = 0; restoreIndex < restoreCount; restoreIndex++)
+            {
+                var sourceBackup = backups[(restoreIndex * Math.Max(1, backupCount / Math.Max(1, restoreCount))) % backups.Count];
+                var restoreId = Guid.NewGuid();
+                var completedAt = now.AddMinutes(-restoreIndex);
+                restores.Add(new RestoreEntity
+                {
+                    Id = restoreId,
+                    BackupId = sourceBackup.Id,
+                    TargetClusterId = clusterId,
+                    Status = RestoreRunStatus.Succeeded,
+                    Append = false,
+                    AllowSchemaMismatch = false,
+                    Layout = RestoreLayout.Preserve,
+                    RequestJson = JsonSerializer.Serialize(new { mode = "large-metadata-stress" }),
+                    RequestedByUserId = user.Id,
+                    RequestedByName = user.UserName,
+                    CreatedAt = completedAt.AddMinutes(-2),
+                    QueuedAt = completedAt.AddMinutes(-2),
+                    StartedAt = completedAt.AddMinutes(-1),
+                    CompletedAt = completedAt
+                });
+
+                foreach (var sourceTable in backupTablesByBackup[sourceBackup.Id].Take(Math.Min(tablesPerBackup, 5)))
+                {
+                    var restoreTableId = Guid.NewGuid();
+                    restoreTables.Add(new RestoreTableEntity
+                    {
+                        Id = restoreTableId,
+                        RestoreId = restoreId,
+                        BackupTableId = sourceTable.Id,
+                        SourceDatabase = sourceTable.Database,
+                        SourceTable = sourceTable.Table,
+                        TargetDatabase = $"{sourceTable.Database}_restore",
+                        TargetTable = sourceTable.Table,
+                        Append = false,
+                        AllowSchemaMismatch = false,
+                        SchemaOnly = false,
+                        Status = RestoreTableStatus.Succeeded,
+                        StartedAt = completedAt.AddMinutes(-1),
+                        CompletedAt = completedAt
+                    });
+                    foreach (var sourceShard in backupShardsByTable[sourceTable.Id])
+                    {
+                        restoreShards.Add(new RestoreTableShardEntity
+                        {
+                            Id = Guid.NewGuid(),
+                            RestoreTableId = restoreTableId,
+                            BackupTableShardId = sourceShard.Id,
+                            SourceShardNumber = sourceShard.SourceShardNumber,
+                            TargetShardNumber = sourceShard.SourceShardNumber,
+                            TargetShardName = sourceShard.SourceShardName,
+                            TargetReplicaNumber = 1,
+                            TargetHost = sourceShard.Host,
+                            TargetPort = sourceShard.Port,
+                            TargetUseTls = sourceShard.UseTls,
+                            LayoutRole = "primary",
+                            RestoreDatabase = $"{sourceTable.Database}_restore",
+                            RestoreTableName = sourceTable.Table,
+                            Status = RestoreTableStatus.Succeeded,
+                            StartedAt = completedAt.AddMinutes(-1),
+                            CompletedAt = completedAt
+                        });
+                    }
+                }
+            }
+
+            db.SchemaDefinitions.AddRange(schemas);
+            db.Backups.AddRange(backups);
+            db.BackupTables.AddRange(backupTables);
+            db.BackupTableShards.AddRange(backupShards);
+            db.Restores.AddRange(restores);
+            db.RestoreTables.AddRange(restoreTables);
+            db.RestoreTableShards.AddRange(restoreShards);
+            db.BackupRestoreQueueItems.AddRange(queueItems);
+            db.AuditEntries.Add(new AuditEntryEntity
+            {
+                Timestamp = now,
+                ActorName = "system",
+                Action = "large-metadata-seeded",
+                EntityType = "test",
+                EntityId = sampleBackupId.ToString(),
+                Details = JsonSerializer.Serialize(new { backupCount, tablesPerBackup, shardsPerTable, restoreCount, completedQueueRows, backupTableCount = backupTables.Count, backupShardCount = backupShards.Count, restoreTableCount = restoreTables.Count, restoreShardCount = restoreShards.Count })
+            });
+            db.ApplicationLogEntries.Add(new ApplicationLogEntryEntity
+            {
+                Timestamp = now,
+                Level = "Information",
+                RenderedMessage = $"Seeded large metadata graph with {backupCount} backups, {backupTables.Count} backup tables, {backupShards.Count} backup shards, {restores.Count} restores.",
+                Properties = "{}"
+            });
+
+            await db.SaveChangesAsync(cancellationToken);
+            db.ChangeTracker.Clear();
+            return Ok(new
+            {
+                clusterId,
+                targetId,
+                policyId,
+                scheduleId,
+                sampleBackupId,
+                sampleTableName,
+                backupCount,
+                backupTableCount = backupTables.Count,
+                backupShardCount = backupShards.Count,
+                restoreCount = restores.Count,
+                restoreTableCount = restoreTables.Count,
+                restoreShardCount = restoreShards.Count,
+                completedQueueRows = queueItems.Count
+            });
+        }
+        finally
+        {
+            db.ChangeTracker.AutoDetectChangesEnabled = previousAutoDetectChanges;
+        }
+    }
     [HttpPost("delete-sqlite-and-crash")]
     public IActionResult DeleteSqliteAndCrash()
     {
@@ -497,3 +809,4 @@ public sealed class TestHooksController(
         options.Value.Enabled && environment.IsEnvironment("SystemTest");
 }
 
+public sealed record SeedLargeMetadataGraphRequest(int? BackupCount, int? TablesPerBackup, int? ShardsPerTable, int? RestoreCount, int? CompletedQueueRows);

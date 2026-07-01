@@ -101,6 +101,7 @@ public static class ServiceCollectionExtensions
             ConfigureChoboSqlite(
                 options,
                 storage,
+                serviceProvider.GetRequiredService<IOptions<ChoboSqliteOptions>>().Value,
                 serviceProvider.GetRequiredService<SlowSqliteQueryLoggingInterceptor>(),
                 serviceProvider.GetRequiredService<SqlitePragmaConnectionInterceptor>());
         });
@@ -110,6 +111,7 @@ public static class ServiceCollectionExtensions
             ConfigureChoboSqlite(
                 options,
                 storage,
+                serviceProvider.GetRequiredService<IOptions<ChoboSqliteOptions>>().Value,
                 serviceProvider.GetRequiredService<SlowSqliteQueryLoggingInterceptor>(),
                 serviceProvider.GetRequiredService<SqlitePragmaConnectionInterceptor>());
         }, ServiceLifetime.Scoped);
@@ -176,6 +178,7 @@ public static class ServiceCollectionExtensions
     private static void ConfigureChoboSqlite(
         DbContextOptionsBuilder options,
         ChoboStorageOptions storage,
+        ChoboSqliteOptions sqliteOptions,
         SlowSqliteQueryLoggingInterceptor slowQueryInterceptor,
         SqlitePragmaConnectionInterceptor pragmaConnectionInterceptor)
     {
@@ -185,10 +188,23 @@ public static class ServiceCollectionExtensions
         options.UseSqlite(new SqliteConnectionStringBuilder
         {
             DataSource = dbPath,
-            DefaultTimeout = 60
+            DefaultTimeout = SqliteDefaultTimeoutSeconds(sqliteOptions)
         }.ToString());
         options.AddInterceptors(slowQueryInterceptor, pragmaConnectionInterceptor);
     }
+
+    private static int SqliteDefaultTimeoutSeconds(ChoboSqliteOptions options)
+    {
+        if (options.BusyTimeout < TimeSpan.Zero)
+        {
+            throw new InvalidOperationException("SQLite busy timeout cannot be negative.");
+        }
+
+        return options.BusyTimeout.TotalSeconds >= int.MaxValue
+            ? int.MaxValue
+            : Math.Max(1, (int)Math.Ceiling(options.BusyTimeout.TotalSeconds));
+    }
+
     public static async Task InitializeChoboDatabaseAsync(this IServiceProvider services, bool firstStartup, bool missingDatabaseAfterInitialized = false)
     {
         using var scope = services.CreateScope();

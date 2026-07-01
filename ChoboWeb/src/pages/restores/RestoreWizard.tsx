@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, ArrowRight, RotateCcw } from "lucide-react";
 import type { EntityRestorePlanRequest, InitiateRestoreRequest, SchemaTableDto } from "../../api/generated";
 import { useApi } from "../../api-context";
-import { ConfirmDialog, Page } from "../../components/ui";
+import { ConfirmDialog, Empty, Page } from "../../components/ui";
 import { ClickHouseAdvancedSettingsEditor, type ClickHouseSettings } from "../../components/ClickHouseAdvancedSettingsEditor";
 import { BackupDrawer } from "../BackupsPage";
 import type { RestoreMappingDraft, RestoreStep } from "./restoreTypes";
@@ -16,7 +16,7 @@ export function RestoreWizard() {
   const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const backups = useQuery({ queryKey: ["backups", "restore"], queryFn: () => api.backups({}, { includeTables: true }) });
+  const backupSummaries = useQuery({ queryKey: ["backups", "restore", "summary"], queryFn: () => api.backups({}, { includeTables: false }) });
   const clusters = useQuery({ queryKey: ["clusters"], queryFn: () => api.clusters() });
   const policies = useQuery({ queryKey: ["policies"], queryFn: () => api.policies() });
   const [step, setStep] = useState<RestoreStep>(0);
@@ -39,6 +39,11 @@ export function RestoreWizard() {
     enabled: Boolean(request.backupId && request.targetClusterId),
     retry: false
   });
+  const selectedBackupDetail = useQuery({
+    queryKey: ["backup", request.backupId, "tables"],
+    queryFn: () => api.backup(request.backupId, { includeTables: true }),
+    enabled: Boolean(request.backupId)
+  });
   const backupSchema = useQuery({
     queryKey: ["restore-schema", request.backupId],
     queryFn: () => api.backupSchema(request.backupId),
@@ -51,15 +56,16 @@ export function RestoreWizard() {
   });
   const clusterById = useMemo(() => new Map((clusters.data ?? []).map((cluster) => [cluster.id, cluster])), [clusters.data]);
   const policyById = useMemo(() => new Map((policies.data ?? []).map((policy) => [policy.id, policy])), [policies.data]);
-  const restorableBackups = useMemo(() => (backups.data ?? []).filter(isBackupRestorable).filter((backup) => backupMatchesDateFilter(backup.createdAt, backupDateFilter)), [backups.data, backupDateFilter]);
-  const selectedBackup = restorableBackups.find((backup) => backup.id === request.backupId) ?? null;
+  const restorableBackups = useMemo(() => (backupSummaries.data ?? []).filter(isBackupRestorable).filter((backup) => backupMatchesDateFilter(backup.createdAt, backupDateFilter)), [backupSummaries.data, backupDateFilter]);
+  const selectedBackupSummary = restorableBackups.find((backup) => backup.id === request.backupId) ?? null;
+  const selectedBackup = selectedBackupDetail.data ?? null;
   const sourceShardOptions = useMemo(() => getSourceShardOptions(selectedBackup), [selectedBackup]);
   const targetShardOptions = useMemo(() => getTargetShardOptions(targetTopology.data?.shards), [targetTopology.data]);
   const schemaByTableId = useMemo(() => {
     const tables = backupSchema.data?.databases.flatMap((database) => database.tables) ?? [];
     return new Map<string, SchemaTableDto>(tables.map((table) => [table.backupTableId, table]));
   }, [backupSchema.data]);
-  const isDifferentCluster = Boolean(selectedBackup && request.targetClusterId && selectedBackup.sourceClusterId !== request.targetClusterId);
+  const isDifferentCluster = Boolean(selectedBackupSummary && request.targetClusterId && selectedBackupSummary.sourceClusterId !== request.targetClusterId);
   const preserveMissingTargetShards = isDifferentCluster && targetTopology.isSuccess ? getMissingPreserveTargetShards(selectedSourceShards, targetShardOptions) : [];
   const preserveShardCountMismatch = isDifferentCluster && targetTopology.isSuccess && selectedSourceShards.length === sourceShardOptions.length && sourceShardOptions.length > 0 && targetShardOptions.length > 0 && sourceShardOptions.length !== targetShardOptions.length;
   const preserveLayoutError = isDifferentCluster && targetTopology.isFetching
@@ -130,7 +136,7 @@ export function RestoreWizard() {
 
 
   const entityPlanRequest = (): EntityRestorePlanRequest => ({
-    policyId: selectedBackup?.policyId ?? null,
+    policyId: selectedBackupSummary?.policyId ?? selectedBackup?.policyId ?? null,
     anchorBackupId: request.backupId,
     targetClusterId: request.targetClusterId,
     database: "",
@@ -161,10 +167,10 @@ export function RestoreWizard() {
   const restorePlan = useQuery({
     queryKey: ["restore-plan", request.backupId, request.targetClusterId, request.layout, selectedSourceShards, selectedTargetShards, selectedMappings, clickHouseSettings],
     queryFn: () => api.restorePlan(entityPlanRequest()),
-    enabled: Boolean(selectedBackup?.policyId && request.backupId && request.targetClusterId && selectedMappings.length > 0 && settingsValid),
+    enabled: Boolean((selectedBackupSummary?.policyId ?? selectedBackup?.policyId) && selectedBackup && request.backupId && request.targetClusterId && selectedMappings.length > 0 && settingsValid),
     retry: false
   });
-  const restorePlanBlocked = step === 3 && Boolean(selectedBackup?.policyId) && (restorePlan.isLoading || restorePlan.isError);
+  const restorePlanBlocked = step === 3 && Boolean(selectedBackupSummary?.policyId ?? selectedBackup?.policyId) && (restorePlan.isLoading || restorePlan.isError);
 
   const restoreRequest = (): InitiateRestoreRequest => ({
     ...request,
@@ -184,7 +190,7 @@ export function RestoreWizard() {
   });
 
   const mutation = useMutation({
-    mutationFn: () => selectedBackup?.policyId ? api.initiateRestoreFromPlan({ ...entityPlanRequest(), confirmDestructive: true }) : api.initiateRestore({ ...restoreRequest(), confirmDestructive: true }),
+    mutationFn: () => (selectedBackupSummary?.policyId ?? selectedBackup?.policyId) ? api.initiateRestoreFromPlan({ ...entityPlanRequest(), confirmDestructive: true }) : api.initiateRestore({ ...restoreRequest(), confirmDestructive: true }),
     onSuccess: (restore) => {
       showToast({ kind: "success", text: "Restore queued. Opening details." });
       queryClient.setQueryData(["restore", restore.id], restore);
@@ -207,9 +213,10 @@ export function RestoreWizard() {
         <div className="restore-main panel">
           <RestoreStepper step={step} errors={restoreErrors} onStep={setStep} />
           <div className="restore-step-body">
-            {step === 0 && <BackupChoiceStep isLoading={backups.isLoading} backups={restorableBackups} selectedBackupId={request.backupId} onSelect={(backupId) => setRequest({ ...request, backupId })} onOpenBackup={setSelectedBackupDetailId} clusterName={(clusterId) => clusterById.get(clusterId)?.name ?? clusterId} policyName={(policyId) => policyId ? policyById.get(policyId)?.name ?? policyId : "Manual"} dateFilterValue={backupDateFilter} activeWindowHours={activeBackupWindowHours} onDateFilterChange={(value) => { setBackupDateFilter(value); setActiveBackupWindowHours(null); }} onPreset={(hours) => { setBackupDateFilter(backupDateFromHours(hours)); setActiveBackupWindowHours(hours); }} />}
+            {step === 0 && <BackupChoiceStep isLoading={backupSummaries.isLoading} backups={restorableBackups} selectedBackupId={request.backupId} onSelect={(backupId) => setRequest({ ...request, backupId })} onOpenBackup={setSelectedBackupDetailId} clusterName={(clusterId) => clusterById.get(clusterId)?.name ?? clusterId} policyName={(policyId) => policyId ? policyById.get(policyId)?.name ?? policyId : "Manual"} dateFilterValue={backupDateFilter} activeWindowHours={activeBackupWindowHours} onDateFilterChange={(value) => { setBackupDateFilter(value); setActiveBackupWindowHours(null); }} onPreset={(hours) => { setBackupDateFilter(backupDateFromHours(hours)); setActiveBackupWindowHours(hours); }} />}
             {step === 1 && <DestinationStep request={request} onChange={setRequest} clusters={clusters.data ?? []} targetShardOptions={targetShardOptions} selectedTargetShards={selectedTargetShards} onTargetShardsChange={setSelectedTargetShards} targetShardsLoading={targetTopology.isFetching} preserveLayoutDisabled={preserveLayoutDisabled} preserveLayoutReason={preserveLayoutReason} />}
-            {step === 2 && <ScopeStep backup={selectedBackup} mappings={mappings} onMappingsChange={setMappings} sourceShardOptions={sourceShardOptions} selectedSourceShards={selectedSourceShards} onSourceShardsChange={setSelectedSourceShards} schemaByTableId={schemaByTableId} schemaLoading={backupSchema.isFetching} plan={restorePlan.data ?? null} planLoading={restorePlan.isLoading || restorePlan.isFetching} planError={restorePlan.error ? String(restorePlan.error) : null} restoreToDate={restoreToDate} onRestoreToDateChange={setRestoreToDate} />}
+            {step === 2 && selectedBackupDetail.isLoading && <Empty text="Loading selected backup tables and shards." />}
+            {step === 2 && !selectedBackupDetail.isLoading && <ScopeStep backup={selectedBackup} mappings={mappings} onMappingsChange={setMappings} sourceShardOptions={sourceShardOptions} selectedSourceShards={selectedSourceShards} onSourceShardsChange={setSelectedSourceShards} schemaByTableId={schemaByTableId} schemaLoading={backupSchema.isFetching} plan={restorePlan.data ?? null} planLoading={restorePlan.isLoading || restorePlan.isFetching} planError={restorePlan.error ? String(restorePlan.error) : null} restoreToDate={restoreToDate} onRestoreToDateChange={setRestoreToDate} />}
             {step === 3 && <>
               <ReviewStep backup={selectedBackup} targetClusterName={clusterById.get(request.targetClusterId)?.name ?? request.targetClusterId} request={request} mappings={selectedMappings} sourceShardOptions={sourceShardOptions} selectedSourceShards={selectedSourceShards} targetShardOptions={targetShardOptions} selectedTargetShards={selectedTargetShards} errors={restoreErrors} plan={restorePlan.data ?? null} planError={restorePlan.error ? String(restorePlan.error) : null} />
               <ClickHouseAdvancedSettingsEditor title="ClickHouse restore settings for this run" value={clickHouseSettings} sources={(settingsPreview.data?.sources ?? []) as any} onChange={setClickHouseSettings} onValidityChange={setSettingsValid} />

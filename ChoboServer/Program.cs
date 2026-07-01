@@ -1,3 +1,4 @@
+using System.Runtime;
 using ChoboServer;
 using ChoboServer.Options;
 using ChoboServer.Services;
@@ -46,6 +47,7 @@ Log.Logger = new LoggerConfiguration()
     .WriteTo.Sink(new ApplicationLogSqliteSink(choboDataDirectory, sqliteOptions))
     .CreateLogger();
 builder.Host.UseSerilog();
+Log.Information("ChoboServer runtime GC mode: ServerGC={ServerGC}.", GCSettings.IsServerGC);
 
 var app = builder.Build();
 Console.WriteLine("Initializing Chobo SQLite database...");

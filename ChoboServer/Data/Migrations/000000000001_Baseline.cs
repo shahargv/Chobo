@@ -370,6 +370,7 @@ public sealed class Baseline : Migration
             CREATE INDEX IF NOT EXISTS IX_BackupPolicies_SourceClusterId ON BackupPolicies (SourceClusterId);
             CREATE INDEX IF NOT EXISTS IX_BackupPolicies_TargetId ON BackupPolicies (TargetId);
             CREATE INDEX IF NOT EXISTS IX_BackupSchedules_IsDeleted_Name ON BackupSchedules (IsDeleted, Name);
+            CREATE INDEX IF NOT EXISTS IX_BackupSchedules_IsEnabled_IsDeleted ON BackupSchedules (IsEnabled, IsDeleted);
             CREATE INDEX IF NOT EXISTS IX_BackupSchedules_PolicyId_IsDeleted ON BackupSchedules (PolicyId, IsDeleted);
             CREATE UNIQUE INDEX IF NOT EXISTS IX_SchemaDefinitions_SchemaHash ON SchemaDefinitions (SchemaHash);
             CREATE INDEX IF NOT EXISTS IX_Backups_Status ON Backups (Status);
@@ -388,15 +389,18 @@ public sealed class Baseline : Migration
             CREATE INDEX IF NOT EXISTS IX_BackupTables_Database_Table ON BackupTables (Database, "Table");
             CREATE INDEX IF NOT EXISTS IX_BackupTables_Table ON BackupTables ("Table");
             CREATE INDEX IF NOT EXISTS IX_BackupTables_EffectiveBackupType_ParentFullBackupTableId ON BackupTables (EffectiveBackupType, ParentFullBackupTableId);
+            CREATE INDEX IF NOT EXISTS IX_BackupTables_ParentFullBackupId ON BackupTables (ParentFullBackupId);
             CREATE INDEX IF NOT EXISTS IX_BackupTables_EffectiveBackupType_Database_Table ON BackupTables (EffectiveBackupType, Database, "Table");
             CREATE INDEX IF NOT EXISTS IX_BackupTables_Status ON BackupTables (Status);
             CREATE INDEX IF NOT EXISTS IX_BackupTables_ParentFullBackupTableId ON BackupTables (ParentFullBackupTableId);
             CREATE INDEX IF NOT EXISTS IX_BackupTableShards_BackupTableId ON BackupTableShards (BackupTableId);
             CREATE INDEX IF NOT EXISTS IX_BackupTableShards_BackupTableId_SourceShardNumber ON BackupTableShards (BackupTableId, SourceShardNumber);
             CREATE INDEX IF NOT EXISTS IX_BackupTableShards_EffectiveBackupType_ParentFullBackupTableShardId ON BackupTableShards (EffectiveBackupType, ParentFullBackupTableShardId);
+            CREATE INDEX IF NOT EXISTS IX_BackupTableShards_ParentFullBackupId ON BackupTableShards (ParentFullBackupId);
             CREATE INDEX IF NOT EXISTS IX_BackupTableShards_Status ON BackupTableShards (Status);
             CREATE INDEX IF NOT EXISTS IX_BackupTableShards_ParentFullBackupTableShardId ON BackupTableShards (ParentFullBackupTableShardId);
             CREATE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_IsForced_Position ON BackupRestoreQueueItems (IsForced, Position);
+            CREATE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_CompletedAt ON BackupRestoreQueueItems (CompletedAt);
             CREATE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_Kind_OperationId ON BackupRestoreQueueItems (Kind, OperationId);
             CREATE UNIQUE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_ShardId ON BackupRestoreQueueItems (ShardId);
             CREATE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_ClusterId_LogicalShardNumber ON BackupRestoreQueueItems (ClusterId, LogicalShardNumber);
