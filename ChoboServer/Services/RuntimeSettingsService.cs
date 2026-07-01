@@ -4,6 +4,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Chobo.Contracts;
+using ChoboServer.Data;
 using ChoboServer.Options;
 using Microsoft.Extensions.Options;
 
@@ -37,6 +38,7 @@ public sealed class RuntimeSettingsService(
     private static readonly IReadOnlyList<OptionDescriptor> OptionDescriptors =
     [
         new(typeof(ChoboStorageOptions), "Chobo", RuntimeSettingApplyMode.RestartRequired, "Changing the data directory requires a server restart and does not move existing data."),
+        new(typeof(ChoboSqliteOptions), "Chobo:Sqlite", RuntimeSettingApplyMode.Live, "SQLite PRAGMA changes affect new database connections. Journal mode is also re-applied during startup maintenance."),
         new(typeof(ChoboSecurityOptions), "Chobo", RuntimeSettingApplyMode.RestartRequired, "Changing encryption configuration requires a restart and can affect credential decryption."),
         new(typeof(ChoboInitOptions), "Chobo:Init", RuntimeSettingApplyMode.RestartRequired, "Initial install settings are only used during bootstrap."),
         new(typeof(ChoboDataRetentionOptions), "Chobo:DataRetention", RuntimeSettingApplyMode.Live, null),
@@ -280,7 +282,35 @@ public sealed class RuntimeSettingsService(
         {
             throw new InvalidOperationException("Slow query threshold must be a TimeSpan value.");
         }
+
+        if (setting.Key.StartsWith("Chobo:Sqlite:", StringComparison.OrdinalIgnoreCase))
+        {
+            ValidateSqliteSetting(setting, value);
+        }
     }
+
+    private static void ValidateSqliteSetting(RuntimeSetting setting, JsonNode? value)
+    {
+        var options = new ChoboSqliteOptions();
+        switch (setting.Name)
+        {
+            case nameof(ChoboSqliteOptions.JournalMode):
+                options.JournalMode = value?.GetValue<string>() ?? options.JournalMode;
+                break;
+            case nameof(ChoboSqliteOptions.Synchronous):
+                options.Synchronous = value?.GetValue<string>() ?? options.Synchronous;
+                break;
+            case nameof(ChoboSqliteOptions.BusyTimeout):
+                options.BusyTimeout = value is null ? options.BusyTimeout : TimeSpan.Parse(value.GetValue<string>(), CultureInfo.InvariantCulture);
+                break;
+            case nameof(ChoboSqliteOptions.WalAutoCheckpoint):
+                options.WalAutoCheckpoint = value?.GetValue<int>() ?? options.WalAutoCheckpoint;
+                break;
+        }
+
+        SqlitePragmaConnectionInterceptor.Validate(options);
+    }
+
     private async Task WriteOverlayValueAsync(string key, JsonNode? value, CancellationToken cancellationToken)
     {
         var root = ReadOverlayRoot();

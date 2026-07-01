@@ -1,15 +1,18 @@
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using ChoboServer.Data;
+using ChoboServer.Options;
 using Microsoft.Data.Sqlite;
 using Serilog.Core;
 using Serilog.Events;
 
 namespace ChoboServer.Services;
 
-public sealed class ApplicationLogSqliteSink(string dataDirectory) : ILogEventSink
+public sealed class ApplicationLogSqliteSink(string dataDirectory, ChoboSqliteOptions? sqliteOptions = null) : ILogEventSink
 {
     private readonly string _dbPath = Path.Combine(dataDirectory, "chobo.db");
+    private readonly ChoboSqliteOptions _sqliteOptions = sqliteOptions ?? new ChoboSqliteOptions();
 
     public void Emit(LogEvent logEvent)
     {
@@ -21,6 +24,11 @@ public sealed class ApplicationLogSqliteSink(string dataDirectory) : ILogEventSi
                 DefaultTimeout = 60
             }.ToString());
             connection.Open();
+            using (var pragma = connection.CreateCommand())
+            {
+                pragma.CommandText = SqlitePragmaConnectionInterceptor.BuildConnectionPragmaSql(_sqliteOptions);
+                pragma.ExecuteNonQuery();
+            }
 
             using var command = connection.CreateCommand();
             command.CommandText = """
@@ -82,6 +90,3 @@ public sealed class ApplicationLogSqliteSink(string dataDirectory) : ILogEventSi
             _ => value.ToString()
         };
 }
-
-
-

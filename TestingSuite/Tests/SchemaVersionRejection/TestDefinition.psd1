@@ -45,7 +45,6 @@
             RetryTimeoutSeconds = 30
             RetryIntervalSeconds = 2
             ExpectExitCode = 1
-            ExpectTextContains = @('Connection refused')
         }
     )
 

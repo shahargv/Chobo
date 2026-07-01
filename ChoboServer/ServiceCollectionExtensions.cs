@@ -22,6 +22,7 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddChoboServer(this IServiceCollection services, IConfiguration configuration)
     {
         services.AddOptions<ChoboStorageOptions>().Bind(configuration.GetSection("Chobo"));
+        services.AddOptions<ChoboSqliteOptions>().Bind(configuration.GetSection("Chobo:Sqlite"));
         services.AddOptions<ChoboSecurityOptions>().Bind(configuration.GetSection("Chobo"));
         services.AddOptions<ChoboInitOptions>().Bind(configuration.GetSection("Chobo:Init"));
         services.AddOptions<ChoboDataRetentionOptions>().Bind(configuration.GetSection("Chobo:DataRetention"));
@@ -84,23 +85,33 @@ public static class ServiceCollectionExtensions
             var storage = serviceProvider.GetRequiredService<IOptions<ChoboStorageOptions>>().Value;
             var dataDirectory = ChoboPaths.GetDataDirectory(storage.DataDirectory);
             Directory.CreateDirectory(dataDirectory);
+            var sqlite = serviceProvider.GetRequiredService<IOptions<ChoboSqliteOptions>>().Value;
             return new LoggerConfiguration()
                 .Enrich.FromLogContext()
                 .ReadFrom.Configuration(configuration)
-                .WriteTo.Sink(new ApplicationLogSqliteSink(dataDirectory))
+                .WriteTo.Sink(new ApplicationLogSqliteSink(dataDirectory, sqlite))
                 .CreateLogger();
         });
 
         services.AddSingleton<SlowSqliteQueryLoggingInterceptor>();
+        services.AddSingleton<SqlitePragmaConnectionInterceptor>();
         services.AddDbContext<ChoboDbContext>((serviceProvider, options) =>
         {
             var storage = serviceProvider.GetRequiredService<IOptions<ChoboStorageOptions>>().Value;
-            ConfigureChoboSqlite(options, storage, serviceProvider.GetRequiredService<SlowSqliteQueryLoggingInterceptor>());
+            ConfigureChoboSqlite(
+                options,
+                storage,
+                serviceProvider.GetRequiredService<SlowSqliteQueryLoggingInterceptor>(),
+                serviceProvider.GetRequiredService<SqlitePragmaConnectionInterceptor>());
         });
         services.AddDbContextFactory<ChoboDbContext>((serviceProvider, options) =>
         {
             var storage = serviceProvider.GetRequiredService<IOptions<ChoboStorageOptions>>().Value;
-            ConfigureChoboSqlite(options, storage, serviceProvider.GetRequiredService<SlowSqliteQueryLoggingInterceptor>());
+            ConfigureChoboSqlite(
+                options,
+                storage,
+                serviceProvider.GetRequiredService<SlowSqliteQueryLoggingInterceptor>(),
+                serviceProvider.GetRequiredService<SqlitePragmaConnectionInterceptor>());
         }, ServiceLifetime.Scoped);
         services.AddScoped<ActorContext>();
         services.AddScoped<IActorContext>(serviceProvider => serviceProvider.GetRequiredService<ActorContext>());
@@ -162,7 +173,11 @@ public static class ServiceCollectionExtensions
     }
 
 
-    private static void ConfigureChoboSqlite(DbContextOptionsBuilder options, ChoboStorageOptions storage, SlowSqliteQueryLoggingInterceptor slowQueryInterceptor)
+    private static void ConfigureChoboSqlite(
+        DbContextOptionsBuilder options,
+        ChoboStorageOptions storage,
+        SlowSqliteQueryLoggingInterceptor slowQueryInterceptor,
+        SqlitePragmaConnectionInterceptor pragmaConnectionInterceptor)
     {
         var dataDirectory = ChoboPaths.GetDataDirectory(storage.DataDirectory);
         Directory.CreateDirectory(dataDirectory);
@@ -172,7 +187,7 @@ public static class ServiceCollectionExtensions
             DataSource = dbPath,
             DefaultTimeout = 60
         }.ToString());
-        options.AddInterceptors(slowQueryInterceptor);
+        options.AddInterceptors(slowQueryInterceptor, pragmaConnectionInterceptor);
     }
     public static async Task InitializeChoboDatabaseAsync(this IServiceProvider services, bool firstStartup, bool missingDatabaseAfterInitialized = false)
     {
@@ -181,7 +196,8 @@ public static class ServiceCollectionExtensions
         var bootstrap = scope.ServiceProvider.GetRequiredService<IDatabaseBootstrap>();
         await bootstrap.EnsureDatabaseObjectsAsync();
         await bootstrap.EnsureSchemaStateAsync();
-        await DatabasePerformanceMaintenance.EnsureAsync(db);
+        var sqliteOptions = scope.ServiceProvider.GetRequiredService<IOptionsMonitor<ChoboSqliteOptions>>();
+        await DatabasePerformanceMaintenance.EnsureAsync(db, sqliteOptions.CurrentValue);
 
         var hasUsers = await db.Users.AnyAsync();
         if (!hasUsers)
@@ -190,4 +206,3 @@ public static class ServiceCollectionExtensions
         }
     }
 }
-
