@@ -508,6 +508,52 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Backup_shard_resume_without_operation_id_recovers_existing_clickhouse_operation()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "resume_unknown_orders", BackupTableStatus.Running, null, true)
+        ]);
+        var shard = await fixture.Db.BackupTableShards.SingleAsync(x => x.BackupTable!.BackupId == backup.Id);
+        fixture.ClickHouse.KnownOperations["recovered-resume-op"] = "BACKUP_CREATED";
+        fixture.ClickHouse.BackupOperations.Add(("recovered-resume-op", shard.StoragePath));
+        fixture.Db.ChangeTracker.Clear();
+
+        await fixture.RunBackupAsync(backup.Id);
+
+        fixture.Db.ChangeTracker.Clear();
+        var completed = await fixture.Db.Backups.Include(x => x.Tables).ThenInclude(x => x.Shards).SingleAsync(x => x.Id == backup.Id);
+        var completedShard = Assert.Single(Assert.Single(completed.Tables).Shards);
+        Assert.Equal(BackupRunStatus.Succeeded, completed.Status);
+        Assert.Equal(BackupTableStatus.Succeeded, completedShard.Status);
+        Assert.Equal("recovered-resume-op", completedShard.ClickHouseOperationId);
+        Assert.Empty(fixture.ClickHouse.BackupStartTables);
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "clickhouse-operation-recovered" && x.EntityId == completedShard.Id.ToString() && x.Details.Contains("missing-operation-id-on-resume")));
+    }
+
+    [Fact]
+    public async Task Backup_shard_resume_without_operation_id_fails_instead_of_starting_duplicate_destination()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "resume_missing_orders", BackupTableStatus.Running, null, true)
+        ]);
+        fixture.Db.ChangeTracker.Clear();
+
+        await fixture.RunBackupAsync(backup.Id);
+
+        fixture.Db.ChangeTracker.Clear();
+        var completed = await fixture.Db.Backups.Include(x => x.Tables).ThenInclude(x => x.Shards).SingleAsync(x => x.Id == backup.Id);
+        var completedShard = Assert.Single(Assert.Single(completed.Tables).Shards);
+        Assert.Equal(BackupRunStatus.Failed, completed.Status);
+        Assert.Equal(BackupTableStatus.Failed, completedShard.Status);
+        Assert.Null(completedShard.ClickHouseOperationId);
+        Assert.Contains("will not start another backup", completedShard.Error);
+        Assert.Empty(fixture.ClickHouse.BackupStartTables);
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "shard-failed" && x.EntityId == completedShard.Id.ToString() && x.Details.Contains("missing-operation-id-on-resume")));
+    }
+
+    [Fact]
     public async Task Backup_shard_retry_resumes_submitted_operation_after_transient_poll_failure()
     {
         await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions
@@ -1282,6 +1328,105 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Backup_queue_active_list_filters_before_limit()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "aaa_done", BackupTableStatus.Queued, null, true),
+            new SeedBackupTable("sales", "bbb_done", BackupTableStatus.Queued, null, true),
+            new SeedBackupTable("sales", "ccc_active", BackupTableStatus.Queued, null, true)
+        ]);
+
+        using (var scope = fixture.Services.CreateScope())
+        {
+            await scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>().EnsureBackupQueueItemsAsync(backup.Id);
+        }
+
+        var queueItems = await fixture.Db.BackupRestoreQueueItems
+            .Where(x => x.Kind == BackupRestoreQueueKind.Backup && x.OperationId == backup.Id)
+            .OrderBy(x => x.Position)
+            .ToListAsync();
+        var completedShardIds = queueItems.Take(2).Select(x => x.ShardId).ToList();
+        var activeShardId = queueItems[2].ShardId;
+        var now = DateTimeOffset.UtcNow;
+        await fixture.Db.BackupTableShards
+            .Where(x => completedShardIds.Contains(x.Id))
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(x => x.Status, BackupTableStatus.Succeeded)
+                .SetProperty(x => x.CompletedAt, (DateTimeOffset?)now));
+        await fixture.Db.BackupRestoreQueueItems
+            .Where(x => completedShardIds.Contains(x.ShardId))
+            .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.CompletedAt, (DateTimeOffset?)now));
+        fixture.Db.ChangeTracker.Clear();
+
+        using var listScope = fixture.Services.CreateScope();
+        var active = await listScope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>()
+            .ListAsync(BackupRestoreQueueKind.Backup, "active", 2);
+
+        var row = Assert.Single(active);
+        Assert.Equal(activeShardId, row.ShardId);
+        Assert.Equal(BackupRestoreQueueStatus.Queued, row.Status);
+    }
+
+    [Fact]
+    public async Task Backup_queue_clear_started_claim_keeps_retry_lease_until_released()
+    {
+        await using var fixture = await TestFixture.CreateAsync(clusterMaxDop: 1, options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "retry_orders", BackupTableStatus.Queued, null, true)
+        ]);
+        Guid shardId;
+
+        using (var scope = fixture.Services.CreateScope())
+        {
+            var queue = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
+            await queue.EnsureBackupQueueItemsAsync(backup.Id);
+            var claim = await queue.TryTakeNextBackupWorkAsync(backup.Id);
+            Assert.NotNull(claim.WorkItem);
+            shardId = claim.WorkItem!.ShardId;
+        }
+
+        await fixture.Db.BackupTableShards
+            .Where(x => x.Id == shardId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(x => x.Status, BackupTableStatus.Queued)
+                .SetProperty(x => x.StartedAt, (DateTimeOffset?)null));
+        using (var scope = fixture.Services.CreateScope())
+        {
+            await scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>()
+                .ClearStartedClaimAsync(BackupRestoreQueueKind.Backup, shardId);
+        }
+        fixture.Db.ChangeTracker.Clear();
+
+        var persisted = await fixture.Db.BackupRestoreQueueItems.AsNoTracking().SingleAsync(x => x.Kind == BackupRestoreQueueKind.Backup && x.ShardId == shardId);
+        Assert.Null(persisted.StartedAt);
+        Assert.Null(persisted.CompletedAt);
+
+        using (var scope = fixture.Services.CreateScope())
+        {
+            var queue = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
+            var blockedByLease = await queue.TryTakeNextBackupWorkAsync(backup.Id);
+            Assert.Null(blockedByLease.WorkItem);
+            Assert.True(blockedByLease.HasQueuedWork);
+
+            var active = await queue.ListAsync(BackupRestoreQueueKind.Backup, "active", 10);
+            var row = Assert.Single(active);
+            Assert.Equal(shardId, row.ShardId);
+            Assert.Equal(BackupRestoreQueueStatus.Queued, row.Status);
+
+            queue.ReleaseInMemoryClaim(BackupRestoreQueueKind.Backup, shardId);
+        }
+
+        using (var scope = fixture.Services.CreateScope())
+        {
+            var reclaimed = await scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>()
+                .TryTakeNextBackupWorkAsync(backup.Id);
+            Assert.NotNull(reclaimed.WorkItem);
+            Assert.Equal(shardId, reclaimed.WorkItem!.ShardId);
+        }
+    }
+
+    [Fact]
     public async Task Backup_queue_table_reorder_changes_execution_order()
     {
         await using var fixture = await TestFixture.CreateAsync(clusterMaxDop: 1, options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
@@ -1656,6 +1801,74 @@ public sealed class BackupRestoreExecutionTests
             Assert.Null(blocked.WorkItem);
             Assert.True(blocked.HasQueuedWork);
         }
+    }
+
+    [Fact]
+    public async Task Backup_queue_rechecks_canonical_destination_after_claim_race()
+    {
+        await using var fixture = await TestFixture.CreateAsync(clusterMaxDop: 8, options: new ChoboBackupRestoreOptions { MaxDop = 8, PollInterval = TimeSpan.FromMilliseconds(1) });
+        var cluster = await fixture.Db.ClickHouseClusters.SingleAsync(x => x.Id == fixture.SourceClusterId);
+        cluster.ShardMaxDopDefault = 8;
+        cluster.NodeMaxDopDefault = 8;
+        var prefixedTargetId = Guid.NewGuid();
+        fixture.Db.BackupTargets.Add(CreateS3TargetEntity(prefixedTargetId, "prefixed-race", "http://minio:9000", "us-east-1", "data-bucket", "prod", true, false));
+
+        var activeBackup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "target_collision_race_active", BackupTableStatus.Queued, null, true)
+        ]);
+        var candidateBackup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "target_collision_race_candidate", BackupTableStatus.Queued, null, true)
+        ]);
+        candidateBackup.TargetId = prefixedTargetId;
+        await fixture.Db.SaveChangesAsync();
+
+        var activeShard = await fixture.Db.BackupTableShards.SingleAsync(x => x.BackupTable!.BackupId == activeBackup.Id);
+        var candidateShard = await fixture.Db.BackupTableShards.SingleAsync(x => x.BackupTable!.BackupId == candidateBackup.Id);
+        activeShard.StoragePath = "prod/backups/canonical/race";
+        candidateShard.StoragePath = "backups/canonical/race";
+        await fixture.Db.SaveChangesAsync();
+
+        using (var scope = fixture.Services.CreateScope())
+        {
+            var queue = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
+            await queue.EnsureBackupQueueItemsAsync(activeBackup.Id);
+            await queue.EnsureBackupQueueItemsAsync(candidateBackup.Id);
+        }
+
+        using (var scope = fixture.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+            var activeStarted = false;
+            var coordinator = new InterleavingConcurrencyCoordinator(() =>
+            {
+                if (activeStarted)
+                {
+                    return;
+                }
+
+                activeStarted = true;
+                db.BackupRestoreQueueItems
+                    .Where(x => x.Kind == BackupRestoreQueueKind.Backup && x.ShardId == activeShard.Id)
+                    .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.StartedAt, DateTimeOffset.UtcNow))
+                    .GetAwaiter()
+                    .GetResult();
+            });
+            var queue = new BackupRestoreQueueApplicationService(
+                db,
+                scope.ServiceProvider.GetRequiredService<IAuditService>(),
+                scope.ServiceProvider.GetRequiredService<ActorContext>(),
+                coordinator,
+                scope.ServiceProvider.GetRequiredService<IEndpointRewriteService>());
+
+            var blocked = await queue.TryTakeNextBackupWorkAsync(candidateBackup.Id);
+            Assert.Null(blocked.WorkItem);
+            Assert.True(blocked.HasQueuedWork);
+        }
+
+        fixture.Db.ChangeTracker.Clear();
+        var candidateQueueItem = await fixture.Db.BackupRestoreQueueItems.AsNoTracking().SingleAsync(x => x.Kind == BackupRestoreQueueKind.Backup && x.ShardId == candidateShard.Id);
+        Assert.Null(candidateQueueItem.StartedAt);
+        Assert.Null(candidateQueueItem.CompletedAt);
     }
 
     [Fact]
@@ -4839,6 +5052,24 @@ public sealed class BackupRestoreExecutionTests
         Assert.True(document.RootElement.TryGetProperty("endedAt", out var endedAt));
         Assert.NotEqual(JsonValueKind.Null, endedAt.ValueKind);
         Assert.False(document.RootElement.TryGetProperty("completedAt", out _));
+    }
+
+    private sealed class InterleavingConcurrencyCoordinator(Action onTryReserveQueueItem) : IBackupRestoreConcurrencyCoordinator
+    {
+        private readonly BackupRestoreConcurrencyCoordinator _inner = new();
+
+        public bool TryReserveQueueItem(BackupRestoreQueueKind kind, Guid operationId, Guid shardId, Guid clusterId, int logicalShardNumber, bool force, int clusterLimit, int shardLimit, int persistedClusterRunning, int persistedShardRunning, string? destinationPath)
+        {
+            onTryReserveQueueItem();
+            return _inner.TryReserveQueueItem(kind, operationId, shardId, clusterId, logicalShardNumber, force, clusterLimit, shardLimit, persistedClusterRunning, persistedShardRunning, destinationPath);
+        }
+
+        public void ConfirmQueueItemStarted(BackupRestoreQueueKind kind, Guid shardId) => _inner.ConfirmQueueItemStarted(kind, shardId);
+        public bool TryReserveNode(BackupRestoreQueueKind kind, Guid shardId, Guid clusterId, ClickHouseNodeEndpoint endpoint, bool force, int nodeLimit, int persistedNodeRunning) => _inner.TryReserveNode(kind, shardId, clusterId, endpoint, force, nodeLimit, persistedNodeRunning);
+        public void ConfirmNodeStarted(BackupRestoreQueueKind kind, Guid shardId) => _inner.ConfirmNodeStarted(kind, shardId);
+        public void ReleaseQueueItem(BackupRestoreQueueKind kind, Guid shardId) => _inner.ReleaseQueueItem(kind, shardId);
+        public void ReleaseNode(BackupRestoreQueueKind kind, Guid shardId) => _inner.ReleaseNode(kind, shardId);
+        public void ReleaseOperation(BackupRestoreQueueKind kind, Guid operationId) => _inner.ReleaseOperation(kind, operationId);
     }
 
     private sealed record SeedBackupTable(string Database, string Table, BackupTableStatus Status, string? OperationId, bool DataBackedUp);
