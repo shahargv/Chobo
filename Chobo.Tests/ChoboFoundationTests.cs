@@ -610,6 +610,8 @@ public sealed class ChoboFoundationTests
     {
         await using var factory = CreateFactory();
         var client = AuthenticatedClient(factory);
+        var health = await client.GetAsync("/health");
+        health.EnsureSuccessStatusCode();
         var backupId = Guid.NewGuid();
         var tableId = Guid.NewGuid();
         var shard1 = Guid.NewGuid();
@@ -632,7 +634,7 @@ public sealed class ChoboFoundationTests
             {
                 Id = backupId,
                 TriggerType = BackupTriggerType.Manual,
-                Status = BackupRunStatus.Running,
+                Status = BackupRunStatus.Succeeded,
                 BackupType = BackupType.Full,
                 SourceClusterId = clusterId,
                 RequestedByName = "test",
