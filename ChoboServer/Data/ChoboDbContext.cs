@@ -57,10 +57,12 @@ public sealed class ChoboDbContext(DbContextOptions<ChoboDbContext> options) : D
         modelBuilder.Entity<BackupPolicyEntity>().Property(x => x.FailedBackupRetentionMode).HasConversion<int>();
         modelBuilder.Entity<BackupPolicyEntity>().Property(x => x.ContentMode).HasConversion<int>();
         modelBuilder.Entity<BackupScheduleEntity>().HasIndex(x => new { x.IsDeleted, x.Name });
+        modelBuilder.Entity<BackupScheduleEntity>().HasIndex(x => new { x.IsEnabled, x.IsDeleted });
         modelBuilder.Entity<BackupScheduleEntity>().HasIndex(x => new { x.PolicyId, x.IsDeleted });
         modelBuilder.Entity<SchemaDefinitionEntity>().HasIndex(x => x.SchemaHash).IsUnique();
         modelBuilder.Entity<BackupRestoreQueueItemEntity>().Property(x => x.Kind).HasConversion<int>();
         modelBuilder.Entity<BackupRestoreQueueItemEntity>().HasIndex(x => new { x.IsForced, x.Position });
+        modelBuilder.Entity<BackupRestoreQueueItemEntity>().HasIndex(x => x.CompletedAt);
         modelBuilder.Entity<BackupRestoreQueueItemEntity>().HasIndex(x => new { x.Kind, x.OperationId });
         modelBuilder.Entity<BackupRestoreQueueItemEntity>().HasIndex(x => x.ShardId).IsUnique();
         modelBuilder.Entity<BackupRestoreQueueItemEntity>().HasIndex(x => new { x.ClusterId, x.LogicalShardNumber });
@@ -82,12 +84,14 @@ public sealed class ChoboDbContext(DbContextOptions<ChoboDbContext> options) : D
         modelBuilder.Entity<BackupTableEntity>().HasIndex(x => new { x.Database, x.Table });
         modelBuilder.Entity<BackupTableEntity>().HasIndex(x => x.Table);
         modelBuilder.Entity<BackupTableEntity>().HasIndex(x => new { x.EffectiveBackupType, x.ParentFullBackupTableId });
+        modelBuilder.Entity<BackupTableEntity>().HasIndex(x => x.ParentFullBackupId);
         modelBuilder.Entity<BackupTableEntity>().HasIndex(x => new { x.EffectiveBackupType, x.Database, x.Table });
         modelBuilder.Entity<BackupTableEntity>().HasIndex(x => x.Status);
         modelBuilder.Entity<BackupTableEntity>().HasIndex(x => x.ParentFullBackupTableId);
         modelBuilder.Entity<BackupTableShardEntity>().HasIndex(x => x.BackupTableId);
         modelBuilder.Entity<BackupTableShardEntity>().HasIndex(x => new { x.BackupTableId, x.SourceShardNumber });
         modelBuilder.Entity<BackupTableShardEntity>().HasIndex(x => new { x.EffectiveBackupType, x.ParentFullBackupTableShardId });
+        modelBuilder.Entity<BackupTableShardEntity>().HasIndex(x => x.ParentFullBackupId);
         modelBuilder.Entity<BackupTableShardEntity>().HasIndex(x => x.Status);
         modelBuilder.Entity<BackupTableShardEntity>().HasIndex(x => x.ParentFullBackupTableShardId);
         modelBuilder.Entity<RestoreEntity>().HasIndex(x => x.Status);
@@ -151,8 +155,3 @@ public sealed class ChoboDbContext(DbContextOptions<ChoboDbContext> options) : D
         }
     }
 }
-
-
-
-
-

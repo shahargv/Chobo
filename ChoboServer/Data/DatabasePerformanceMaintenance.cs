@@ -29,9 +29,13 @@ public static class DatabasePerformanceMaintenance
             CREATE INDEX IF NOT EXISTS IX_BackupTargets_IsDeleted_Name ON BackupTargets (IsDeleted, Name);
             CREATE INDEX IF NOT EXISTS IX_BackupPolicies_IsDeleted_Name ON BackupPolicies (IsDeleted, Name);
             CREATE INDEX IF NOT EXISTS IX_BackupSchedules_IsDeleted_Name ON BackupSchedules (IsDeleted, Name);
+            CREATE INDEX IF NOT EXISTS IX_BackupSchedules_IsEnabled_IsDeleted ON BackupSchedules (IsEnabled, IsDeleted);
             CREATE INDEX IF NOT EXISTS IX_BackupSchedules_PolicyId_IsDeleted ON BackupSchedules (PolicyId, IsDeleted);
             CREATE INDEX IF NOT EXISTS IX_Backups_IsPinned ON Backups (IsPinned);
             CREATE INDEX IF NOT EXISTS IX_Backups_DeletionRequestedAt ON Backups (DeletionRequestedAt);
+            CREATE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_CompletedAt ON BackupRestoreQueueItems (CompletedAt);
+            CREATE INDEX IF NOT EXISTS IX_BackupTables_ParentFullBackupId ON BackupTables (ParentFullBackupId);
+            CREATE INDEX IF NOT EXISTS IX_BackupTableShards_ParentFullBackupId ON BackupTableShards (ParentFullBackupId);
             """);
     }
 
