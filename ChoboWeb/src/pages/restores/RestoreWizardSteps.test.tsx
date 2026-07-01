@@ -14,6 +14,7 @@ const backup: BackupDto = {
   clickHouseBackupSettings: {},
   sourceClusterId: "source-cluster",
   targetId: "backup-target",
+  policyId: "policy-nightly",
   scheduleId: null,
   requestedByUserId: null,
   requestedByName: "system",
@@ -156,18 +157,26 @@ describe("entity restore wizard steps", () => {
     const root = createRoot(host);
     const onDateFilterChange = vi.fn();
     const onPreset = vi.fn();
+    const onOpenBackup = vi.fn();
 
     await act(async () => {
-      root.render(<BackupChoiceStep backups={[backup]} selectedBackupId="" onSelect={vi.fn()} clusterName={() => "Source"} dateFilterValue="2026-06-27" activeWindowHours={72} onDateFilterChange={onDateFilterChange} onPreset={onPreset} />);
+      root.render(<BackupChoiceStep backups={[backup]} selectedBackupId="" onSelect={vi.fn()} onOpenBackup={onOpenBackup} clusterName={() => "Source"} policyName={() => "Nightly"} dateFilterValue="2026-06-27" activeWindowHours={72} onDateFilterChange={onDateFilterChange} onPreset={onPreset} />);
     });
 
     expect(host.textContent).toContain("Choose source backup");
+    expect(host.textContent).toContain("Backup ID");
+    expect(host.textContent).toContain("Policy");
+    expect(host.textContent).toContain("Nightly");
     expect(host.textContent).toContain("3 days");
     expect(host.textContent).toContain("12h");
     expect(host.querySelector('label')?.textContent).toContain("From date");
     const fromDate = host.querySelector('input[aria-label="Filter backups from date"]') as HTMLInputElement;
     await changeInput(fromDate, "2026-06-29");
     expect(onDateFilterChange).toHaveBeenCalledWith("2026-06-29");
+    const backupLink = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "backup-a") as HTMLButtonElement;
+    expect(backupLink.title).toBe("backup-anchor");
+    await click(backupLink);
+    expect(onOpenBackup).toHaveBeenCalledWith("backup-anchor");
     const oneWeek = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "1 week") as HTMLButtonElement;
     await click(oneWeek);
     expect(onPreset).toHaveBeenCalledWith(168);
@@ -183,7 +192,7 @@ describe("entity restore wizard steps", () => {
     const onDateFilterChange = vi.fn();
 
     await act(async () => {
-      root.render(<BackupChoiceStep backups={[]} selectedBackupId="" onSelect={vi.fn()} clusterName={() => "Source"} dateFilterValue="2026-06-29" activeWindowHours={null} onDateFilterChange={onDateFilterChange} onPreset={vi.fn()} />);
+      root.render(<BackupChoiceStep backups={[]} selectedBackupId="" onSelect={vi.fn()} onOpenBackup={vi.fn()} clusterName={() => "Source"} policyName={() => "Manual"} dateFilterValue="2026-06-29" activeWindowHours={null} onDateFilterChange={onDateFilterChange} onPreset={vi.fn()} />);
     });
 
     expect(host.textContent).toContain("No backups match this date filter");
@@ -331,7 +340,7 @@ describe("entity restore wizard steps", () => {
     host.remove();
   });
 
-  it("shows final queue rows, restore statements, CLI command, and JSON payload", async () => {
+  it("shows final queue rows and keeps CLI replay collapsed by default", async () => {
     const host = document.createElement("div");
     document.body.appendChild(host);
     const root = createRoot(host);
@@ -345,6 +354,11 @@ describe("entity restore wizard steps", () => {
     expect(host.textContent).toContain("Incremental");
     expect(host.textContent).toContain("Full");
     expect(host.textContent).toContain("RESTORE TABLE sales.orders");
+    expect(host.textContent).toContain("CLI replay command");
+    const replay = host.querySelector(".restore-review-collapsible") as HTMLDetailsElement;
+    expect(replay).toBeTruthy();
+    expect(replay.open).toBe(false);
+    expect(host.querySelector('textarea[aria-label="Restore plan JSON"]')).toBeTruthy();
     expect(host.textContent).toContain("restore initiate-from-plan --file entity-restore-plan.json");
 
     await act(async () => root.unmount());

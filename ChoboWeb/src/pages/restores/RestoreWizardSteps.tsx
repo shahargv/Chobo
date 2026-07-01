@@ -22,20 +22,22 @@ export function RestoreStepper({ step, errors, onStep }: { step: RestoreStep; er
   );
 }
 
-export function BackupChoiceStep({ backups, selectedBackupId, onSelect, clusterName, dateFilterValue, activeWindowHours, onDateFilterChange, onPreset, isLoading = false }: { backups: BackupDto[]; selectedBackupId: string; onSelect: (backupId: string) => void; clusterName: (clusterId: string) => string; dateFilterValue: string; activeWindowHours: number | null; onDateFilterChange: (value: string) => void; onPreset: (hours: number) => void; isLoading?: boolean }) {
+export function BackupChoiceStep({ backups, selectedBackupId, onSelect, onOpenBackup, clusterName, policyName, dateFilterValue, activeWindowHours, onDateFilterChange, onPreset, isLoading = false }: { backups: BackupDto[]; selectedBackupId: string; onSelect: (backupId: string) => void; onOpenBackup: (backupId: string) => void; clusterName: (clusterId: string) => string; policyName: (policyId: string | null | undefined) => string; dateFilterValue: string; activeWindowHours: number | null; onDateFilterChange: (value: string) => void; onPreset: (hours: number) => void; isLoading?: boolean }) {
   return (
     <div className="restore-step-content">
       <StepIntro icon={<Database size={20} />} title="Choose source backup" body="Choose the backup or schema backup that anchors the table list and schema. Use the date window to quickly narrow the recovery points." />
       <BackupDateFilter value={dateFilterValue} activeWindowHours={activeWindowHours} onChange={onDateFilterChange} onPreset={onPreset} />
       {!isLoading && backups.length === 0
         ? <Empty text="No backups match this date filter. Widen the window or create a backup before starting a restore." />
-        : <DataTable headers={["Use", "Created", "Type", "Source cluster", "Tables", "Status"]} isLoading={isLoading}>
+        : <DataTable headers={["Use", "Backup ID", "Created", "Type", "Source cluster", "Policy", "Tables", "Status"]} isLoading={isLoading}>
           {backups.map((backup) => (
             <tr key={backup.id}>
               <td><input className="row-checkbox" aria-label={`Use backup ${backup.id}`} type="radio" checked={selectedBackupId === backup.id} onChange={() => onSelect(backup.id)} /></td>
+              <td className="mono backup-id-cell"><button type="button" className="link-button mono" title={backup.id} onClick={() => onOpenBackup(backup.id)}>{shortBackupId(backup.id)}</button></td>
               <td>{formatTime(backup.createdAt)}</td>
               <td>{backup.backupType}</td>
               <td>{clusterName(backup.sourceClusterId)}</td>
+              <td>{policyName(backup.policyId)}</td>
               <td>{backup.tableCount}</td>
               <td><Status value={backup.status} /></td>
             </tr>
@@ -147,11 +149,14 @@ export function ReviewStep({ backup, targetClusterName, request, mappings, sourc
             </tr>;
           })}
         </DataTable>
-        <div className="restore-review-note">
-          <strong>CLI replay</strong>
-          <span className="mono">{plan.cliCommand}</span>
-        </div>
-        <textarea className="create-table-override-editor" aria-label="Restore plan JSON" readOnly value={plan.cliJson} />
+        <details className="restore-review-collapsible">
+          <summary>CLI replay command</summary>
+          <div className="restore-review-note">
+            <strong>Command</strong>
+            <span className="mono">{plan.cliCommand}</span>
+          </div>
+          <textarea className="create-table-override-editor" aria-label="Restore plan JSON" readOnly value={plan.cliJson} />
+        </details>
       </div>}    </div>
   );
 }
@@ -190,6 +195,9 @@ function ImpactItem({ label, value, complete, warn }: { label: string; value: st
   return <div className={`restore-impact-item ${complete ? "complete" : ""} ${warn ? "warn" : ""}`}><span>{label}</span><strong>{value}</strong></div>;
 }
 
+function shortBackupId(id: string) {
+  return id.slice(0, 8);
+}
 
 function RestoreToDatePicker({ value, onChange, disabled, summary }: { value: string; onChange: (value: string) => void; disabled: boolean; summary: string }) {
   return <div className="restore-date-panel">

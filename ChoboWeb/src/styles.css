@@ -850,6 +850,21 @@ button.advanced-active {
   background: #f7fcfd;
 }
 .restore-review-note span { color: var(--muted); font-size: 13px; line-height: 1.45; }
+.restore-review-collapsible {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+.restore-review-collapsible summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: var(--text);
+}
+.restore-review-collapsible[open] summary { margin-bottom: 8px; }
+.restore-review-collapsible .restore-review-note { margin-bottom: 10px; }
 .restore-warning-list { display: grid; gap: 6px; }
 .data-grid { min-width: 0; }
 .restore-main,
@@ -861,6 +876,7 @@ button.advanced-active {
 .restore-review-plan .table-wrap { overflow-x: auto; }
 .restore-review-plan .data-grid table { min-width: 980px; }
 .restore-review-plan textarea { white-space: pre-wrap; overflow-wrap: anywhere; }
+.restore-review-collapsible .mono { overflow-wrap: anywhere; }
 .restore-review-details { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .restore-history-panel { margin-top: 2px; }
 .restore-history-panel .section-head p { margin-top: 4px; color: var(--muted); font-size: 13px; }
