@@ -42,6 +42,7 @@ public sealed class RuntimeSettingsService(
         new(typeof(ChoboDataRetentionOptions), "Chobo:DataRetention", RuntimeSettingApplyMode.Live, null),
         new(typeof(ChoboSqliteSelfBackupOptions), "Chobo:SqliteSelfBackup", RuntimeSettingApplyMode.Live, null),
         new(typeof(ChoboBackupRestoreOptions), "Chobo:BackupRestore", RuntimeSettingApplyMode.Live, null),
+        new(typeof(ChoboDatabaseLoggingOptions), "Chobo:DatabaseLogging", RuntimeSettingApplyMode.Live, "Slow SQLite query logging is emitted at Information level. Set a negative threshold to disable it."),
         new(typeof(BackupStorageOperationOptions), "Chobo:BackupStorageOperations", RuntimeSettingApplyMode.Live, null),
         new(typeof(RetentionManagementOptions), "Chobo:RetentionManagement", RuntimeSettingApplyMode.Live, null),
         new(typeof(BackupsGarbageCollectorOptions), "Chobo:BackupsGarbageCollector", RuntimeSettingApplyMode.Live, null),
@@ -273,6 +274,11 @@ public sealed class RuntimeSettingsService(
             (value is null || value.GetValue<int>() <= 0))
         {
             throw new InvalidOperationException("Default max age hours for base backup must be greater than zero.");
+        }
+        if (string.Equals(setting.Key, "Chobo:DatabaseLogging:SlowQueryThreshold", StringComparison.OrdinalIgnoreCase) &&
+            value is null)
+        {
+            throw new InvalidOperationException("Slow query threshold must be a TimeSpan value.");
         }
     }
     private async Task WriteOverlayValueAsync(string key, JsonNode? value, CancellationToken cancellationToken)
