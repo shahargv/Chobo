@@ -2943,8 +2943,9 @@ public sealed class BackupRestoreExecutionTests
         Assert.NotEmpty(dashboard.FutureSchedules);
         Assert.All(dashboard.FutureSchedules, x => Assert.Equal(schedule.Id, x.ScheduleId));
 
-        Assert.Equal(9, metrics.Count);
+        Assert.Equal(10, metrics.Count);
         Assert.Equal(300, metrics["Policies.TimeSecondsSinceLastPolicyBackup.hourly"]);
+        Assert.Equal(8, metrics["TimeSinceLastFullBackup.hourly"]);
         Assert.Equal(1, metrics["Policies.PartialBackups.hourly"]);
         Assert.Equal(3, metrics["Policies.FailedBackups.hourly"]);
         Assert.Equal(300, metrics["TimeSecondsSinceLastPolicySuccessRun.hourly"]);
@@ -2953,6 +2954,27 @@ public sealed class BackupRestoreExecutionTests
         Assert.Equal(2, metrics["MissedBackupsLast24Hours.hourly"]);
         Assert.Equal(1, metrics["NumFailedBackupsLastHour.hourly"]);
         Assert.Equal(2, metrics["NumFailedBackupsLast24Hours.hourly"]);
+    }
+
+    [Fact]
+    public async Task Metrics_report_table_shard_backup_freshness()
+    {
+        var now = new DateTimeOffset(2026, 5, 11, 10, 0, 0, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now));
+        var policy = await fixture.SeedPolicyAsync();
+
+        await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, now.AddHours(-3), backupType: BackupType.Full, shardCount: 2, tableName: "orders");
+        await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, now.AddHours(-1), backupType: BackupType.Incremental, shardCount: 2, tableName: "orders");
+        await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Failed, now.AddMinutes(-30), backupType: BackupType.Incremental, shardCount: 2, tableName: "orders");
+
+        var metrics = await fixture.Services.GetRequiredService<DashboardApplicationService>().GetMetricsAsync();
+
+        Assert.Equal(10800, metrics["TimeSecondsSinceLastFullBackupOnTableShard.sales.orders.1"]);
+        Assert.Equal(10800, metrics["TimeSecondsSinceLastSuccessfulFullBackupOnTableShard.sales.orders.1"]);
+        Assert.Equal(1800, metrics["TimeSecondsSinceLastAnyBackupOnTableShard.sales.orders.1"]);
+        Assert.Equal(3600, metrics["TimeSinceLastSucessfulAnyBackupOnTableShard.sales.orders.1"]);
+        Assert.Equal(10800, metrics["TimeSecondsSinceLastFullBackupOnTableShard.sales.orders.2"]);
+        Assert.Equal(3600, metrics["TimeSinceLastSucessfulAnyBackupOnTableShard.sales.orders.2"]);
     }
 
     [Fact]

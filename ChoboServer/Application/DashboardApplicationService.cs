@@ -210,6 +210,18 @@ public sealed class DashboardApplicationService(ChoboDbContext db, TimeProvider 
                 .ToListAsync(cancellationToken);
         var lastSemiSuccessfulRunByPolicyId = lastSemiSuccessfulRuns.ToDictionary(x => x.PolicyId, x => x.CompletedAt);
 
+        var lastFullBackupInitiatedRuns = policyIds.Count == 0
+            ? []
+            : await db.Backups
+                .AsNoTracking()
+                .Where(x => x.PolicyId != null &&
+                            policyIds.Contains(x.PolicyId.Value) &&
+                            x.BackupType == BackupType.Full &&
+                            (x.TriggerType == BackupTriggerType.Manual || x.TriggerType == BackupTriggerType.Scheduled))
+                .GroupBy(x => x.PolicyId!.Value)
+                .Select(x => new { PolicyId = x.Key, InitiatedAt = x.Max(b => b.StartedAt ?? b.QueuedAt ?? b.CreatedAt) })
+                .ToListAsync(cancellationToken);
+        var lastFullBackupInitiatedRunByPolicyId = lastFullBackupInitiatedRuns.ToDictionary(x => x.PolicyId, x => x.InitiatedAt);
         var statusCounts = policyIds.Count == 0
             ? []
             : await db.Backups
@@ -285,7 +297,11 @@ public sealed class DashboardApplicationService(ChoboDbContext db, TimeProvider 
                 ? (double?)null
                 : Math.Max(0, (generatedAt - lastSemiSuccessfulBackupEndedAt.Value).TotalSeconds);
 
+            var secondsSinceLastFullBackupInitiated = lastFullBackupInitiatedRunByPolicyId.TryGetValue(policy.Id, out var lastFullBackupInitiatedAt)
+                ? SecondsSince(generatedAt, lastFullBackupInitiatedAt)
+                : (double?)null;
             metrics[$"Policies.TimeSecondsSinceLastPolicyBackup.{policy.Name}"] = secondsSinceLastSuccessfulBackupEnded;
+            metrics[$"TimeSinceLastFullBackup.{policy.Name}"] = secondsSinceLastFullBackupInitiated;
             metrics[$"Policies.PartialBackups.{policy.Name}"] = statusCountsByPolicyAndStatus.GetValueOrDefault((policy.Id, BackupRunStatus.PartiallySucceeded));
             metrics[$"Policies.FailedBackups.{policy.Name}"] = statusCountsByPolicyAndStatus.GetValueOrDefault((policy.Id, BackupRunStatus.Failed));
             metrics[$"TimeSecondsSinceLastPolicySuccessRun.{policy.Name}"] = secondsSinceLastSuccessfulBackupEnded;
@@ -296,7 +312,69 @@ public sealed class DashboardApplicationService(ChoboDbContext db, TimeProvider 
             metrics[$"NumFailedBackupsLast24Hours.{policy.Name}"] = failedBackupsLast24HoursByPolicyId.GetValueOrDefault(policy.Id);
         }
 
+        foreach (var row in await GetTableShardMetricRowsAsync(cancellationToken))
+        {
+            var suffix = $"{row.Database}.{row.Table}.{row.SourceShardNumber}";
+            if (row.LastEffectiveFullBackupAt is not null)
+            {
+                metrics[$"TimeSecondsSinceLastFullBackupOnTableShard.{suffix}"] = SecondsSince(generatedAt, row.LastEffectiveFullBackupAt.Value);
+            }
+
+            if (row.LastSuccessfulEffectiveFullBackupAt is not null)
+            {
+                metrics[$"TimeSecondsSinceLastSuccessfulFullBackupOnTableShard.{suffix}"] = SecondsSince(generatedAt, row.LastSuccessfulEffectiveFullBackupAt.Value);
+            }
+
+            if (row.LastAnyBackupAt is not null)
+            {
+                metrics[$"TimeSecondsSinceLastAnyBackupOnTableShard.{suffix}"] = SecondsSince(generatedAt, row.LastAnyBackupAt.Value);
+            }
+
+            if (row.LastSuccessfulAnyBackupAt is not null)
+            {
+                metrics[$"TimeSinceLastSucessfulAnyBackupOnTableShard.{suffix}"] = SecondsSince(generatedAt, row.LastSuccessfulAnyBackupAt.Value);
+            }
+        }
+
         return metrics;
+    }
+
+    private async Task<IReadOnlyList<TableShardMetricRow>> GetTableShardMetricRowsAsync(CancellationToken cancellationToken)
+    {
+        var rows = await db.BackupTableShards
+            .AsNoTracking()
+            .Where(x => x.BackupTable != null && x.BackupTable.Backup != null)
+            .Select(x => new
+            {
+                x.SourceShardNumber,
+                x.EffectiveBackupType,
+                x.Status,
+                CompletedAt = x.CompletedAt ?? x.BackupTable!.CompletedAt ?? x.BackupTable.Backup!.CompletedAt,
+                x.BackupTable!.Database,
+                x.BackupTable.Table,
+                BackupStatus = x.BackupTable.Backup!.Status
+            })
+            .Where(x => x.CompletedAt != null)
+            .ToListAsync(cancellationToken);
+
+        return rows
+            .Where(x => IsCompletedBackupAttemptStatus(x.BackupStatus))
+            .GroupBy(x => new { x.Database, x.Table, x.SourceShardNumber })
+            .Select(x => new TableShardMetricRow(
+                x.Key.Database,
+                x.Key.Table,
+                x.Key.SourceShardNumber,
+                x.Where(row => row.EffectiveBackupType == BackupType.Full)
+                    .Max(row => row.CompletedAt),
+                x.Where(row => row.EffectiveBackupType == BackupType.Full &&
+                                row.Status == BackupTableStatus.Succeeded &&
+                                IsSuccessfulBackupForShard(row.BackupStatus))
+                    .Max(row => row.CompletedAt),
+                x.Max(row => row.CompletedAt),
+                x.Where(row => row.Status == BackupTableStatus.Succeeded &&
+                                IsSuccessfulBackupForShard(row.BackupStatus))
+                    .Max(row => row.CompletedAt)))
+            .ToList();
     }
 
     private async Task<QueueHealthDto> GetQueueHealthAsync(DateTimeOffset generatedAt, CancellationToken cancellationToken)
@@ -409,7 +487,17 @@ public sealed class DashboardApplicationService(ChoboDbContext db, TimeProvider 
     private sealed record MissingBackupScheduleRow(Guid Id, string Name, Guid PolicyId, string? PolicyName, BackupType BackupType);
     private sealed record ScheduleSummaryRow(Guid Id, string Name, Guid PolicyId, string? PolicyName, BackupType BackupType, string CronExpression, string TimeZoneId, bool IsEnabled, TimeSpan? MissedRunGracePeriod);
     private sealed record ScheduleLastRunRow(Guid ScheduleId, DateTimeOffset CreatedAt, BackupRunStatus Status, string? FailureReason, bool IsPinned, DateTimeOffset? DeletionRequestedAt);
+    private static bool IsCompletedBackupAttemptStatus(BackupRunStatus status) =>
+        status is BackupRunStatus.Succeeded or BackupRunStatus.PartiallySucceeded or BackupRunStatus.Failed;
+
+    private static bool IsSuccessfulBackupForShard(BackupRunStatus status) =>
+        status is BackupRunStatus.Succeeded or BackupRunStatus.PartiallySucceeded;
+
+    private static double SecondsSince(DateTimeOffset generatedAt, DateTimeOffset value) =>
+        Math.Max(0, (generatedAt - value).TotalSeconds);
+
     private sealed record MetricPolicyRow(Guid Id, string Name);
+    private sealed record TableShardMetricRow(string Database, string Table, int SourceShardNumber, DateTimeOffset? LastEffectiveFullBackupAt, DateTimeOffset? LastSuccessfulEffectiveFullBackupAt, DateTimeOffset? LastAnyBackupAt, DateTimeOffset? LastSuccessfulAnyBackupAt);
 }
 internal static class QuartzCronProjection
 {
