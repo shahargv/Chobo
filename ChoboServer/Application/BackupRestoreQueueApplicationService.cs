@@ -92,7 +92,7 @@ public sealed class BackupRestoreQueueApplicationService(
     }
 
 
-    public sealed record QueueWorkItem(Guid TableId, Guid ShardId, bool IsForced);
+    public sealed record QueueWorkItem(Guid TableId, Guid ShardId, bool IsForced, bool IsResume = false);
     public sealed record QueueClaimResult(QueueWorkItem? WorkItem, bool HasQueuedWork);
 
     public async Task<QueueClaimResult> TryTakeNextBackupWorkAsync(Guid backupId, CancellationToken cancellationToken = default)
@@ -201,6 +201,18 @@ public sealed class BackupRestoreQueueApplicationService(
                     concurrency.ReleaseQueueItem(item.Kind, item.ShardId);
                     continue;
                 }
+                if (destinationKey is not null && await IsBackupDestinationBlockedAsync(item.ShardId, destinationKey, cancellationToken))
+                {
+                    await db.BackupRestoreQueueItems
+                        .Where(x => x.Id == item.Id)
+                        .ExecuteUpdateAsync(setters => setters
+                            .SetProperty(x => x.StartedAt, (DateTimeOffset?)null)
+                            .SetProperty(x => x.NodeHost, (string?)null)
+                            .SetProperty(x => x.NodePort, (int?)null)
+                            .SetProperty(x => x.NodeUseTls, (bool?)null), cancellationToken);
+                    concurrency.ReleaseQueueItem(item.Kind, item.ShardId);
+                    continue;
+                }
                 item.StartedAt = now;
                 shard.Status = BackupTableStatus.Running;
                 shard.StartedAt ??= now;
@@ -212,7 +224,7 @@ public sealed class BackupRestoreQueueApplicationService(
                 await db.SaveChangesAsync(cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
                 concurrency.ConfirmQueueItemStarted(item.Kind, item.ShardId);
-                return new QueueClaimResult(new QueueWorkItem(item.TableId, item.ShardId, item.IsForced), true);
+                return new QueueClaimResult(new QueueWorkItem(item.TableId, item.ShardId, item.IsForced, isResume), true);
             }
             catch
             {
@@ -295,7 +307,7 @@ public sealed class BackupRestoreQueueApplicationService(
                 await db.SaveChangesAsync(cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
                 concurrency.ConfirmQueueItemStarted(item.Kind, item.ShardId);
-                return new QueueClaimResult(new QueueWorkItem(item.TableId, item.ShardId, item.IsForced), true);
+                return new QueueClaimResult(new QueueWorkItem(item.TableId, item.ShardId, item.IsForced, isResume), true);
             }
             catch
             {
@@ -320,8 +332,12 @@ public sealed class BackupRestoreQueueApplicationService(
     }
     public async Task<IReadOnlyList<BackupRestoreQueueItemDto>> ListAsync(BackupRestoreQueueKind kind = BackupRestoreQueueKind.All, string status = "active", int limit = 500, CancellationToken cancellationToken = default)
     {
-        var items = await db.BackupRestoreQueueItems.AsNoTracking()
-            .Where(x => kind == BackupRestoreQueueKind.All || x.Kind == kind)
+        var normalizedStatus = NormalizeStatusFilter(status);
+        var query = db.BackupRestoreQueueItems.AsNoTracking()
+            .Where(x => kind == BackupRestoreQueueKind.All || x.Kind == kind);
+        query = ApplyQueueStateFilter(query, normalizedStatus);
+
+        var items = await query
             .OrderByDescending(x => x.IsForced)
             .ThenBy(x => x.Position)
             .Take(Math.Clamp(limit, 1, 10000))
@@ -336,7 +352,7 @@ public sealed class BackupRestoreQueueApplicationService(
             : await db.RestoreTableShards.AsNoTracking().Include(x => x.RestoreTable).Where(x => restoreShardIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id, cancellationToken);
 
         return items.Select(item => ToDto(item, backupShards, restoreShards))
-            .Where(x => MatchesStatusFilter(x.Status, status))
+            .Where(x => MatchesStatusFilter(x.Status, normalizedStatus))
             .ToList();
     }
 
@@ -470,6 +486,12 @@ public sealed class BackupRestoreQueueApplicationService(
 
     public async Task ReleaseStartedAsync(BackupRestoreQueueKind kind, Guid shardId, CancellationToken cancellationToken = default)
     {
+        await ClearStartedClaimAsync(kind, shardId, cancellationToken);
+        concurrency.ReleaseQueueItem(kind, shardId);
+    }
+
+    public async Task ClearStartedClaimAsync(BackupRestoreQueueKind kind, Guid shardId, CancellationToken cancellationToken = default)
+    {
         var item = await db.BackupRestoreQueueItems.FirstOrDefaultAsync(x => x.Kind == kind && x.ShardId == shardId, cancellationToken);
         if (item is null || item.CompletedAt is not null)
         {
@@ -480,6 +502,10 @@ public sealed class BackupRestoreQueueApplicationService(
         item.NodePort = null;
         item.NodeUseTls = null;
         await db.SaveChangesAsync(cancellationToken);
+    }
+
+    public void ReleaseInMemoryClaim(BackupRestoreQueueKind kind, Guid shardId)
+    {
         concurrency.ReleaseQueueItem(kind, shardId);
     }
     public async Task ResetIncompleteBackupClaimsAsync(Guid backupId, CancellationToken cancellationToken = default)
@@ -650,11 +676,43 @@ public sealed class BackupRestoreQueueApplicationService(
     private async Task<long?> PreviousPositionAsync(long position, CancellationToken cancellationToken) => await db.BackupRestoreQueueItems.Where(x => x.Position < position).OrderByDescending(x => x.Position).Select(x => (long?)x.Position).FirstOrDefaultAsync(cancellationToken);
     private async Task<long?> NextGreaterPositionAsync(long position, CancellationToken cancellationToken) => await db.BackupRestoreQueueItems.Where(x => x.Position > position).OrderBy(x => x.Position).Select(x => (long?)x.Position).FirstOrDefaultAsync(cancellationToken);
 
-    private static bool MatchesStatusFilter(BackupRestoreQueueStatus itemStatus, string status) =>
+    private static string NormalizeStatusFilter(string status) =>
         status.Trim().ToLowerInvariant() switch
+        {
+            "" => "active",
+            "active" => "active",
+            "queued" => "queued",
+            "running" => "running",
+            "succeeded" => "succeeded",
+            "partiallysucceeded" => "partially-succeeded",
+            "partially-succeeded" => "partially-succeeded",
+            "partial" => "partially-succeeded",
+            "failed" => "failed",
+            "skipped" => "skipped",
+            "canceled" => "canceled",
+            "all" => "all",
+            _ => "active"
+        };
+
+    private static IQueryable<BackupRestoreQueueItemEntity> ApplyQueueStateFilter(IQueryable<BackupRestoreQueueItemEntity> query, string normalizedStatus) =>
+        normalizedStatus switch
+        {
+            "active" => query.Where(x => x.CompletedAt == null),
+            "queued" => query.Where(x => x.StartedAt == null && x.CompletedAt == null),
+            "running" => query.Where(x => x.StartedAt != null && x.CompletedAt == null),
+            _ => query
+        };
+
+    private static bool MatchesStatusFilter(BackupRestoreQueueStatus itemStatus, string normalizedStatus) =>
+        normalizedStatus switch
         {
             "queued" => itemStatus == BackupRestoreQueueStatus.Queued,
             "running" => itemStatus == BackupRestoreQueueStatus.Running,
+            "succeeded" => itemStatus == BackupRestoreQueueStatus.Succeeded,
+            "partially-succeeded" => itemStatus == BackupRestoreQueueStatus.PartiallySucceeded,
+            "failed" => itemStatus == BackupRestoreQueueStatus.Failed,
+            "skipped" => itemStatus == BackupRestoreQueueStatus.Skipped,
+            "canceled" => itemStatus == BackupRestoreQueueStatus.Canceled,
             "all" => true,
             _ => itemStatus is BackupRestoreQueueStatus.Queued or BackupRestoreQueueStatus.Running
         };

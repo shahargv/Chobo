@@ -514,8 +514,9 @@ public sealed class RestoreRunnerService(
                 shard.StartedAt = null;
                 await scopedDb.SaveChangesAsync(CancellationToken.None);
                 await scopedAudit.RecordAsync("shard-retry-scheduled", AuditEntityType.RestoreTableShard, shard.Id.ToString(), new { error = ex.Message, sourceShard = shard.SourceShardNumber, targetShard = shard.TargetShardNumber, retryAttempt = attempt, maxRetries, retryDelaySeconds = retryDelay.TotalSeconds });
+                await scopedQueue.ClearStartedClaimAsync(BackupRestoreQueueKind.Restore, shard.Id, CancellationToken.None);
                 await Task.Delay(retryDelay, CancellationToken.None);
-                await scopedQueue.ReleaseStartedAsync(BackupRestoreQueueKind.Restore, shard.Id, CancellationToken.None);
+                scopedQueue.ReleaseInMemoryClaim(BackupRestoreQueueKind.Restore, shard.Id);
                 return RestoreShardRunResult.RetryLater;
             }
 

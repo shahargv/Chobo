@@ -403,7 +403,7 @@ public sealed class BackupRunnerService(
                         }
 
                         var item = claim.WorkItem;
-                        var result = await RunShardAsync(backupId, item.TableId, item.ShardId, item.IsForced, retryCounts, failedEndpoints, cancellationToken);
+                        var result = await RunShardAsync(backupId, item.TableId, item.ShardId, item.IsForced, item.IsResume, retryCounts, failedEndpoints, cancellationToken);
                         if (result == BackupShardRunResult.RetryLater)
                         {
                             await Task.Delay(options.CurrentValue.PollInterval, cancellationToken);
@@ -533,7 +533,7 @@ public sealed class BackupRunnerService(
         return false;
     }
 
-    private async Task<BackupShardRunResult> RunShardAsync(Guid backupId, Guid tableId, Guid shardId, bool isForcedQueueItem, ConcurrentDictionary<Guid, int> retryCounts, ConcurrentDictionary<Guid, ConcurrentDictionary<string, byte>> failedEndpoints, CancellationToken cancellationToken)
+    private async Task<BackupShardRunResult> RunShardAsync(Guid backupId, Guid tableId, Guid shardId, bool isForcedQueueItem, bool isResumeQueueItem, ConcurrentDictionary<Guid, int> retryCounts, ConcurrentDictionary<Guid, ConcurrentDictionary<string, byte>> failedEndpoints, CancellationToken cancellationToken)
     {
         using var scope = scopeFactory.CreateScope();
         var scopedDb = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
@@ -569,7 +569,7 @@ public sealed class BackupRunnerService(
         var backupSubmissionAttempted = false;
         try
         {
-            if (string.IsNullOrWhiteSpace(shard.ClickHouseOperationId) && IsReplicatedMergeTreeEngine(table.Engine))
+            if (!isResumeQueueItem && string.IsNullOrWhiteSpace(shard.ClickHouseOperationId) && IsReplicatedMergeTreeEngine(table.Engine))
             {
                 var failedEndpointKeys = failedEndpoints.TryGetValue(shard.Id, out var failed) ? failed.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase) : [];
                 var shardReplicas = (await scopedClickHouse.GetTopologyAsync(backup.SourceCluster!, cancellationToken))
@@ -620,6 +620,46 @@ public sealed class BackupRunnerService(
                 return BackupShardRunResult.RetryLater;
             }
             await scopedQueue.MarkStartedAsync(BackupRestoreQueueKind.Backup, shard.Id, endpoint, cancellationToken);
+            if (isResumeQueueItem && string.IsNullOrWhiteSpace(shard.ClickHouseOperationId))
+            {
+                ClickHouseDiscoveredOperation? discovered;
+                try
+                {
+                    discovered = await scopedClickHouse.FindLatestBackupOperationForPathAsync(endpoint, backup.SourceCluster!, backup.Target!, shard.StoragePath, cancellationToken);
+                }
+                catch (Exception recoveryEx) when (recoveryEx is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+                {
+                    var error = $"Backup shard was resumed without a recorded ClickHouse operation id. Chobo could not verify whether ClickHouse already has an operation for this destination, so it will not start another backup to avoid duplicate S3 destination writes. Verification error: {recoveryEx.Message}";
+                    _logger.Error(recoveryEx, "Backup table {BackupTableId} {Database}.{Table} shard {ShardNumber} resumed without a recorded ClickHouse operation id, and operation discovery failed for {StoragePath}.", table.Id, table.Database, table.Table, shard.SourceShardNumber, shard.StoragePath);
+                    shard.Status = BackupTableStatus.Failed;
+                    shard.Error = error;
+                    shard.CompletedAt = DateTimeOffset.UtcNow;
+                    await scopedDb.SaveChangesAsync(CancellationToken.None);
+                    await scopedAudit.RecordAsync("shard-failed", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { error, sourceShard = shard.SourceShardNumber, reason = "missing-operation-id-on-resume", shard.StoragePath });
+                    await scopedQueue.MarkCompletedAsync(BackupRestoreQueueKind.Backup, shard.Id, CancellationToken.None);
+                    return BackupShardRunResult.Completed;
+                }
+
+                if (discovered is null)
+                {
+                    var error = "Backup shard was resumed without a recorded ClickHouse operation id. Chobo did not find a matching ClickHouse backup operation for this destination, so it will not start another backup to avoid duplicate S3 destination writes.";
+                    _logger.Error("Backup table {BackupTableId} {Database}.{Table} shard {ShardNumber} was resumed without a recorded ClickHouse operation id and no matching ClickHouse backup operation was found for {StoragePath}.", table.Id, table.Database, table.Table, shard.SourceShardNumber, shard.StoragePath);
+                    shard.Status = BackupTableStatus.Failed;
+                    shard.Error = error;
+                    shard.CompletedAt = DateTimeOffset.UtcNow;
+                    await scopedDb.SaveChangesAsync(CancellationToken.None);
+                    await scopedAudit.RecordAsync("shard-failed", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { error, sourceShard = shard.SourceShardNumber, reason = "missing-operation-id-on-resume", shard.StoragePath });
+                    await scopedQueue.MarkCompletedAsync(BackupRestoreQueueKind.Backup, shard.Id, CancellationToken.None);
+                    return BackupShardRunResult.Completed;
+                }
+
+                shard.ClickHouseOperationId = discovered.OperationId;
+                shard.ClickHouseStatus = discovered.Status;
+                table.ClickHouseOperationId ??= discovered.OperationId;
+                table.ClickHouseStatus = discovered.Status;
+                await scopedDb.SaveChangesAsync(cancellationToken);
+                await scopedAudit.RecordAsync("clickhouse-operation-recovered", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { clickHouseOperationId = discovered.OperationId, discovered.Status, sourceShard = shard.SourceShardNumber, shard.StoragePath, recovered = true, reason = "missing-operation-id-on-resume" });
+            }
             if (!string.IsNullOrWhiteSpace(shard.ClickHouseOperationId))
             {
                 var status = await scopedClickHouse.GetOperationStatusAsync(endpoint, backup.SourceCluster!, shard.ClickHouseOperationId, cancellationToken);
@@ -724,8 +764,9 @@ public sealed class BackupRunnerService(
                 shard.StartedAt = null;
                 await scopedDb.SaveChangesAsync(CancellationToken.None);
                 await scopedAudit.RecordAsync("shard-retry-scheduled", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { error = ex.Message, sourceShard = shard.SourceShardNumber, retryAttempt = attempt, maxRetries, retryDelaySeconds = retryDelay.TotalSeconds });
+                await scopedQueue.ClearStartedClaimAsync(BackupRestoreQueueKind.Backup, shard.Id, CancellationToken.None);
                 await Task.Delay(retryDelay, CancellationToken.None);
-                await scopedQueue.ReleaseStartedAsync(BackupRestoreQueueKind.Backup, shard.Id, CancellationToken.None);
+                scopedQueue.ReleaseInMemoryClaim(BackupRestoreQueueKind.Backup, shard.Id);
                 return BackupShardRunResult.RetryLater;
             }
 
@@ -833,8 +874,9 @@ public sealed class BackupRunnerService(
                 shard.StartedAt = null;
                 await scopedDb.SaveChangesAsync(CancellationToken.None);
                 await scopedAudit.RecordAsync("shard-retry-scheduled", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { error = recoveryEx.Message, sourceShard = shard.SourceShardNumber, retryAttempt = attempt, maxRetries, retryDelaySeconds = effectiveRetryDelay.TotalSeconds, clickHouseOperationId = shard.ClickHouseOperationId, recovered = true });
+                await scopedQueue.ClearStartedClaimAsync(BackupRestoreQueueKind.Backup, shard.Id, CancellationToken.None);
                 await Task.Delay(effectiveRetryDelay, CancellationToken.None);
-                await scopedQueue.ReleaseStartedAsync(BackupRestoreQueueKind.Backup, shard.Id, CancellationToken.None);
+                scopedQueue.ReleaseInMemoryClaim(BackupRestoreQueueKind.Backup, shard.Id);
                 return BackupShardRunResult.RetryLater;
             }
 
