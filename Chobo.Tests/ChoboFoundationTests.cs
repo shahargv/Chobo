@@ -44,6 +44,10 @@ public sealed class ChoboFoundationTests
             ["Chobo__DataRetention__LogsBefore"] = "2026-05-14T10:00:00+00:00",
             ["CHOBO_DATA_RETENTION_AUDITS_BEFORE"] = "2026-05-14T11:00:00+00:00",
             ["CHOBO_DATA_RETENTION_DELETED_BACKUP_RESTORE_RECORD_RETENTION"] = "30.00:00:00",
+            ["CHOBO_SQLITE_JOURNAL_MODE"] = "TRUNCATE",
+            ["CHOBO_SQLITE_SYNCHRONOUS"] = "FULL",
+            ["CHOBO_SQLITE_BUSY_TIMEOUT"] = "00:00:08",
+            ["CHOBO_SQLITE_WAL_AUTO_CHECKPOINT"] = "2000",
             ["CHOBO_SQLITE_SELF_BACKUP_ENABLED"] = "true",
             ["CHOBO_SQLITE_SELF_BACKUP_DIRECTORY"] = "env-sqlite-backups",
             ["CHOBO_SQLITE_SELF_BACKUP_INTERVAL"] = "12:00:00",
@@ -75,6 +79,7 @@ public sealed class ChoboFoundationTests
         var security = configuration.GetSection("Chobo").Get<ChoboSecurityOptions>()!;
         var init = configuration.GetSection("Chobo:Init").Get<ChoboInitOptions>()!;
         var retention = configuration.GetSection("Chobo:DataRetention").Get<ChoboDataRetentionOptions>()!;
+        var sqlite = configuration.GetSection("Chobo:Sqlite").Get<ChoboSqliteOptions>()!;
         var selfBackup = configuration.GetSection("Chobo:SqliteSelfBackup").Get<ChoboSqliteSelfBackupOptions>()!;
         var backupRestore = configuration.GetSection("Chobo:BackupRestore").Get<ChoboBackupRestoreOptions>()!;
         var databaseLogging = configuration.GetSection("Chobo:DatabaseLogging").Get<ChoboDatabaseLoggingOptions>()!;
@@ -90,6 +95,10 @@ public sealed class ChoboFoundationTests
         Assert.Equal(DateTimeOffset.Parse("2026-05-14T10:00:00+00:00"), retention.LogsBefore);
         Assert.Equal(DateTimeOffset.Parse("2026-05-14T11:00:00+00:00"), retention.AuditsBefore);
         Assert.Equal(TimeSpan.FromDays(30), retention.DeletedBackupRestoreRecordRetention);
+        Assert.Equal("TRUNCATE", sqlite.JournalMode);
+        Assert.Equal("FULL", sqlite.Synchronous);
+        Assert.Equal(TimeSpan.FromSeconds(8), sqlite.BusyTimeout);
+        Assert.Equal(2000, sqlite.WalAutoCheckpoint);
         Assert.True(selfBackup.Enabled);
         Assert.Equal("env-sqlite-backups", selfBackup.Directory);
         Assert.Equal(TimeSpan.FromHours(12), selfBackup.BackupInterval);
@@ -190,6 +199,28 @@ public sealed class ChoboFoundationTests
         Assert.True(await db.Users.AnyAsync());
         Assert.True(await db.AccessTokens.AnyAsync());
         Assert.True(await db.AuditEntries.AnyAsync(x => x.Action == "initialize" && x.EntityType == "server"));
+    }
+
+    [Fact]
+    public async Task Startup_applies_configured_sqlite_pragmas()
+    {
+        var dataDir = NewTestDataDirectory();
+        await using var factory = CreateFactory(dataDir, extraConfiguration: new Dictionary<string, string?>
+        {
+            ["Chobo:Sqlite:JournalMode"] = "WAL",
+            ["Chobo:Sqlite:Synchronous"] = "FULL",
+            ["Chobo:Sqlite:BusyTimeout"] = "00:00:08",
+            ["Chobo:Sqlite:WalAutoCheckpoint"] = "2000"
+        });
+        _ = AuthenticatedClient(factory);
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+
+        Assert.Equal("wal", await GetPragmaStringAsync(db, "journal_mode"));
+        Assert.Equal(2L, await GetPragmaInt64Async(db, "synchronous"));
+        Assert.Equal(8000L, await GetPragmaInt64Async(db, "busy_timeout"));
+        Assert.Equal(2000L, await GetPragmaInt64Async(db, "wal_autocheckpoint"));
     }
 
     [Fact]
@@ -1822,6 +1853,9 @@ public sealed class ChoboFoundationTests
         var list = await client.GetFromJsonAsync<RuntimeSettingsListDto>("/api/v1/settings", JsonOptions);
         Assert.Contains(list!.Items, x => x.Key == "Chobo:BackupRestore:PollInterval" && x.ValueType == RuntimeSettingValueType.TimeSpan && x.ApplyMode == RuntimeSettingApplyMode.Live);
         Assert.Contains(list.Items, x => x.Key == "Chobo:DatabaseLogging:SlowQueryThreshold" && x.EffectiveValue == "00:00:02" && x.ValueType == RuntimeSettingValueType.TimeSpan && x.ApplyMode == RuntimeSettingApplyMode.Live);
+        Assert.Contains(list.Items, x => x.Key == "Chobo:Sqlite:JournalMode" && x.EffectiveValue == "WAL" && x.ValueType == RuntimeSettingValueType.String && x.ApplyMode == RuntimeSettingApplyMode.Live);
+        Assert.Contains(list.Items, x => x.Key == "Chobo:Sqlite:BusyTimeout" && x.EffectiveValue == "00:00:05" && x.ValueType == RuntimeSettingValueType.TimeSpan && x.ApplyMode == RuntimeSettingApplyMode.Live);
+        Assert.Contains(list.Items, x => x.Key == "Chobo:Sqlite:WalAutoCheckpoint" && x.EffectiveValue == "1000" && x.ValueType == RuntimeSettingValueType.Integer && x.ApplyMode == RuntimeSettingApplyMode.Live);
         Assert.DoesNotContain(list.Items, x => x.Key == "Chobo:EncryptionKeyBase64");
         Assert.DoesNotContain(list.Items, x => x.Key == "Chobo:Init:AccessToken");
         Assert.DoesNotContain(list.Items, x => x.Key == "Chobo:Settings:HiddenKeys");
@@ -1882,6 +1916,9 @@ public sealed class ChoboFoundationTests
 
         var invalid = await client.PutAsJsonAsync("/api/v1/settings/Chobo:BackupRestore:PollInterval", new UpdateRuntimeSettingRequest("not-a-timespan"), JsonOptions);
         Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+
+        var invalidPragma = await client.PutAsJsonAsync("/api/v1/settings/Chobo:Sqlite:JournalMode", new UpdateRuntimeSettingRequest("unsafe; pragma synchronous=off"), JsonOptions);
+        Assert.Equal(HttpStatusCode.BadRequest, invalidPragma.StatusCode);
 
         var update = await client.PutAsJsonAsync("/api/v1/settings/Chobo:BackupRestore:PollInterval", new UpdateRuntimeSettingRequest("00:00:05"), JsonOptions);
         var text = await update.Content.ReadAsStringAsync();
@@ -2344,6 +2381,29 @@ public sealed class ChoboFoundationTests
         throw new InvalidOperationException($"Column {tableName}.{columnName} was not found.");
     }
 
+    private static async Task<string> GetPragmaStringAsync(ChoboDbContext db, string name)
+    {
+        var connection = (SqliteConnection)db.Database.GetDbConnection();
+        var shouldClose = connection.State != System.Data.ConnectionState.Open;
+        if (shouldClose) await connection.OpenAsync();
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = $"PRAGMA {name};";
+            return Convert.ToString(await command.ExecuteScalarAsync(), System.Globalization.CultureInfo.InvariantCulture)!;
+        }
+        finally
+        {
+            if (shouldClose) await connection.CloseAsync();
+        }
+    }
+
+    private static async Task<long> GetPragmaInt64Async(ChoboDbContext db, string name)
+    {
+        var value = await GetPragmaStringAsync(db, name);
+        return long.Parse(value, System.Globalization.CultureInfo.InvariantCulture);
+    }
+
     private static async Task<int> CountRowsAsync(string dbPath, string tableName)
     {
         await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
@@ -2400,4 +2460,3 @@ public sealed class ChoboFoundationTests
         }
     }
 }
-

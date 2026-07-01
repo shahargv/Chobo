@@ -1,3 +1,4 @@
+using ChoboServer.Options;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
@@ -5,14 +6,12 @@ namespace ChoboServer.Data;
 
 public static class DatabasePerformanceMaintenance
 {
-    public static async Task EnsureAsync(ChoboDbContext db)
+    public static async Task EnsureAsync(ChoboDbContext db, ChoboSqliteOptions sqliteOptions)
     {
         await EnsureAccessTokenLookupColumnAsync(db);
 
-        await db.Database.ExecuteSqlRawAsync("""
-            PRAGMA journal_mode=WAL;
-            PRAGMA synchronous=NORMAL;
-            """);
+        SqlitePragmaConnectionInterceptor.Validate(sqliteOptions);
+        await db.Database.ExecuteSqlRawAsync(SqlitePragmaConnectionInterceptor.BuildDatabasePragmaSql(sqliteOptions));
 
         await db.Database.ExecuteSqlRawAsync("""
             CREATE INDEX IF NOT EXISTS IX_ApplicationLogEntries_Timestamp ON ApplicationLogEntries (Timestamp);
@@ -69,4 +68,3 @@ public static class DatabasePerformanceMaintenance
         await db.Database.ExecuteSqlRawAsync("ALTER TABLE AccessTokens ADD COLUMN TokenLookupHash TEXT NOT NULL DEFAULT '';");
     }
 }
-

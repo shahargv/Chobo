@@ -1,6 +1,7 @@
 using ChoboServer;
 using ChoboServer.Options;
 using ChoboServer.Services;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Options;
 using OpenTelemetry.Metrics;
@@ -14,6 +15,7 @@ var initializedMarkerPath = Path.Combine(choboDataDirectory, "_initialized");
 var missingDatabaseAfterInitialized = !File.Exists(dbPath) && File.Exists(initializedMarkerPath);
 var firstStartup = !File.Exists(dbPath);
 var webOptions = builder.Configuration.GetSection("Chobo:Web").Get<ChoboWebOptions>() ?? new ChoboWebOptions();
+var sqliteOptions = builder.Configuration.GetSection("Chobo:Sqlite").Get<ChoboSqliteOptions>() ?? new ChoboSqliteOptions();
 Console.WriteLine($"ChoboServer starting. Data directory: {choboDataDirectory}");
 Console.WriteLine($"Chobo GUI: {(webOptions.IsGuiEnabled ? "enabled" : "disabled")}; port: {(webOptions.GuiPort?.ToString() ?? "same as API")}.");
 if (webOptions.IsGuiEnabled && webOptions.GuiPort is { } guiPort)
@@ -41,7 +43,7 @@ builder.Services.AddOpenTelemetry()
 Log.Logger = new LoggerConfiguration()
     .Enrich.FromLogContext()
     .ReadFrom.Configuration(builder.Configuration)
-    .WriteTo.Sink(new ApplicationLogSqliteSink(choboDataDirectory))
+    .WriteTo.Sink(new ApplicationLogSqliteSink(choboDataDirectory, sqliteOptions))
     .CreateLogger();
 builder.Host.UseSerilog();
 
@@ -92,7 +94,15 @@ if (app.Services.GetRequiredService<IOptions<ChoboWebOptions>>().Value.IsGuiEnab
 {
     app.MapFallbackToFile("index.html", new StaticFileOptions { FileProvider = GetGuiFileProvider(app.Environment) });
 }
-app.Run();
+app.Lifetime.ApplicationStopped.Register(SqliteConnection.ClearAllPools);
+try
+{
+    app.Run();
+}
+finally
+{
+    SqliteConnection.ClearAllPools();
+}
 
 static string GetChoboDataDirectory(IConfiguration configuration)
 {
