@@ -368,7 +368,7 @@ public sealed class BackupRestoreQueueApplicationService(
         item.Position = await CalculateMovePositionAsync(item.Position, request, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         await audit.RecordAsync("queue-item-moved", item.Kind == BackupRestoreQueueKind.Backup ? AuditEntityType.BackupTableShard : AuditEntityType.RestoreTableShard, item.ShardId.ToString(), new { queueItemId = item.Id, item.Kind, oldPosition, item.Position, request.Direction, request.BeforeItemId });
-        return (await ListAsync(BackupRestoreQueueKind.All, "active", 500, cancellationToken)).FirstOrDefault(x => x.Id == id);
+        return (await ListAsync(BackupRestoreQueueKind.All, "all", 500, cancellationToken)).FirstOrDefault(x => x.Id == id);
     }
 
     public async Task<IReadOnlyList<BackupRestoreQueueItemDto>> MoveTableAsync(BackupRestoreQueueKind kind, Guid tableId, MoveQueueItemRequest request, CancellationToken cancellationToken = default)
@@ -397,7 +397,7 @@ public sealed class BackupRestoreQueueApplicationService(
         }
         await db.SaveChangesAsync(cancellationToken);
         await audit.RecordAsync("queue-table-moved", kind == BackupRestoreQueueKind.Backup ? AuditEntityType.BackupTable : AuditEntityType.RestoreTable, tableId.ToString(), new { kind, tableId, oldPositions, newPositions = items.Select(x => new { x.Id, x.Position }).ToList(), request.Direction, request.BeforeItemId });
-        return (await ListAsync(kind, "active", 500, cancellationToken)).Where(x => x.TableId == tableId).ToList();
+        return (await ListAsync(kind, "all", 500, cancellationToken)).Where(x => x.TableId == tableId).ToList();
     }
 
     public async Task<IReadOnlyList<BackupRestoreQueueItemDto>> MoveOperationAsync(BackupRestoreQueueKind kind, Guid operationId, MoveQueueItemRequest request, CancellationToken cancellationToken = default)
@@ -438,7 +438,7 @@ public sealed class BackupRestoreQueueApplicationService(
 
         await db.SaveChangesAsync(cancellationToken);
         await audit.RecordAsync("queue-operation-moved", kind == BackupRestoreQueueKind.Backup ? AuditEntityType.Backup : AuditEntityType.Restore, operationId.ToString(), new { kind, operationId, oldPositions, newPositions = movable.Select(x => new { x.Id, x.Position }).ToList(), request.Direction, request.BeforeItemId });
-        return (await ListAsync(kind, "active", 10000, cancellationToken)).Where(x => x.OperationId == operationId).ToList();
+        return (await ListAsync(kind, "all", 10000, cancellationToken)).Where(x => x.OperationId == operationId).ToList();
     }
     public async Task<BackupRestoreQueueItemDto?> ForceAsync(Guid id, CancellationToken cancellationToken = default)
     {
@@ -455,7 +455,7 @@ public sealed class BackupRestoreQueueApplicationService(
         item.Position = await MinPositionAsync(cancellationToken) - PositionStep;
         await db.SaveChangesAsync(cancellationToken);
         await audit.RecordAsync("queue-item-forced", item.Kind == BackupRestoreQueueKind.Backup ? AuditEntityType.BackupTableShard : AuditEntityType.RestoreTableShard, item.ShardId.ToString(), new { queueItemId = item.Id, item.Kind, item.OperationId, item.TableId, item.ShardId, item.ForcedByUserId, item.ForcedByName });
-        return (await ListAsync(BackupRestoreQueueKind.All, "active", 500, cancellationToken)).FirstOrDefault(x => x.Id == id);
+        return (await ListAsync(BackupRestoreQueueKind.All, "all", 500, cancellationToken)).FirstOrDefault(x => x.Id == id);
     }
 
     public async Task MarkStartedAsync(BackupRestoreQueueKind kind, Guid shardId, ClickHouseNodeEndpoint endpoint, CancellationToken cancellationToken = default)
@@ -556,6 +556,64 @@ public sealed class BackupRestoreQueueApplicationService(
             .Where(x => x.Kind == kind && x.OperationId == operationId && x.CompletedAt == null)
             .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.CompletedAt, now), cancellationToken);
         concurrency.ReleaseOperation(kind, operationId);
+    }
+
+    public async Task<int> RemoveActiveOperationItemsAsync(BackupRestoreQueueKind kind, Guid operationId, string reason, CancellationToken cancellationToken = default)
+    {
+        if (kind is not (BackupRestoreQueueKind.Backup or BackupRestoreQueueKind.Restore))
+        {
+            throw new ArgumentException("Queue cleanup requires kind Backup or Restore.", nameof(kind));
+        }
+
+        var deleted = await db.BackupRestoreQueueItems
+            .Where(x => x.Kind == kind && x.OperationId == operationId && x.CompletedAt == null)
+            .ExecuteDeleteAsync(cancellationToken);
+        concurrency.ReleaseOperation(kind, operationId);
+        if (deleted > 0)
+        {
+            await audit.RecordAsync("queue-active-cleaned", kind == BackupRestoreQueueKind.Backup ? AuditEntityType.Backup : AuditEntityType.Restore, operationId.ToString(), new { kind, operationId, reason, deleted });
+        }
+
+        return deleted;
+    }
+
+    public async Task<int> RemoveInactiveOperationItemsAsync(string reason, CancellationToken cancellationToken = default)
+    {
+        var operations = await db.BackupRestoreQueueItems.AsNoTracking()
+            .Where(x => x.CompletedAt == null)
+            .GroupBy(x => new { x.Kind, x.OperationId })
+            .Select(x => new { x.Key.Kind, x.Key.OperationId })
+            .ToListAsync(cancellationToken);
+        var deleted = 0;
+        foreach (var operation in operations)
+        {
+            if (operation.Kind == BackupRestoreQueueKind.Backup)
+            {
+                var active = await db.Backups.AsNoTracking()
+                    .AnyAsync(x => x.Id == operation.OperationId && (x.Status == BackupRunStatus.Queued || x.Status == BackupRunStatus.Running), cancellationToken);
+                if (active)
+                {
+                    continue;
+                }
+
+                deleted += await RemoveActiveOperationItemsAsync(BackupRestoreQueueKind.Backup, operation.OperationId, reason, cancellationToken);
+                continue;
+            }
+
+            if (operation.Kind == BackupRestoreQueueKind.Restore)
+            {
+                var active = await db.Restores.AsNoTracking()
+                    .AnyAsync(x => x.Id == operation.OperationId && (x.Status == RestoreRunStatus.Queued || x.Status == RestoreRunStatus.Running), cancellationToken);
+                if (active)
+                {
+                    continue;
+                }
+
+                deleted += await RemoveActiveOperationItemsAsync(BackupRestoreQueueKind.Restore, operation.OperationId, reason, cancellationToken);
+            }
+        }
+
+        return deleted;
     }
 
     public async Task<bool> TryReserveStartedNodeAsync(BackupRestoreQueueKind kind, Guid shardId, Guid clusterId, ClickHouseNodeEndpoint endpoint, bool force, CancellationToken cancellationToken = default)

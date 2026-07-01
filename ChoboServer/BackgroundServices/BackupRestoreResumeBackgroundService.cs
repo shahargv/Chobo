@@ -20,11 +20,17 @@ public sealed class BackupRestoreResumeBackgroundService(
             using var scope = services.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
             var audit = scope.ServiceProvider.GetRequiredService<IAuditService>();
+            var queueService = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
+            var pruned = await queueService.RemoveInactiveOperationItemsAsync("server-startup", stoppingToken);
+            if (pruned > 0)
+            {
+                _logger.Information("Backup/restore startup pruned {QueueItemCount} inactive queue row(s).", pruned);
+            }
+
             var backups = await db.Backups
                 .Where(x => x.Status == BackupRunStatus.Queued || x.Status == BackupRunStatus.Running)
                 .Select(x => new { x.Id, x.ContentMode, x.Status })
                 .ToListAsync(stoppingToken);
-            var queueService = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
             foreach (var backup in backups)
             {
                 if (backup.Status == BackupRunStatus.Running)
