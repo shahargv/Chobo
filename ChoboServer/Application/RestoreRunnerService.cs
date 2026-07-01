@@ -85,6 +85,10 @@ public sealed class RestoreRunnerService(
             LogRestoreCompletion(restore);
             var auditAction = restore.Status == RestoreRunStatus.Succeeded ? "succeeded" : restore.Status == RestoreRunStatus.PartiallySucceeded ? "partially-succeeded" : "failed";
             await audit.RecordAsync(auditAction, AuditEntityType.Restore, restore.Id.ToString(), new { tableCount, layout = restore.Layout, restore.SourceShard, restore.TargetShard, restore.FailureReason });
+            if (restore.Status is RestoreRunStatus.Failed or RestoreRunStatus.PartiallySucceeded)
+            {
+                await queue.RemoveActiveOperationItemsAsync(BackupRestoreQueueKind.Restore, restore.Id, "restore-finished-unsuccessfully", cancellationToken);
+            }
         }
         catch (Exception ex)
         {
@@ -112,6 +116,7 @@ public sealed class RestoreRunnerService(
             }
             await db.SaveChangesAsync(CancellationToken.None);
             await audit.RecordAsync("failed", AuditEntityType.Restore, restore.Id.ToString(), new { error = ex.Message, restore.FailureReason });
+            await queue.RemoveActiveOperationItemsAsync(BackupRestoreQueueKind.Restore, restore.Id, "restore-runner-exception", CancellationToken.None);
         }
         finally
         {

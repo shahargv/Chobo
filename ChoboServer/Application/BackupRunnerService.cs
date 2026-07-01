@@ -106,6 +106,10 @@ public sealed class BackupRunnerService(
             }
             LogBackupCompletion(backup);
             await audit.RecordAsync(auditAction, AuditEntityType.Backup, backup.Id.ToString(), new { tableCount, backup.FailureReason });
+            if (backup.Status is BackupRunStatus.Failed or BackupRunStatus.PartiallySucceeded)
+            {
+                await queue.RemoveActiveOperationItemsAsync(BackupRestoreQueueKind.Backup, backup.Id, "backup-finished-unsuccessfully", cancellationToken);
+            }
             if (backup.ContentMode == BackupContentMode.SchemaAndData && backup.Status != BackupRunStatus.Succeeded)
             {
                 await TryWriteFailedManifestAsync(backup.Id);
@@ -124,6 +128,7 @@ public sealed class BackupRunnerService(
                 await TryWriteFailedManifestAsync(backup.Id);
             }
             await audit.RecordAsync("failed", AuditEntityType.Backup, backup.Id.ToString(), new { error = ex.Message, backup.FailureReason });
+            await queue.RemoveActiveOperationItemsAsync(BackupRestoreQueueKind.Backup, backup.Id, "backup-runner-exception", CancellationToken.None);
         }
         finally
         {
