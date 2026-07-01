@@ -19,6 +19,8 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Serilog.Core;
+using Serilog.Events;
 
 [assembly: CollectionBehavior(DisableTestParallelization = true)]
 
@@ -51,6 +53,7 @@ public sealed class ChoboFoundationTests
             ["CHOBO_BACKUP_RESTORE_SCHEDULER_INTERVAL"] = "00:02:00",
             ["Chobo__BackupRestore__SchedulerMissedRunGracePeriod"] = "00:07:00",
             ["CHOBO_BACKUP_RESTORE_POLL_INTERVAL"] = "00:00:03",
+            ["CHOBO_DATABASE_LOGGING_SLOW_QUERY_THRESHOLD"] = "00:00:04",
             ["CHOBO_WEB_IS_GUI_ENABLED"] = "false",
             ["CHOBO_WEB_GUI_PORT"] = "18081",
             ["CHOBO_TEST_HOOKS_ENABLED"] = "true",
@@ -74,6 +77,7 @@ public sealed class ChoboFoundationTests
         var retention = configuration.GetSection("Chobo:DataRetention").Get<ChoboDataRetentionOptions>()!;
         var selfBackup = configuration.GetSection("Chobo:SqliteSelfBackup").Get<ChoboSqliteSelfBackupOptions>()!;
         var backupRestore = configuration.GetSection("Chobo:BackupRestore").Get<ChoboBackupRestoreOptions>()!;
+        var databaseLogging = configuration.GetSection("Chobo:DatabaseLogging").Get<ChoboDatabaseLoggingOptions>()!;
         var web = configuration.GetSection("Chobo:Web").Get<ChoboWebOptions>()!;
         var endpointRewrites = configuration.GetSection("Chobo:EndpointRewrites").Get<ChoboEndpointRewriteOptions>()!;
         var testHooks = configuration.GetSection("Chobo:TestHooks").Get<ChoboTestHooksOptions>()!;
@@ -95,6 +99,7 @@ public sealed class ChoboFoundationTests
         Assert.Equal(TimeSpan.FromMinutes(2), backupRestore.SchedulerInterval);
         Assert.Equal(TimeSpan.FromMinutes(7), backupRestore.SchedulerMissedRunGracePeriod);
         Assert.Equal(TimeSpan.FromSeconds(3), backupRestore.PollInterval);
+        Assert.Equal(TimeSpan.FromSeconds(4), databaseLogging.SlowQueryThreshold);
         Assert.False(web.IsGuiEnabled);
         Assert.Equal(18081, web.GuiPort);
         Assert.Equal("clickhouse-cluster-s1-r1", endpointRewrites.ClickHouse[0].Host);
@@ -1816,6 +1821,7 @@ public sealed class ChoboFoundationTests
 
         var list = await client.GetFromJsonAsync<RuntimeSettingsListDto>("/api/v1/settings", JsonOptions);
         Assert.Contains(list!.Items, x => x.Key == "Chobo:BackupRestore:PollInterval" && x.ValueType == RuntimeSettingValueType.TimeSpan && x.ApplyMode == RuntimeSettingApplyMode.Live);
+        Assert.Contains(list.Items, x => x.Key == "Chobo:DatabaseLogging:SlowQueryThreshold" && x.EffectiveValue == "00:00:02" && x.ValueType == RuntimeSettingValueType.TimeSpan && x.ApplyMode == RuntimeSettingApplyMode.Live);
         Assert.DoesNotContain(list.Items, x => x.Key == "Chobo:EncryptionKeyBase64");
         Assert.DoesNotContain(list.Items, x => x.Key == "Chobo:Init:AccessToken");
         Assert.DoesNotContain(list.Items, x => x.Key == "Chobo:Settings:HiddenKeys");
@@ -1837,6 +1843,28 @@ public sealed class ChoboFoundationTests
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
         Assert.True(await db.AuditEntries.AnyAsync(x => x.Action == "set" && x.EntityType == "runtime-setting" && x.EntityId == "Chobo:BackupRestore:PollInterval"));
+    }
+
+
+    [Fact]
+    public void Slow_sqlite_queries_are_logged_at_information_when_over_configured_threshold()
+    {
+        var options = new TestOptionsMonitor<ChoboDatabaseLoggingOptions>(new ChoboDatabaseLoggingOptions
+        {
+            SlowQueryThreshold = TimeSpan.FromSeconds(2)
+        });
+        var sink = new CollectingSink();
+        var logger = new Serilog.LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(sink).CreateLogger();
+        var interceptor = new SlowSqliteQueryLoggingInterceptor(options, logger);
+
+        using var command = new SqliteCommand("SELECT * FROM Users WHERE UserName = $userName");
+        interceptor.LogIfSlow(command, TimeSpan.FromMilliseconds(1999));
+        interceptor.LogIfSlow(command, TimeSpan.FromMilliseconds(2001));
+
+        var logEvent = Assert.Single(sink.Events);
+        Assert.Equal(LogEventLevel.Information, logEvent.Level);
+        Assert.Contains("Slow SQLite query completed", logEvent.RenderMessage());
+        Assert.Contains("SELECT * FROM Users", logEvent.RenderMessage());
     }
 
     [Fact]
@@ -2161,6 +2189,22 @@ public sealed class ChoboFoundationTests
 
         await db.SaveChangesAsync();
         return new FullExportGraphIds(clusterId, targetId, policyId, scheduleId, schemaDefinitionId, backupId, backupTableId, backupTableShardId, restoreId, restoreTableId, restoreTableShardId);
+    }
+
+    private sealed class CollectingSink : ILogEventSink
+    {
+        public List<LogEvent> Events { get; } = [];
+
+        public void Emit(LogEvent logEvent) => Events.Add(logEvent);
+    }
+
+    private sealed class TestOptionsMonitor<T>(T currentValue) : IOptionsMonitor<T>
+    {
+        public T CurrentValue { get; } = currentValue;
+
+        public T Get(string? name) => CurrentValue;
+
+        public IDisposable? OnChange(Action<T, string?> listener) => null;
     }
 
     private sealed record FullExportGraphIds(
