@@ -343,6 +343,7 @@ public sealed class BackupStorageManifestService(
         backup.Status = degraded ? BackupRunStatus.PartiallySucceeded : manifest.Backup.Status;
         backup.BackupType = manifest.Backup.BackupType;
         backup.SourceClusterId = manifest.Backup.SourceClusterId;
+        backup.StorageRootPath = manifest.Backup.StorageRootPath;
         backup.TargetId = manifest.Backup.TargetId;
         backup.PolicyId = manifest.Backup.PolicyId;
         backup.ScheduleId = manifest.Backup.ScheduleId;
@@ -537,6 +538,7 @@ public sealed class BackupStorageManifestService(
                 backup.RequestedByUserId,
                 backup.RequestedByName,
                 backup.ManualRequestJson,
+                backup.StorageRootPath,
                 backup.CreatedAt,
                 backup.QueuedAt,
                 backup.StartedAt,

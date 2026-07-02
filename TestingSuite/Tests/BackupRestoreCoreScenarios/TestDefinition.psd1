@@ -167,8 +167,9 @@
                 @{ Path = 'manualRequestJson'; Contains = 'rules' }
                 @{ Path = 'tables[1].clickHouseOperationId'; NotEmpty = $true }
                 @{ Path = 'tables[1].clickHouseStatus'; Equals = 'BACKUP_CREATED' }
-                @{ Path = 'tables[1].storagePath'; Contains = 'backups/full/manual/backup_core_source/line_items/' }
-                @{ Path = 'tables[4].storagePath'; Contains = 'backups/full/manual/backup_core_source/orders/' }
+                @{ Path = 'storageRootPath'; Contains = 'backups/runs/manual/' }
+                @{ Path = 'tables[1].storagePath'; Contains = '/tables/backup_core_source/line_items/full' }
+                @{ Path = 'tables[4].storagePath'; Contains = '/tables/backup_core_source/orders/full' }
                 @{ Path = 'tables'; ContainsObject = @{ table = 'log_events'; dataBackedUp = $false; status = 'Succeeded' } }
                 @{ Path = 'tables'; ContainsObject = @{ table = 'join_lookup'; dataBackedUp = $false; status = 'Succeeded' } }
                 @{ Path = 'tables'; ContainsObject = @{ table = 'merge_orders'; dataBackedUp = $false; status = 'Succeeded' } }
@@ -183,7 +184,8 @@
                 @{ Path = 'startedAt'; NotEmpty = $true }
                 @{ Path = 'endedAt'; NotEmpty = $true }
                 @{ Path = 'tables[1].clickHouseOperationId'; NotEmpty = $true }
-                @{ Path = 'tables[1].storagePath'; Contains = 'backups/full/manual/' }
+                @{ Path = 'storageRootPath'; Contains = 'backups/runs/manual/' }
+                @{ Path = 'tables[1].storagePath'; Contains = '/tables/backup_core_source/line_items/full' }
             )
         }
         @{

@@ -30,6 +30,7 @@ public sealed record BackupStorageManifestRunV1(
     Guid? RequestedByUserId,
     string RequestedByName,
     string? ManualRequestJson,
+    string? StorageRootPath,
     DateTimeOffset CreatedAt,
     DateTimeOffset? QueuedAt,
     DateTimeOffset? StartedAt,

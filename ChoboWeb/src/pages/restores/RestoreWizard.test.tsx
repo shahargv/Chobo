@@ -20,6 +20,7 @@ const summaryBackup = (overrides: Partial<BackupDto> = {}): BackupDto => ({
   requestedByUserId: null,
   requestedByName: "system",
   manualRequestJson: null,
+  storageRootPath: null,
   createdAt: "2026-07-01T00:00:00Z",
   startedAt: "2026-07-01T00:01:00Z",
   endedAt: "2026-07-01T00:02:00Z",

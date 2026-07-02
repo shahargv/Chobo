@@ -88,7 +88,13 @@ public sealed class BackupPreparationService(
             backup.ContentMode = BackupContentMode.SchemaOnly;
             backup.BackupType = BackupType.Full;
             backup.TargetId = null;
+            backup.StorageRootPath = null;
             await db.SaveChangesAsync(cancellationToken);
+        }
+
+        if (!schemaOnly)
+        {
+            backup.StorageRootPath ??= BuildStorageRootPath(backup);
         }
 
         var topology = await clickHouse.GetTopologyAsync(backup.SourceCluster!, cancellationToken);
@@ -347,21 +353,31 @@ public sealed class BackupPreparationService(
 
         return maxAgeHours;
     }
-    private static string BuildStoragePath(BackupEntity backup, string database, string table, BackupType effectiveType, Guid? parentFullBackupId)
+    private static string BuildStorageRootPath(BackupEntity backup)
     {
         var source = backup.PolicyId is { } policyId ? $"policy-{policyId:N}" : "manual";
         var timestamp = backup.CreatedAt.UtcDateTime.ToString("yyyyMMddTHHmmssfffZ", System.Globalization.CultureInfo.InvariantCulture);
+        return $"backups/runs/{source}/{timestamp}-{backup.Id:N}";
+    }
+
+    private static string BuildStoragePath(BackupEntity backup, string database, string table, BackupType effectiveType, Guid? parentFullBackupId)
+    {
+        if (string.IsNullOrWhiteSpace(backup.StorageRootPath))
+        {
+            return "";
+        }
+
         if (effectiveType == BackupType.Incremental)
         {
             var parent = parentFullBackupId is null ? "parent-full-unknown" : $"parent-full-{parentFullBackupId.Value:N}";
-            return $"backups/incremental/{source}/{EscapePathPart(database)}/{EscapePathPart(table)}/{parent}/{timestamp}/{backup.Id:N}";
+            return $"{backup.StorageRootPath}/tables/{EscapePathPart(database)}/{EscapePathPart(table)}/incremental/{parent}";
         }
 
-        return $"backups/full/{source}/{EscapePathPart(database)}/{EscapePathPart(table)}/{timestamp}/{backup.Id:N}";
+        return $"{backup.StorageRootPath}/tables/{EscapePathPart(database)}/{EscapePathPart(table)}/full";
     }
 
     private static string BuildShardStoragePath(string tablePath, int shardNumber) =>
-        $"{tablePath}/shards/shard-{shardNumber:0000}";
+        string.IsNullOrWhiteSpace(tablePath) ? "" : $"{tablePath}/shards/shard-{shardNumber:0000}";
 
     private static IReadOnlyList<ClickHouseShardReplicaInfo> SelectShardRepresentatives(IReadOnlyList<ClickHouseShardReplicaInfo> topology) =>
         topology

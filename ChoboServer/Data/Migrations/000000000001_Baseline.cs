@@ -179,6 +179,7 @@ public sealed class Baseline : Migration
                 PolicyId TEXT NULL,
                 ScheduleId TEXT NULL,
                 ManualRequestJson TEXT NULL,
+                StorageRootPath TEXT NULL,
                 ClickHouseBackupSettingsJson TEXT NOT NULL DEFAULT '{}',
                 RequestedByUserId TEXT NULL,
                 RequestedByName TEXT NOT NULL,

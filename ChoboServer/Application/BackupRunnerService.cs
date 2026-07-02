@@ -628,42 +628,34 @@ public sealed class BackupRunnerService(
             if (isResumeQueueItem && string.IsNullOrWhiteSpace(shard.ClickHouseOperationId))
             {
                 ClickHouseDiscoveredOperation? discovered;
+                var recoveryCheckFailed = false;
                 try
                 {
                     discovered = await scopedClickHouse.FindLatestBackupOperationForPathAsync(endpoint, backup.SourceCluster!, backup.Target!, shard.StoragePath, cancellationToken);
                 }
                 catch (Exception recoveryEx) when (recoveryEx is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
                 {
-                    var error = $"Backup shard was resumed without a recorded ClickHouse operation id. Chobo could not verify whether ClickHouse already has an operation for this destination, so it will not start another backup to avoid duplicate S3 destination writes. Verification error: {recoveryEx.Message}";
-                    _logger.Error(recoveryEx, "Backup table {BackupTableId} {Database}.{Table} shard {ShardNumber} resumed without a recorded ClickHouse operation id, and operation discovery failed for {StoragePath}.", table.Id, table.Database, table.Table, shard.SourceShardNumber, shard.StoragePath);
-                    shard.Status = BackupTableStatus.Failed;
-                    shard.Error = error;
-                    shard.CompletedAt = DateTimeOffset.UtcNow;
-                    await scopedDb.SaveChangesAsync(CancellationToken.None);
-                    await scopedAudit.RecordAsync("shard-failed", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { error, sourceShard = shard.SourceShardNumber, reason = "missing-operation-id-on-resume", shard.StoragePath });
-                    await scopedQueue.MarkCompletedAsync(BackupRestoreQueueKind.Backup, shard.Id, CancellationToken.None);
-                    return BackupShardRunResult.Completed;
+                    _logger.Warning(recoveryEx, "Backup table {BackupTableId} {Database}.{Table} shard {ShardNumber} resumed without a recorded ClickHouse operation id, and operation discovery failed for {StoragePath}; submitting a fresh attempt path.", table.Id, table.Database, table.Table, shard.SourceShardNumber, shard.StoragePath);
+                    await scopedAudit.RecordAsync("clickhouse-operation-recovery-check-failed", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { error = recoveryEx.Message, sourceShard = shard.SourceShardNumber, shard.StoragePath, reason = "missing-operation-id-on-resume" });
+                    discovered = null;
+                    recoveryCheckFailed = true;
                 }
 
-                if (discovered is null)
+                if (discovered is null && !recoveryCheckFailed)
                 {
-                    var error = "Backup shard was resumed without a recorded ClickHouse operation id. Chobo did not find a matching ClickHouse backup operation for this destination, so it will not start another backup to avoid duplicate S3 destination writes.";
-                    _logger.Error("Backup table {BackupTableId} {Database}.{Table} shard {ShardNumber} was resumed without a recorded ClickHouse operation id and no matching ClickHouse backup operation was found for {StoragePath}.", table.Id, table.Database, table.Table, shard.SourceShardNumber, shard.StoragePath);
-                    shard.Status = BackupTableStatus.Failed;
-                    shard.Error = error;
-                    shard.CompletedAt = DateTimeOffset.UtcNow;
-                    await scopedDb.SaveChangesAsync(CancellationToken.None);
-                    await scopedAudit.RecordAsync("shard-failed", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { error, sourceShard = shard.SourceShardNumber, reason = "missing-operation-id-on-resume", shard.StoragePath });
-                    await scopedQueue.MarkCompletedAsync(BackupRestoreQueueKind.Backup, shard.Id, CancellationToken.None);
-                    return BackupShardRunResult.Completed;
+                    _logger.Warning("Backup table {BackupTableId} {Database}.{Table} shard {ShardNumber} was resumed without a recorded ClickHouse operation id and no matching ClickHouse backup operation was found for {StoragePath}; submitting a fresh attempt path.", table.Id, table.Database, table.Table, shard.SourceShardNumber, shard.StoragePath);
+                    await scopedAudit.RecordAsync("clickhouse-operation-recovery-not-found", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { sourceShard = shard.SourceShardNumber, shard.StoragePath, reason = "missing-operation-id-on-resume" });
                 }
 
-                shard.ClickHouseOperationId = discovered.OperationId;
-                shard.ClickHouseStatus = discovered.Status;
-                table.ClickHouseOperationId ??= discovered.OperationId;
-                table.ClickHouseStatus = discovered.Status;
-                await scopedDb.SaveChangesAsync(cancellationToken);
-                await scopedAudit.RecordAsync("clickhouse-operation-recovered", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { clickHouseOperationId = discovered.OperationId, discovered.Status, sourceShard = shard.SourceShardNumber, shard.StoragePath, recovered = true, reason = "missing-operation-id-on-resume" });
+                if (discovered is not null)
+                {
+                    shard.ClickHouseOperationId = discovered.OperationId;
+                    shard.ClickHouseStatus = discovered.Status;
+                    table.ClickHouseOperationId ??= discovered.OperationId;
+                    table.ClickHouseStatus = discovered.Status;
+                    await scopedDb.SaveChangesAsync(cancellationToken);
+                    await scopedAudit.RecordAsync("clickhouse-operation-recovered", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { clickHouseOperationId = discovered.OperationId, discovered.Status, sourceShard = shard.SourceShardNumber, shard.StoragePath, recovered = true, reason = "missing-operation-id-on-resume" });
+                }
             }
             if (!string.IsNullOrWhiteSpace(shard.ClickHouseOperationId))
             {
@@ -696,6 +688,7 @@ public sealed class BackupRunnerService(
                 throw MissingOperationException(shard.ClickHouseOperationId);
             }
 
+            await AssignNewShardAttemptStoragePathAsync(scopedDb, scopedAudit, table, shard, cancellationToken);
             var baseBackupPath = await GetParentShardPathAsync(scopedDb, shard.ParentFullBackupTableShardId, cancellationToken);
             var settings = ClickHouseAdvancedSettings.Deserialize(backup.ClickHouseBackupSettingsJson, ClickHouseAdvancedSettingsKind.Backup);
             backupSubmissionAttempted = true;
@@ -745,15 +738,7 @@ public sealed class BackupRunnerService(
                     return recoveryResult.Value;
                 }
 
-                var error = $"Backup submission to ClickHouse failed before Chobo received an operation id. Chobo waited {scopedOptions.CurrentValue.BackupSubmissionStatusCheckDelay} and did not find a matching ClickHouse backup operation for this destination, so the shard will not be retried automatically because retrying could start a duplicate backup. Original error: {ex.Message}";
-                _logger.Error(ex, "Backup table {BackupTableId} {Database}.{Table} shard {ShardNumber} submission outcome is unknown and no matching ClickHouse operation was found; failing without retry to avoid duplicate destination work.", table.Id, table.Database, table.Table, shard.SourceShardNumber);
-                shard.Status = BackupTableStatus.Failed;
-                shard.Error = error;
-                shard.CompletedAt = DateTimeOffset.UtcNow;
-                await scopedDb.SaveChangesAsync(CancellationToken.None);
-                await scopedAudit.RecordAsync("shard-failed", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { error, sourceShard = shard.SourceShardNumber, clickHouseOperationId = shard.ClickHouseOperationId, reason = "unknown-submission-outcome" });
-                await scopedQueue.MarkCompletedAsync(BackupRestoreQueueKind.Backup, shard.Id, CancellationToken.None);
-                return BackupShardRunResult.Completed;
+                _logger.Warning(ex, "Backup table {BackupTableId} {Database}.{Table} shard {ShardNumber} submission outcome is unknown and no matching ClickHouse operation was found; retry may use a fresh storage path.", table.Id, table.Database, table.Table, shard.SourceShardNumber);
             }
 
             var maxRetries = Math.Max(0, scopedOptions.CurrentValue.TransientShardMaxRetries);
@@ -784,6 +769,27 @@ public sealed class BackupRunnerService(
             await scopedQueue.MarkCompletedAsync(BackupRestoreQueueKind.Backup, shard.Id, CancellationToken.None);
             return BackupShardRunResult.Completed;
         }
+    }
+
+    private static async Task AssignNewShardAttemptStoragePathAsync(ChoboDbContext scopedDb, IAuditService scopedAudit, BackupTableEntity table, BackupTableShardEntity shard, CancellationToken cancellationToken)
+    {
+        var previousStoragePath = shard.StoragePath;
+        shard.StoragePath = BuildShardAttemptStoragePath(table.StoragePath, shard.StoragePath, shard.SourceShardNumber);
+        await scopedDb.SaveChangesAsync(cancellationToken);
+        await scopedAudit.RecordAsync("shard-attempt-path-assigned", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { table.Database, table.Table, sourceShard = shard.SourceShardNumber, previousStoragePath, storagePath = shard.StoragePath });
+    }
+
+    private static string BuildShardAttemptStoragePath(string tableStoragePath, string shardStoragePath, int shardNumber)
+    {
+        var attemptIndex = shardStoragePath.IndexOf("/attempt-", StringComparison.Ordinal);
+        var shardBasePath = attemptIndex >= 0 ? shardStoragePath[..attemptIndex] : shardStoragePath.TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(shardBasePath))
+        {
+            var tablePath = tableStoragePath.TrimEnd('/');
+            shardBasePath = string.IsNullOrWhiteSpace(tablePath) ? $"shards/shard-{shardNumber:0000}" : $"{tablePath}/shards/shard-{shardNumber:0000}";
+        }
+
+        return $"{shardBasePath}/attempt-{Guid.NewGuid():N}";
     }
 
     private async Task<BackupShardRunResult?> TryRecoverUnknownSubmittedBackupShardAsync(

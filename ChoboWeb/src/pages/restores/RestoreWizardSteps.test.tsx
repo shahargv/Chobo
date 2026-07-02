@@ -19,6 +19,7 @@ const backup: BackupDto = {
   requestedByUserId: null,
   requestedByName: "system",
   manualRequestJson: null,
+  storageRootPath: null,
   createdAt: "2026-06-22T00:00:00Z",
   startedAt: "2026-06-22T00:01:00Z",
   endedAt: "2026-06-22T00:02:00Z",
