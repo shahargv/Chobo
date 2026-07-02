@@ -108,7 +108,7 @@ public sealed class BackupRestoreQueueApplicationService(
             .ToListAsync(cancellationToken);
         var clusterRunning = runningItems.Count;
         var candidates = await db.BackupRestoreQueueItems
-            .Where(x => x.Kind == BackupRestoreQueueKind.Backup && x.OperationId == backupId && x.StartedAt == null && x.CompletedAt == null)
+            .Where(x => x.Kind == BackupRestoreQueueKind.Backup && x.StartedAt == null && x.CompletedAt == null)
             .OrderByDescending(x => x.IsForced)
             .ThenBy(x => x.Position)
             .Take(256)
@@ -123,6 +123,17 @@ public sealed class BackupRestoreQueueApplicationService(
             }
             if (shard.Status is not (BackupTableStatus.Queued or BackupTableStatus.Running))
             {
+                continue;
+            }
+            if (item.OperationId != backupId)
+            {
+                hasQueuedWork = await HasPendingBackupWorkAsync(backupId, cancellationToken);
+                if (hasQueuedWork)
+                {
+                    await transaction.CommitAsync(cancellationToken);
+                    return new QueueClaimResult(null, true);
+                }
+
                 continue;
             }
             hasQueuedWork = true;
@@ -248,7 +259,7 @@ public sealed class BackupRestoreQueueApplicationService(
             .ToListAsync(cancellationToken);
         var clusterRunning = runningItems.Count;
         var candidates = await db.BackupRestoreQueueItems
-            .Where(x => x.Kind == BackupRestoreQueueKind.Restore && x.OperationId == restoreId && x.StartedAt == null && x.CompletedAt == null)
+            .Where(x => x.Kind == BackupRestoreQueueKind.Restore && x.StartedAt == null && x.CompletedAt == null)
             .OrderByDescending(x => x.IsForced)
             .ThenBy(x => x.Position)
             .Take(256)
@@ -263,6 +274,17 @@ public sealed class BackupRestoreQueueApplicationService(
             }
             if (shard.Status is not (RestoreTableStatus.Queued or RestoreTableStatus.Running))
             {
+                continue;
+            }
+            if (item.OperationId != restoreId)
+            {
+                hasQueuedWork = await HasPendingRestoreWorkAsync(restoreId, cancellationToken);
+                if (hasQueuedWork)
+                {
+                    await transaction.CommitAsync(cancellationToken);
+                    return new QueueClaimResult(null, true);
+                }
+
                 continue;
             }
             hasQueuedWork = true;
@@ -318,6 +340,31 @@ public sealed class BackupRestoreQueueApplicationService(
         await transaction.CommitAsync(cancellationToken);
         return new QueueClaimResult(null, hasQueuedWork);
     }
+
+    private Task<bool> HasPendingBackupWorkAsync(Guid backupId, CancellationToken cancellationToken) =>
+        db.BackupRestoreQueueItems
+            .Where(x => x.Kind == BackupRestoreQueueKind.Backup &&
+                        x.OperationId == backupId &&
+                        x.StartedAt == null &&
+                        x.CompletedAt == null)
+            .Join(db.BackupTableShards,
+                item => item.ShardId,
+                shard => shard.Id,
+                (_, shard) => shard)
+            .AnyAsync(shard => shard.Status == BackupTableStatus.Queued || shard.Status == BackupTableStatus.Running, cancellationToken);
+
+    private Task<bool> HasPendingRestoreWorkAsync(Guid restoreId, CancellationToken cancellationToken) =>
+        db.BackupRestoreQueueItems
+            .Where(x => x.Kind == BackupRestoreQueueKind.Restore &&
+                        x.OperationId == restoreId &&
+                        x.StartedAt == null &&
+                        x.CompletedAt == null)
+            .Join(db.RestoreTableShards,
+                item => item.ShardId,
+                shard => shard.Id,
+                (_, shard) => shard)
+            .AnyAsync(shard => shard.Status == RestoreTableStatus.Queued || shard.Status == RestoreTableStatus.Running, cancellationToken);
+
     public async Task<bool> IsNodeAvailableAsync(Guid clusterId, ClickHouseNodeEndpoint endpoint, bool force, CancellationToken cancellationToken = default)
     {
         if (force)
