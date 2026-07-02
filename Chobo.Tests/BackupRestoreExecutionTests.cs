@@ -45,14 +45,24 @@ public sealed class BackupRestoreExecutionTests
         await fixture.RunBackupAsync(second);
 
         fixture.Db.ChangeTracker.Clear();
-        var paths = await fixture.Db.BackupTables.OrderBy(x => x.Table).ThenBy(x => x.StoragePath).Select(x => x.StoragePath).ToListAsync();
-        Assert.Equal(2, paths.Count);
-        Assert.All(paths, path =>
+        var backups = await fixture.Db.Backups
+            .Include(x => x.Tables).ThenInclude(x => x.Shards)
+            .OrderBy(x => x.CreatedAt)
+            .ToListAsync();
+        Assert.Equal(2, backups.Count);
+        Assert.All(backups, backup =>
         {
-            Assert.StartsWith("backups/full/manual/analytics/orders/", path);
-            Assert.Matches(@"/[0-9]{8}T[0-9]{9}Z/[0-9a-f]{32}$", path);
+            Assert.NotNull(backup.StorageRootPath);
+            Assert.StartsWith("backups/runs/manual/", backup.StorageRootPath);
+            Assert.Matches(@"^backups/runs/manual/[0-9]{8}T[0-9]{9}Z-[0-9a-f]{32}$", backup.StorageRootPath!);
+            var table = Assert.Single(backup.Tables);
+            Assert.Equal($"{backup.StorageRootPath}/tables/analytics/orders/full", table.StoragePath);
+            var shard = Assert.Single(table.Shards);
+            Assert.StartsWith($"{table.StoragePath}/shards/shard-0001/attempt-", shard.StoragePath);
+            Assert.Matches(@"/attempt-[0-9a-f]{32}$", shard.StoragePath);
         });
-        Assert.NotEqual(paths[0], paths[1]);
+        Assert.NotEqual(backups[0].StorageRootPath, backups[1].StorageRootPath);
+        Assert.NotEqual(Assert.Single(Assert.Single(backups[0].Tables).Shards).StoragePath, Assert.Single(Assert.Single(backups[1].Tables).Shards).StoragePath);
     }
 
     [Fact]
@@ -114,7 +124,11 @@ public sealed class BackupRestoreExecutionTests
         Assert.Equal($"backups/manual/_chobo/{backupId:N}.json", manifestEntry.Key);
         Assert.Equal(backupId, manifest.Backup.Id);
         Assert.Equal(BackupRunStatus.Succeeded, manifest.Backup.Status);
-        Assert.Contains("backups/full/manual/sales/orders/", Assert.Single(manifest.RequiredStoragePaths));
+        var requiredPath = Assert.Single(manifest.RequiredStoragePaths);
+        Assert.StartsWith("backups/runs/manual/", requiredPath);
+        Assert.Contains("/tables/sales/orders/full/shards/shard-0001/attempt-", requiredPath, StringComparison.Ordinal);
+        Assert.Equal(requiredPath, Assert.Single(manifest.Tables).Shards.Single().StoragePath);
+        Assert.NotNull(manifest.Backup.StorageRootPath);
         Assert.Equal("source", manifest.SourceCluster.Name);
         Assert.Null(manifestJson.Contains("EncryptedPassword", StringComparison.OrdinalIgnoreCase) ? "leaked" : null);
         Assert.DoesNotContain("secret", manifestJson, StringComparison.OrdinalIgnoreCase);
@@ -448,7 +462,7 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
-    public async Task Backup_shard_does_not_retry_transient_submission_failure_when_no_clickhouse_operation_exists()
+    public async Task Backup_shard_retries_transient_submission_failure_with_fresh_attempt_path_when_no_clickhouse_operation_exists()
     {
         await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions
         {
@@ -466,15 +480,23 @@ public sealed class BackupRestoreExecutionTests
 
         fixture.Db.ChangeTracker.Clear();
         var backup = await fixture.Db.Backups.Include(x => x.Tables).ThenInclude(x => x.Shards).SingleAsync(x => x.Id == backupId);
-        var shard = Assert.Single(Assert.Single(backup.Tables).Shards);
-        Assert.Equal(BackupRunStatus.Failed, backup.Status);
-        Assert.Equal(BackupTableStatus.Failed, shard.Status);
-        Assert.Contains("did not find a matching ClickHouse backup operation", shard.Error);
-        Assert.Null(shard.ClickHouseOperationId);
-        Assert.Single(fixture.ClickHouse.BackupStartTables);
-        Assert.False(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "shard-retry-scheduled" && x.EntityId == shard.Id.ToString()));
+        var table = Assert.Single(backup.Tables);
+        var shard = Assert.Single(table.Shards);
+        Assert.Equal(BackupRunStatus.Succeeded, backup.Status);
+        Assert.Equal(BackupTableStatus.Succeeded, shard.Status);
+        Assert.NotNull(shard.ClickHouseOperationId);
+        Assert.Equal(2, fixture.ClickHouse.BackupStartTables.Count);
+        Assert.Equal(2, fixture.ClickHouse.BackupStartStoragePaths.Count);
+        Assert.NotEqual(fixture.ClickHouse.BackupStartStoragePaths[0], fixture.ClickHouse.BackupStartStoragePaths[1]);
+        Assert.All(fixture.ClickHouse.BackupStartStoragePaths, path =>
+        {
+            Assert.StartsWith($"{table.StoragePath}/shards/shard-0001/attempt-", path);
+            Assert.Matches(@"/attempt-[0-9a-f]{32}$", path);
+        });
+        Assert.Equal(fixture.ClickHouse.BackupStartStoragePaths[1], shard.StoragePath);
         Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "clickhouse-operation-recovery-not-found" && x.EntityId == shard.Id.ToString()));
-        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "shard-failed" && x.EntityId == shard.Id.ToString() && x.Details.Contains("unknown-submission-outcome")));
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "shard-retry-scheduled" && x.EntityId == shard.Id.ToString()));
+        Assert.Equal(2, await fixture.Db.AuditEntries.CountAsync(x => x.Action == "shard-attempt-path-assigned" && x.EntityId == shard.Id.ToString()));
     }
 
     [Fact]
@@ -501,10 +523,13 @@ public sealed class BackupRestoreExecutionTests
         fixture.Db.ChangeTracker.Clear();
         var backupAfterRun = await fixture.Db.Backups.Include(x => x.Tables).ThenInclude(x => x.Shards).SingleAsync(x => x.Id == backup.Id);
         var shardAfterRun = Assert.Single(Assert.Single(backupAfterRun.Tables).Shards);
-        Assert.Equal(BackupRunStatus.Failed, backupAfterRun.Status);
-        Assert.Equal(BackupTableStatus.Failed, shardAfterRun.Status);
-        Assert.Null(shardAfterRun.ClickHouseOperationId);
+        Assert.Equal(BackupRunStatus.Succeeded, backupAfterRun.Status);
+        Assert.Equal(BackupTableStatus.Succeeded, shardAfterRun.Status);
+        Assert.NotNull(shardAfterRun.ClickHouseOperationId);
+        Assert.Equal(2, fixture.ClickHouse.BackupStartStoragePaths.Count);
+        Assert.NotEqual(fixture.ClickHouse.BackupStartStoragePaths[0], fixture.ClickHouse.BackupStartStoragePaths[1]);
         Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "clickhouse-operation-recovery-not-found" && x.EntityId == shardAfterRun.Id.ToString()));
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "shard-retry-scheduled" && x.EntityId == shardAfterRun.Id.ToString()));
     }
 
     [Fact]
@@ -532,12 +557,14 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
-    public async Task Backup_shard_resume_without_operation_id_fails_instead_of_starting_duplicate_destination()
+    public async Task Backup_shard_resume_without_operation_id_starts_fresh_attempt_when_no_operation_is_found()
     {
         await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
         var backup = await fixture.SeedBackupWithTablesAsync([
             new SeedBackupTable("sales", "resume_missing_orders", BackupTableStatus.Running, null, true)
         ]);
+        var originalShard = await fixture.Db.BackupTableShards.SingleAsync(x => x.BackupTable!.BackupId == backup.Id);
+        var originalStoragePath = originalShard.StoragePath;
         fixture.Db.ChangeTracker.Clear();
 
         await fixture.RunBackupAsync(backup.Id);
@@ -545,12 +572,16 @@ public sealed class BackupRestoreExecutionTests
         fixture.Db.ChangeTracker.Clear();
         var completed = await fixture.Db.Backups.Include(x => x.Tables).ThenInclude(x => x.Shards).SingleAsync(x => x.Id == backup.Id);
         var completedShard = Assert.Single(Assert.Single(completed.Tables).Shards);
-        Assert.Equal(BackupRunStatus.Failed, completed.Status);
-        Assert.Equal(BackupTableStatus.Failed, completedShard.Status);
-        Assert.Null(completedShard.ClickHouseOperationId);
-        Assert.Contains("will not start another backup", completedShard.Error);
-        Assert.Empty(fixture.ClickHouse.BackupStartTables);
-        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "shard-failed" && x.EntityId == completedShard.Id.ToString() && x.Details.Contains("missing-operation-id-on-resume")));
+        Assert.Equal(BackupRunStatus.Succeeded, completed.Status);
+        Assert.Equal(BackupTableStatus.Succeeded, completedShard.Status);
+        Assert.NotNull(completedShard.ClickHouseOperationId);
+        Assert.Single(fixture.ClickHouse.BackupStartTables);
+        Assert.Single(fixture.ClickHouse.BackupStartStoragePaths);
+        Assert.NotEqual(originalStoragePath, completedShard.StoragePath);
+        Assert.Equal(fixture.ClickHouse.BackupStartStoragePaths[0], completedShard.StoragePath);
+        Assert.StartsWith($"{originalStoragePath.TrimEnd('/')}/attempt-", completedShard.StoragePath);
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "clickhouse-operation-recovery-not-found" && x.EntityId == completedShard.Id.ToString() && x.Details.Contains("missing-operation-id-on-resume")));
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "shard-attempt-path-assigned" && x.EntityId == completedShard.Id.ToString() && x.Details.Contains(originalStoragePath)));
     }
 
     [Fact]
@@ -772,6 +803,7 @@ public sealed class BackupRestoreExecutionTests
         fixture.Db.ChangeTracker.Clear();
         var backup = await fixture.Db.Backups.Include(x => x.Tables).ThenInclude(x => x.SchemaDefinition).SingleAsync(x => x.Id == backupId);
         Assert.Equal(BackupRunStatus.Succeeded, backup.Status);
+        Assert.Null(backup.StorageRootPath);
         var table = Assert.Single(backup.Tables);
         Assert.False(table.DataBackedUp);
         Assert.Equal(BackupTableStatus.Succeeded, table.Status);
@@ -1008,7 +1040,8 @@ public sealed class BackupRestoreExecutionTests
         var newTable = Assert.Single(tables, x => x.Table == "new_orders");
         var existingTable = Assert.Single(tables, x => x.Table == "orders");
         Assert.Equal(BackupType.Full, newTable.EffectiveBackupType);
-        Assert.StartsWith("backups/full/", newTable.StoragePath);
+        Assert.StartsWith("backups/runs/policy-", newTable.StoragePath);
+        Assert.Contains("/tables/sales/new_orders/full", newTable.StoragePath, StringComparison.Ordinal);
         Assert.Equal(BackupType.Incremental, existingTable.EffectiveBackupType);
         Assert.NotNull(existingTable.ParentFullBackupTableId);
         Assert.Contains($"parent-full-{full.Id:N}", existingTable.StoragePath);
@@ -1115,7 +1148,8 @@ public sealed class BackupRestoreExecutionTests
         Assert.Contains($"parent-full-{full.Id:N}", shardOne.StoragePath);
         Assert.Equal(BackupType.Full, shardTwo.EffectiveBackupType);
         Assert.Null(shardTwo.ParentFullBackupTableShardId);
-        Assert.StartsWith("backups/full/", shardTwo.StoragePath);
+        Assert.StartsWith("backups/runs/policy-", shardTwo.StoragePath);
+        Assert.Contains("/tables/sales/orders/full/shards/shard-0002/attempt-", shardTwo.StoragePath, StringComparison.Ordinal);
 
         var laterIncremental = new BackupEntity
         {
@@ -1171,7 +1205,8 @@ public sealed class BackupRestoreExecutionTests
         var table = await fixture.Db.BackupTables.Include(x => x.Shards).SingleAsync(x => x.BackupId == incremental.Id);
         Assert.Equal(BackupType.Full, table.EffectiveBackupType);
         Assert.Null(table.ParentFullBackupTableId);
-        Assert.StartsWith("backups/full/", table.StoragePath);
+        Assert.StartsWith("backups/runs/policy-", table.StoragePath);
+        Assert.Contains("/tables/sales/orders/full", table.StoragePath, StringComparison.Ordinal);
         Assert.DoesNotContain($"parent-full-{full.Id:N}", table.StoragePath);
         var shard = Assert.Single(table.Shards);
         Assert.Equal(BackupType.Full, shard.EffectiveBackupType);
@@ -3594,6 +3629,67 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Garbage_collector_deletes_known_paths_manifest_then_storage_root_and_unknown_objects()
+    {
+        var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now));
+        var policy = await fixture.SeedPolicyAsync();
+        var backup = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.ManualDeleteRequested, now.AddMinutes(-30), tableName: "orders");
+        backup.StorageRootPath = $"backups/runs/manual/{backup.Id:N}";
+        backup.DeletionReason = "manual";
+        backup.DeletionRequestedAt = now.AddMinutes(-20);
+        var table = backup.Tables.Single();
+        table.StoragePath = $"{backup.StorageRootPath}/tables/sales/orders/full";
+        foreach (var shard in table.Shards)
+        {
+            shard.StoragePath = $"{table.StoragePath}/shards/shard-{shard.SourceShardNumber:0000}/attempt-{Guid.NewGuid():N}";
+        }
+        var manifestPath = BackupStorageManifestService.ManifestPath(backup);
+        fixture.StorageDeletion.Objects[$"{backup.StorageRootPath}/unlisted/attempt-leftover.bin"] = [1, 2, 3];
+        fixture.StorageDeletion.Objects[manifestPath] = [4, 5, 6];
+        await fixture.Db.SaveChangesAsync();
+
+        var result = await fixture.Services.GetRequiredService<BackupsGarbageCollectorBackgroundService>().RunOnceAsync();
+
+        fixture.Db.ChangeTracker.Clear();
+        var completed = await fixture.Db.Backups.SingleAsync(x => x.Id == backup.Id);
+        Assert.Equal(BackupRunStatus.ManualDeleted, completed.Status);
+        Assert.Null(completed.DeletionError);
+        Assert.Equal(1, result.LastCleanedCount);
+        Assert.Equal([$"dir:{table.StoragePath}", $"obj:{manifestPath}", $"dir:{backup.StorageRootPath}"], fixture.StorageDeletion.StorageOperations);
+        Assert.DoesNotContain(fixture.StorageDeletion.Objects.Keys, key => key.StartsWith(backup.StorageRootPath, StringComparison.Ordinal));
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "backup-cleanup-succeeded" && x.EntityId == backup.Id.ToString() && x.Details.Contains("storageRootDeleted") && x.Details.Contains(backup.StorageRootPath)));
+    }
+
+    [Fact]
+    public async Task Garbage_collector_root_delete_failure_keeps_backup_pending_with_deletion_error()
+    {
+        var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now));
+        var policy = await fixture.SeedPolicyAsync();
+        var backup = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.ManualDeleteRequested, now.AddMinutes(-30), tableName: "orders");
+        backup.StorageRootPath = $"backups/runs/manual/{backup.Id:N}";
+        backup.DeletionReason = "manual";
+        backup.DeletionRequestedAt = now.AddMinutes(-20);
+        var table = backup.Tables.Single();
+        table.StoragePath = $"{backup.StorageRootPath}/tables/sales/orders/full";
+        fixture.StorageDeletion.FailDeleteDirectoryPath = backup.StorageRootPath;
+        await fixture.Db.SaveChangesAsync();
+
+        var result = await fixture.Services.GetRequiredService<BackupsGarbageCollectorBackgroundService>().RunOnceAsync();
+
+        fixture.Db.ChangeTracker.Clear();
+        var pending = await fixture.Db.Backups.SingleAsync(x => x.Id == backup.Id);
+        Assert.Equal(BackupRunStatus.ManualDeleteRequested, pending.Status);
+        Assert.Null(pending.DeletedAt);
+        Assert.Contains("simulated cleanup crash", pending.DeletionError);
+        Assert.Equal(0, result.LastCleanedCount);
+        Assert.Contains($"dir:{table.StoragePath}", fixture.StorageDeletion.StorageOperations);
+        Assert.Contains($"obj:{BackupStorageManifestService.ManifestPath(backup)}", fixture.StorageDeletion.StorageOperations);
+        Assert.DoesNotContain($"dir:{backup.StorageRootPath}", fixture.StorageDeletion.StorageOperations);
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "backup-cleanup-failed" && x.EntityId == backup.Id.ToString() && x.Details.Contains(backup.StorageRootPath) && x.Details.Contains("storageRootDeleted")));
+    }
+    [Fact]
     public async Task Garbage_collector_queue_lists_pending_and_policy_eligible_items()
     {
         var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
@@ -5181,6 +5277,7 @@ public sealed class BackupRestoreExecutionTests
         public List<ClickHouseShardReplicaInfo> Topology { get; } = [new(1, "single", 1, "source", 9000, false, 0)];
         public Dictionary<string, string> KnownOperations { get; } = new(StringComparer.Ordinal);
         public List<(string OperationId, string StoragePath)> BackupOperations { get; } = [];
+        public List<string> BackupStartStoragePaths { get; } = [];
         public List<string> BackupStartTables { get; } = [];
         public List<int> BackupStartShardNumbers { get; } = [];
         public List<ClickHouseNodeEndpoint> BackupStartEndpoints { get; } = [];
@@ -5322,6 +5419,7 @@ public sealed class BackupRestoreExecutionTests
                 }
                 BackupStartTables.Add(table.Table);
                 BackupStartShardNumbers.Add(shard.SourceShardNumber);
+                BackupStartStoragePaths.Add(shard.StoragePath);
                 BackupStartEndpoints.Add(endpoint);
                 BackupStartSql.Add($"BACKUP TABLE {ClickHouseSql.Qualified(table.Database, table.Table)} TO <target>{ClickHouseAdvancedSettings.ToSettingsClause(settings)} ASYNC");
                 BackupBasePaths.Add(baseBackupPath);
@@ -5535,6 +5633,7 @@ public sealed class BackupRestoreExecutionTests
         public List<string> StorageOperations { get; } = [];
         public Dictionary<string, byte[]> Objects { get; } = new(StringComparer.Ordinal);
         public bool FailNextDelete { get; set; }
+        public string? FailDeleteDirectoryPath { get; set; }
         public int FailWriteCount { get; set; }
         public int WriteObjectCount { get; private set; }
         public bool DelayWritesUntilCanceled { get; set; }
@@ -5574,14 +5673,20 @@ public sealed class BackupRestoreExecutionTests
 
         public Task DeleteDirectoryAsync(BackupTargetEntity target, string directoryPath, CancellationToken cancellationToken = default)
         {
-            if (FailNextDelete)
+            if (FailNextDelete || string.Equals(FailDeleteDirectoryPath, directoryPath, StringComparison.Ordinal))
             {
                 FailNextDelete = false;
+                FailDeleteDirectoryPath = null;
                 throw new InvalidOperationException("simulated cleanup crash");
             }
 
             DeletedDirectories.Add(directoryPath);
             StorageOperations.Add($"dir:{directoryPath}");
+            var prefix = directoryPath.TrimEnd('/') + "/";
+            foreach (var key in Objects.Keys.Where(x => string.Equals(x, directoryPath, StringComparison.Ordinal) || x.StartsWith(prefix, StringComparison.Ordinal)).ToList())
+            {
+                Objects.Remove(key);
+            }
             return Task.CompletedTask;
         }
 
@@ -6013,6 +6118,7 @@ public sealed class BackupRestoreExecutionTests
                 backup.RequestedByUserId,
                 backup.RequestedByName,
                 backup.ManualRequestJson,
+                backup.StorageRootPath,
                 backup.CreatedAt,
                 backup.StartedAt,
                 backup.CompletedAt,

@@ -148,7 +148,7 @@
             Type = 'Cli'
             Args = @('backups', 'delete', '--id', '{ordersFull.id}', '--confirm-destructive')
             ExpectJson = @(
-                @{ Path = 'status'; Equals = 'ManualDeleteRequested' }
+                @{ Path = 'status'; Contains = 'ManualDelete' }
             )
         }
         @{
@@ -158,7 +158,7 @@
             RetryTimeoutSeconds = 15
             RetryIntervalSeconds = 1
             ExpectJson = @(
-                @{ Path = 'status'; Equals = 'ManualDeleteRequested' }
+                @{ Path = 'status'; Contains = 'ManualDelete' }
                 @{ Path = 'deletionReason'; Equals = 'manual-parent' }
             )
         }

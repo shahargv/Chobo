@@ -78,6 +78,30 @@
             ExpectTextContains = '{backup.id.n}'
         }
         @{
+            Name = 'show-sharded-backup-detail'
+            Type = 'Cli'
+            Args = @('backups', 'show', '--id', '{backup.id}')
+            SaveJsonAs = 'completedBackup'
+            ExpectJson = @(
+                @{ Path = 'storageRootPath'; NotEmpty = $true }
+                @{ Path = 'tables[0].shards'; Count = 2 }
+            )
+        }
+        @{
+            Name = 'write-unlisted-object-under-storage-root'
+            Type = 'Shell'
+            Args = @('sh', '-c', 'printf orphaned-attempt > /tmp/chobo-orphaned-attempt.txt && mc cp /tmp/chobo-orphaned-attempt.txt chobo/{backupStore.Bucket}/{completedBackup.storageRootPath}/unlisted/orphaned-attempt.txt')
+            ExpectTextContains = 'orphaned-attempt.txt'
+        }
+        @{
+            Name = 'unlisted-root-object-exists-before-delete'
+            Type = 'Shell'
+            Args = @('mc', 'ls', '--recursive', 'chobo/{backupStore.Bucket}/{completedBackup.storageRootPath}')
+            RetryTimeoutSeconds = 15
+            RetryIntervalSeconds = 1
+            ExpectTextContains = 'unlisted/orphaned-attempt.txt'
+        }
+        @{
             Name = 'request-sharded-delete'
             Type = 'Cli'
             Args = @('backups', 'delete', '--id', '{backup.id}', '--confirm-destructive')
@@ -100,7 +124,7 @@
             Args = @('mc', 'ls', '--recursive', 'chobo/{backupStore.Bucket}')
             RetryTimeoutSeconds = 15
             RetryIntervalSeconds = 1
-            ExpectTextNotContains = '{backup.id.n}'
+            ExpectTextNotContains = @('{backup.id.n}', '{completedBackup.storageRootPath}', 'unlisted/orphaned-attempt.txt')
         }
         @{
             Name = 'show-sharded-delete-audit'

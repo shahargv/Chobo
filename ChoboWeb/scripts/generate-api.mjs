@@ -78,6 +78,7 @@ const nullableProperties = new Set([
   "sourceShardName",
   "sourceShards",
   "startedAt",
+  "storageRootPath",
   "targetDatabase",
   "targetReplicaNumber",
   "targetShard",

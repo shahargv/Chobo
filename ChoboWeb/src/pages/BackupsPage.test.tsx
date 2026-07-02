@@ -451,6 +451,7 @@ function baseBackup(overrides: Partial<BackupDto> = {}): BackupDto {
     requestedByUserId: overrides.requestedByUserId ?? null,
     requestedByName: overrides.requestedByName ?? "operator",
     manualRequestJson: overrides.manualRequestJson ?? null,
+    storageRootPath: overrides.storageRootPath ?? null,
     createdAt: overrides.createdAt ?? "2026-06-22T00:00:00Z",
     startedAt: overrides.startedAt ?? "2026-06-22T00:01:00Z",
     endedAt: overrides.endedAt ?? "2026-06-22T00:02:00Z",

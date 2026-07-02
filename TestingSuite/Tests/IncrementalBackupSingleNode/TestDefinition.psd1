@@ -70,7 +70,8 @@
                 @{ Path = 'endedAt'; NotEmpty = $true }
                 @{ Path = 'backupType'; Equals = 'Full' }
                 @{ Path = 'tables[0].effectiveBackupType'; Equals = 'Full' }
-                @{ Path = 'tables[0].storagePath'; Contains = 'backups/full/' }
+                @{ Path = 'storageRootPath'; Contains = 'backups/runs/policy-{policy.id.n}/' }
+                @{ Path = 'tables[0].storagePath'; Contains = '/tables/incremental_single_source/orders/full' }
             )
         }
         @{ Name = 'mutate-source-data'; Type = 'Sql'; Resource = 'source'; Path = 'Sql/mutate-source-data.sql' }

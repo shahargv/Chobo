@@ -41,6 +41,7 @@ public sealed record BackupDto(
     Guid? RequestedByUserId,
     string RequestedByName,
     string? ManualRequestJson,
+    string? StorageRootPath,
     DateTimeOffset CreatedAt,
     DateTimeOffset? StartedAt,
     DateTimeOffset? EndedAt,

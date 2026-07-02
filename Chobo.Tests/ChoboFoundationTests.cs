@@ -943,6 +943,45 @@ public sealed class ChoboFoundationTests
     }
 
     [Fact]
+    public async Task Config_import_accepts_previous_version_config_payload_without_storage_root_path()
+    {
+        await using var factory = CreateFactory();
+        var client = AuthenticatedClient(factory);
+        var previousVersionConfigJson = JsonSerializer.Serialize(new
+        {
+            exportVersion = ChoboApi.ExportVersion,
+            schemaVersion = ChoboApi.SchemaVersion,
+            generatedAt = DateTimeOffset.Parse("2026-05-15T10:11:12+00:00"),
+            productVersion = "0.12.0",
+            data = new
+            {
+                users = Array.Empty<object>(),
+                accessTokens = Array.Empty<object>(),
+                clusters = Array.Empty<object>(),
+                backupTargets = Array.Empty<object>(),
+                backupPolicies = Array.Empty<object>(),
+                backupSchedules = Array.Empty<object>(),
+                schemaDefinitions = Array.Empty<object>(),
+                backups = Array.Empty<object>(),
+                backupTables = Array.Empty<object>(),
+                backupTableShards = Array.Empty<object>(),
+                restores = Array.Empty<object>(),
+                restoreTables = Array.Empty<object>(),
+                restoreTableShards = Array.Empty<object>()
+            }
+        }, JsonOptions);
+        using var content = new StringContent(previousVersionConfigJson);
+        content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+
+        var response = await client.PostAsync("/api/v1/config/import", content);
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+        var audit = await db.AuditEntries.SingleAsync(x => x.Action == "import" && x.EntityType == "config");
+        Assert.Contains("\"schemaVersion\"", audit.Details);
+    }
+    [Fact]
     public async Task Config_import_treats_encrypted_credentials_as_empty()
     {
         await using var sourceFactory = CreateFactory();
