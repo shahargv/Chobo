@@ -3,6 +3,7 @@ namespace ChoboServer.Options;
 public sealed class ChoboBackupRestoreOptions
 {
     public int MaxDop { get; set; } = 3;
+    public int WorkerCount { get; set; } = 3;
     public int QueueCapacity { get; set; } = 100;
     public int MaxActiveQueueItems { get; set; } = 1000;
     public TimeSpan SchedulerInterval { get; set; } = TimeSpan.FromMinutes(1);
@@ -35,3 +36,4 @@ public sealed class BackupStorageOperationOptions
     public int S3MaxErrorRetry { get; set; } = 5;
     public int S3DeleteBatchSize { get; set; } = 1000;
 }
+

@@ -7,31 +7,19 @@ namespace ChoboServer.Services;
 
 public interface IBackupRestoreQueues
 {
-    Channel<Guid> Backups { get; }
-    Channel<Guid> SchemaOnlyBackups { get; }
-    Channel<Guid> Restores { get; }
+    Channel<BackupRestoreOperationWorkItem> Operations { get; }
     ValueTask QueueBackupAsync(Guid id, BackupContentMode contentMode = BackupContentMode.SchemaAndData, CancellationToken cancellationToken = default);
     ValueTask QueueRestoreAsync(Guid id, CancellationToken cancellationToken = default);
 }
+
+public sealed record BackupRestoreOperationWorkItem(BackupRestoreQueueKind Kind, Guid OperationId, BackupContentMode? ContentMode, string Reason);
 
 public sealed class BackupRestoreQueues : IBackupRestoreQueues
 {
     public BackupRestoreQueues(IOptions<ChoboBackupRestoreOptions> options)
     {
         var capacity = options.Value.QueueCapacity <= 0 ? 100 : options.Value.QueueCapacity;
-        Backups = Channel.CreateBounded<Guid>(new BoundedChannelOptions(capacity)
-        {
-            FullMode = BoundedChannelFullMode.Wait,
-            SingleReader = false,
-            SingleWriter = false
-        });
-        SchemaOnlyBackups = Channel.CreateBounded<Guid>(new BoundedChannelOptions(capacity)
-        {
-            FullMode = BoundedChannelFullMode.Wait,
-            SingleReader = false,
-            SingleWriter = false
-        });
-        Restores = Channel.CreateBounded<Guid>(new BoundedChannelOptions(capacity)
+        Operations = Channel.CreateBounded<BackupRestoreOperationWorkItem>(new BoundedChannelOptions(capacity)
         {
             FullMode = BoundedChannelFullMode.Wait,
             SingleReader = false,
@@ -39,16 +27,11 @@ public sealed class BackupRestoreQueues : IBackupRestoreQueues
         });
     }
 
-    public Channel<Guid> Backups { get; }
-    public Channel<Guid> SchemaOnlyBackups { get; }
-    public Channel<Guid> Restores { get; }
+    public Channel<BackupRestoreOperationWorkItem> Operations { get; }
 
     public ValueTask QueueBackupAsync(Guid id, BackupContentMode contentMode = BackupContentMode.SchemaAndData, CancellationToken cancellationToken = default) =>
-        contentMode == BackupContentMode.SchemaOnly
-            ? SchemaOnlyBackups.Writer.WriteAsync(id, cancellationToken)
-            : Backups.Writer.WriteAsync(id, cancellationToken);
+        Operations.Writer.WriteAsync(new BackupRestoreOperationWorkItem(BackupRestoreQueueKind.Backup, id, contentMode, "backup-queued"), cancellationToken);
 
     public ValueTask QueueRestoreAsync(Guid id, CancellationToken cancellationToken = default) =>
-        Restores.Writer.WriteAsync(id, cancellationToken);
+        Operations.Writer.WriteAsync(new BackupRestoreOperationWorkItem(BackupRestoreQueueKind.Restore, id, null, "restore-queued"), cancellationToken);
 }
-

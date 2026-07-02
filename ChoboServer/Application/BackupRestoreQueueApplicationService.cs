@@ -1,8 +1,10 @@
 using System.Text.Json;
 using Chobo.Contracts;
 using ChoboServer.Data;
+using ChoboServer.Options;
 using ChoboServer.Services;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace ChoboServer.Application;
 
@@ -11,7 +13,9 @@ public sealed class BackupRestoreQueueApplicationService(
     IAuditService audit,
     ActorContext actor,
     IBackupRestoreConcurrencyCoordinator concurrency,
-    IEndpointRewriteService endpointRewrites)
+    IEndpointRewriteService endpointRewrites,
+    BackupRestoreQueueClaimPolicy claimPolicy,
+    IOptionsMonitor<ChoboBackupRestoreOptions> options)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private const long PositionStep = 1000;
@@ -93,7 +97,7 @@ public sealed class BackupRestoreQueueApplicationService(
 
 
     public sealed record QueueWorkItem(Guid TableId, Guid ShardId, bool IsForced, bool IsResume = false);
-    public sealed record QueueClaimResult(QueueWorkItem? WorkItem, bool HasQueuedWork);
+    public sealed record QueueClaimResult(QueueWorkItem? WorkItem, bool HasQueuedWork, bool BlockedByEarlierOperation = false);
 
     public async Task<QueueClaimResult> TryTakeNextBackupWorkAsync(Guid backupId, CancellationToken cancellationToken = default)
     {
@@ -107,16 +111,52 @@ public sealed class BackupRestoreQueueApplicationService(
             .Select(x => new { x.LogicalShardNumber })
             .ToListAsync(cancellationToken);
         var clusterRunning = runningItems.Count;
-        var candidates = await db.BackupRestoreQueueItems
-            .Where(x => x.Kind == BackupRestoreQueueKind.Backup && x.StartedAt == null && x.CompletedAt == null)
-            .OrderByDescending(x => x.IsForced)
-            .ThenBy(x => x.Position)
-            .Take(256)
-            .ToListAsync(cancellationToken);
         var hasQueuedWork = false;
-        foreach (var item in candidates)
+        bool? lastIsForced = null;
+        long? lastPosition = null;
+        DateTimeOffset? lastCreatedAt = null;
+        while (true)
         {
-            var shard = await db.BackupTableShards.Include(x => x.BackupTable).FirstOrDefaultAsync(x => x.Id == item.ShardId, cancellationToken);
+            var candidateQuery = claimPolicy.OrderedQueuedCandidates(db.BackupRestoreQueueItems);
+            if (lastIsForced is { } forced && lastPosition is { } position && lastCreatedAt is { } createdAt)
+            {
+                candidateQuery = candidateQuery.Where(x => forced
+                    ? (!x.IsForced || (x.IsForced && (x.Position > position || (x.Position == position && x.CreatedAt > createdAt))))
+                    : (!x.IsForced && (x.Position > position || (x.Position == position && x.CreatedAt > createdAt))));
+            }
+
+            var candidates = await candidateQuery
+                .Take(claimPolicy.CandidateWindow)
+                .ToListAsync(cancellationToken);
+            if (candidates.Count == 0)
+            {
+                break;
+            }
+
+            var lastCandidate = candidates[^1];
+            lastIsForced = lastCandidate.IsForced;
+            lastPosition = lastCandidate.Position;
+            lastCreatedAt = lastCandidate.CreatedAt;
+            foreach (var item in candidates)
+            {
+                if (item.Kind != BackupRestoreQueueKind.Backup)
+                {
+                    if (!await IsQueueItemActiveAsync(item, cancellationToken))
+                    {
+                        continue;
+                    }
+
+                    hasQueuedWork = await HasPendingBackupWorkAsync(backupId, cancellationToken);
+                    if (hasQueuedWork)
+                    {
+                        await transaction.CommitAsync(cancellationToken);
+                        return new QueueClaimResult(null, true, true);
+                    }
+
+                    continue;
+                }
+
+                var shard = await db.BackupTableShards.Include(x => x.BackupTable).FirstOrDefaultAsync(x => x.Id == item.ShardId, cancellationToken);
             if (shard is null)
             {
                 continue;
@@ -131,20 +171,21 @@ public sealed class BackupRestoreQueueApplicationService(
                 if (hasQueuedWork)
                 {
                     await transaction.CommitAsync(cancellationToken);
-                    return new QueueClaimResult(null, true);
+                    return new QueueClaimResult(null, true, true);
                 }
 
                 continue;
             }
             hasQueuedWork = true;
             var isResume = shard.Status == BackupTableStatus.Running;
-            var shardLimit = ShardMaxDop(backup.SourceCluster!, item.LogicalShardNumber, item.LogicalShardName);
-            var shardRunning = runningItems.Count(x => x.LogicalShardNumber == item.LogicalShardNumber);
-            var destinationKey = BuildBackupDestinationKey(backup.Target, shard.StoragePath);
-            if (destinationKey is not null && await IsBackupDestinationBlockedAsync(item.ShardId, destinationKey, cancellationToken))
+            if (!item.IsForced && !isResume && !await HasActiveQueueCapacityAsync(options.CurrentValue.MaxActiveQueueItems, cancellationToken))
             {
                 continue;
             }
+
+            var shardLimit = ShardMaxDop(backup.SourceCluster!, item.LogicalShardNumber, item.LogicalShardName);
+            var shardRunning = runningItems.Count(x => x.LogicalShardNumber == item.LogicalShardNumber);
+            var destinationKey = BuildBackupDestinationKey(backup.Target, shard.StoragePath);
             if (!concurrency.TryReserveQueueItem(
                     item.Kind,
                     item.OperationId,
@@ -242,6 +283,7 @@ public sealed class BackupRestoreQueueApplicationService(
                 concurrency.ReleaseQueueItem(item.Kind, item.ShardId);
                 throw;
             }
+            }
         }
         await transaction.CommitAsync(cancellationToken);
         return new QueueClaimResult(null, hasQueuedWork);
@@ -258,16 +300,52 @@ public sealed class BackupRestoreQueueApplicationService(
             .Select(x => new { x.LogicalShardNumber })
             .ToListAsync(cancellationToken);
         var clusterRunning = runningItems.Count;
-        var candidates = await db.BackupRestoreQueueItems
-            .Where(x => x.Kind == BackupRestoreQueueKind.Restore && x.StartedAt == null && x.CompletedAt == null)
-            .OrderByDescending(x => x.IsForced)
-            .ThenBy(x => x.Position)
-            .Take(256)
-            .ToListAsync(cancellationToken);
         var hasQueuedWork = false;
-        foreach (var item in candidates)
+        bool? lastIsForced = null;
+        long? lastPosition = null;
+        DateTimeOffset? lastCreatedAt = null;
+        while (true)
         {
-            var shard = await db.RestoreTableShards.Include(x => x.RestoreTable).FirstOrDefaultAsync(x => x.Id == item.ShardId, cancellationToken);
+            var candidateQuery = claimPolicy.OrderedQueuedCandidates(db.BackupRestoreQueueItems);
+            if (lastIsForced is { } forced && lastPosition is { } position && lastCreatedAt is { } createdAt)
+            {
+                candidateQuery = candidateQuery.Where(x => forced
+                    ? (!x.IsForced || (x.IsForced && (x.Position > position || (x.Position == position && x.CreatedAt > createdAt))))
+                    : (!x.IsForced && (x.Position > position || (x.Position == position && x.CreatedAt > createdAt))));
+            }
+
+            var candidates = await candidateQuery
+                .Take(claimPolicy.CandidateWindow)
+                .ToListAsync(cancellationToken);
+            if (candidates.Count == 0)
+            {
+                break;
+            }
+
+            var lastCandidate = candidates[^1];
+            lastIsForced = lastCandidate.IsForced;
+            lastPosition = lastCandidate.Position;
+            lastCreatedAt = lastCandidate.CreatedAt;
+            foreach (var item in candidates)
+            {
+                if (item.Kind != BackupRestoreQueueKind.Restore)
+                {
+                    if (!await IsQueueItemActiveAsync(item, cancellationToken))
+                    {
+                        continue;
+                    }
+
+                    hasQueuedWork = await HasPendingRestoreWorkAsync(restoreId, cancellationToken);
+                    if (hasQueuedWork)
+                    {
+                        await transaction.CommitAsync(cancellationToken);
+                        return new QueueClaimResult(null, true, true);
+                    }
+
+                    continue;
+                }
+
+                var shard = await db.RestoreTableShards.Include(x => x.RestoreTable).FirstOrDefaultAsync(x => x.Id == item.ShardId, cancellationToken);
             if (shard is null)
             {
                 continue;
@@ -282,13 +360,18 @@ public sealed class BackupRestoreQueueApplicationService(
                 if (hasQueuedWork)
                 {
                     await transaction.CommitAsync(cancellationToken);
-                    return new QueueClaimResult(null, true);
+                    return new QueueClaimResult(null, true, true);
                 }
 
                 continue;
             }
             hasQueuedWork = true;
             var isResume = shard.Status == RestoreTableStatus.Running;
+            if (!item.IsForced && !isResume && !await HasActiveQueueCapacityAsync(options.CurrentValue.MaxActiveQueueItems, cancellationToken))
+            {
+                continue;
+            }
+
             var shardLimit = ShardMaxDop(restore.TargetCluster!, item.LogicalShardNumber, item.LogicalShardName);
             var shardRunning = runningItems.Count(x => x.LogicalShardNumber == item.LogicalShardNumber);
             if (!concurrency.TryReserveQueueItem(
@@ -336,6 +419,7 @@ public sealed class BackupRestoreQueueApplicationService(
                 concurrency.ReleaseQueueItem(item.Kind, item.ShardId);
                 throw;
             }
+            }
         }
         await transaction.CommitAsync(cancellationToken);
         return new QueueClaimResult(null, hasQueuedWork);
@@ -365,6 +449,10 @@ public sealed class BackupRestoreQueueApplicationService(
                 (_, shard) => shard)
             .AnyAsync(shard => shard.Status == RestoreTableStatus.Queued || shard.Status == RestoreTableStatus.Running, cancellationToken);
 
+    private Task<bool> IsQueueItemActiveAsync(BackupRestoreQueueItemEntity item, CancellationToken cancellationToken) =>
+        item.Kind == BackupRestoreQueueKind.Backup
+            ? db.BackupTableShards.AnyAsync(x => x.Id == item.ShardId && (x.Status == BackupTableStatus.Queued || x.Status == BackupTableStatus.Running), cancellationToken)
+            : db.RestoreTableShards.AnyAsync(x => x.Id == item.ShardId && (x.Status == RestoreTableStatus.Queued || x.Status == RestoreTableStatus.Running), cancellationToken);
     public async Task<bool> IsNodeAvailableAsync(Guid clusterId, ClickHouseNodeEndpoint endpoint, bool force, CancellationToken cancellationToken = default)
     {
         if (force)
@@ -702,6 +790,27 @@ public sealed class BackupRestoreQueueApplicationService(
         }
     }
 
+    public async Task<bool> HasActiveQueueCapacityAsync(int maxActiveQueueItems, CancellationToken cancellationToken = default)
+    {
+        if (maxActiveQueueItems <= 0)
+        {
+            return true;
+        }
+
+        var activeQueueItems = await db.BackupRestoreQueueItems
+            .AsNoTracking()
+            .CountAsync(x => x.StartedAt != null && x.CompletedAt == null, cancellationToken);
+        return activeQueueItems < maxActiveQueueItems;
+    }
+
+    public Task<bool> HasForcedQueuedOperationWorkAsync(BackupRestoreQueueKind kind, Guid operationId, CancellationToken cancellationToken = default) =>
+        db.BackupRestoreQueueItems
+            .AsNoTracking()
+            .AnyAsync(x => x.Kind == kind &&
+                           x.OperationId == operationId &&
+                           x.IsForced &&
+                           x.StartedAt == null &&
+                           x.CompletedAt == null, cancellationToken);
     private async Task EnsureQueuedAsync(BackupRestoreQueueItemEntity item, CancellationToken cancellationToken)
     {
         var status = await GetStatusAsync(item, cancellationToken);
@@ -988,3 +1097,7 @@ public sealed class BackupRestoreQueueApplicationService(
         return new(item.Id, item.Kind, BackupRestoreQueueStatus.Failed, item.Position, item.IsForced, item.ForcedAt, item.ForcedByUserId, item.ForcedByName, item.OperationId, item.TableId, item.ShardId, item.ClusterId, "unknown", "unknown", item.LogicalShardNumber, item.LogicalShardName, item.NodeHost, item.NodePort, item.NodeUseTls, null, null, item.CreatedAt, item.StartedAt, item.CompletedAt, null, "Queue target row is missing.");
     }
 }
+
+
+
+

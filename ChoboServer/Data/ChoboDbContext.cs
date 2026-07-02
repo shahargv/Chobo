@@ -62,11 +62,14 @@ public sealed class ChoboDbContext(DbContextOptions<ChoboDbContext> options) : D
         modelBuilder.Entity<SchemaDefinitionEntity>().HasIndex(x => x.SchemaHash).IsUnique();
         modelBuilder.Entity<BackupRestoreQueueItemEntity>().Property(x => x.Kind).HasConversion<int>();
         modelBuilder.Entity<BackupRestoreQueueItemEntity>().HasIndex(x => new { x.IsForced, x.Position });
+        modelBuilder.Entity<BackupRestoreQueueItemEntity>().HasIndex(x => x.Position);
         modelBuilder.Entity<BackupRestoreQueueItemEntity>().HasIndex(x => x.CompletedAt);
+        modelBuilder.Entity<BackupRestoreQueueItemEntity>().HasIndex(x => new { x.StartedAt, x.CompletedAt, x.IsForced, x.Position, x.CreatedAt });
         modelBuilder.Entity<BackupRestoreQueueItemEntity>().HasIndex(x => new { x.Kind, x.OperationId });
         modelBuilder.Entity<BackupRestoreQueueItemEntity>().HasIndex(x => x.ShardId).IsUnique();
-        modelBuilder.Entity<BackupRestoreQueueItemEntity>().HasIndex(x => new { x.ClusterId, x.LogicalShardNumber });
-        modelBuilder.Entity<BackupRestoreQueueItemEntity>().HasIndex(x => new { x.NodeHost, x.NodePort, x.NodeUseTls });
+        modelBuilder.Entity<BackupRestoreQueueItemEntity>().HasIndex(x => new { x.ClusterId, x.StartedAt, x.CompletedAt });
+        modelBuilder.Entity<BackupRestoreQueueItemEntity>().HasIndex(x => new { x.ClusterId, x.LogicalShardNumber, x.StartedAt, x.CompletedAt });
+        modelBuilder.Entity<BackupRestoreQueueItemEntity>().HasIndex(x => new { x.ClusterId, x.NodeHost, x.NodePort, x.NodeUseTls, x.StartedAt, x.CompletedAt });
         modelBuilder.Entity<BackupEntity>().Property(x => x.ContentMode).HasConversion<int>();
         modelBuilder.Entity<BackupEntity>().HasIndex(x => x.Status);
         modelBuilder.Entity<BackupEntity>().HasIndex(x => x.PolicyId);
@@ -155,3 +158,5 @@ public sealed class ChoboDbContext(DbContextOptions<ChoboDbContext> options) : D
         }
     }
 }
+
+

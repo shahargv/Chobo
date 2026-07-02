@@ -2,6 +2,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Chobo.Contracts;
+using ChoboServer.Application;
 using ChoboServer.Data;
 using Microsoft.EntityFrameworkCore;
 
@@ -13,7 +14,7 @@ public interface IExportImportService
     Task ImportAsync(ExportEnvelope envelope, bool configOnly);
 }
 
-public sealed class ExportImportService(ChoboDbContext db, IActorContext actor) : IExportImportService
+public sealed class ExportImportService(ChoboDbContext db, IActorContext actor, BackupRestoreOperationGate operationGate) : IExportImportService
 {
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
@@ -76,9 +77,15 @@ public sealed class ExportImportService(ChoboDbContext db, IActorContext actor) 
         {
             throw new InvalidOperationException($"Unsupported schema version {envelope.SchemaVersion}.");
         }
+        await using var importGate = await operationGate.EnterAsync();
         if (configOnly && (await db.Backups.AnyAsync() || await db.Restores.AnyAsync()))
         {
             throw new InvalidOperationException("Config import cannot run while backup or restore history exists. Use data import to restore operational state, or start from an empty server.");
+        }
+
+        if (!configOnly && await HasActiveOperationalStateAsync())
+        {
+            throw new InvalidOperationException("Data import cannot run while local backup or restore operations are queued or running.");
         }
 
         var import = BuildImportPlan(envelope.Data, configOnly);
@@ -86,6 +93,7 @@ public sealed class ExportImportService(ChoboDbContext db, IActorContext actor) 
         await using var transaction = await db.Database.BeginTransactionAsync();
         try
         {
+            await db.BackupRestoreQueueItems.ExecuteDeleteAsync();
             await db.RestoreTableShards.ExecuteDeleteAsync();
             await db.RestoreTables.ExecuteDeleteAsync();
             await db.Restores.ExecuteDeleteAsync();
@@ -413,6 +421,14 @@ public sealed class ExportImportService(ChoboDbContext db, IActorContext actor) 
         return result;
     }
 
+    private async Task<bool> HasActiveOperationalStateAsync()
+    {
+        db.ChangeTracker.Clear();
+        return await db.Backups.AsNoTracking().AnyAsync(x => x.Status == BackupRunStatus.Queued || x.Status == BackupRunStatus.Running) ||
+               await db.Restores.AsNoTracking().AnyAsync(x => x.Status == RestoreRunStatus.Queued || x.Status == RestoreRunStatus.Running) ||
+               await db.BackupRestoreQueueItems.AsNoTracking().AnyAsync(x => x.CompletedAt == null);
+    }
+
     private sealed record ImportPlan(ExportPayload Payload, int SkippedRows);
     private static IReadOnlyList<ClusterNodeMaxDopOverrideDto> DeserializeNodeOverrides(string json)
     {
@@ -436,3 +452,4 @@ public sealed class ExportImportService(ChoboDbContext db, IActorContext actor) 
         return options;
     }
 }
+

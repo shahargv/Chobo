@@ -17,6 +17,7 @@ public sealed class BackupApplicationService(
     BackupPreparationService preparation,
     IClickHouseAdapter clickHouse,
     IOptionsMonitor<ChoboBackupRestoreOptions> options,
+    BackupRestoreOperationGate operationGate,
     IAuditService audit,
     ActorContext actor,
     Serilog.ILogger logger)
@@ -120,6 +121,7 @@ public sealed class BackupApplicationService(
             RequestedByName = actor.ActorName
         };
 
+        await using var operationCreationGate = await operationGate.EnterAsync(cancellationToken);
         db.Backups.Add(backup);
         await db.SaveChangesAsync(cancellationToken);
         _logger.Information("Manual backup {BackupId} created by {ActorName} for cluster {ClusterId} target {TargetId} type {BackupType} contentMode={ContentMode}.", backup.Id, actor.ActorName, clusterId, targetId, backup.BackupType, backup.ContentMode);

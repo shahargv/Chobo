@@ -54,6 +54,7 @@ public sealed class BackupSchedulerDispatcherBackgroundService(
         using var scope = services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
         var audit = scope.ServiceProvider.GetRequiredService<IAuditService>();
+        var operationGate = scope.ServiceProvider.GetRequiredService<BackupRestoreOperationGate>();
         var schedules = await db.BackupSchedules
             .Include(x => x.Policy)
             .Where(x => x.IsEnabled && !x.IsDeleted)
@@ -191,6 +192,7 @@ public sealed class BackupSchedulerDispatcherBackgroundService(
                 RequestedByName = "system",
                 ClickHouseBackupSettingsJson = ClickHouseAdvancedSettings.SerializeNormalized(settings.Settings)
             };
+            await using var operationCreationGate = await operationGate.EnterAsync(cancellationToken);
             db.Backups.Add(backup);
             await db.SaveChangesAsync(cancellationToken);
             await queues.QueueBackupAsync(backup.Id, backup.ContentMode, cancellationToken);

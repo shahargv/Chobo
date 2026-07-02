@@ -158,13 +158,13 @@ public static class ServiceCollectionExtensions
         services.AddScoped<RestoreRunnerService>();
         services.AddScoped<BackupCleanupService>();
         services.AddScoped<BackupRestoreQueueApplicationService>();
+        services.AddSingleton<BackupRestoreQueueClaimPolicy>();
+        services.AddSingleton<BackupRestoreOperationGate>();
         services.AddSingleton<IBackupRestoreConcurrencyCoordinator, BackupRestoreConcurrencyCoordinator>();
         services.AddSingleton(TimeProvider.System);
         services.AddSingleton<IBackupRestoreQueues, BackupRestoreQueues>();
         services.AddHostedService<BackupRestoreResumeBackgroundService>();
-        services.AddHostedService<BackupExecutorBackgroundService>();
-        services.AddHostedService<SchemaOnlyBackupExecutorBackgroundService>();
-        services.AddHostedService<RestoreExecutorBackgroundService>();
+        services.AddHostedService<BackupRestoreOperationDispatcherBackgroundService>();
         services.AddHostedService<BackupSchedulerDispatcherBackgroundService>();
         services.AddHostedService<RetentionManagementBackgroundService>();
         services.AddSingleton<BackupsGarbageCollectorBackgroundService>();
@@ -222,3 +222,4 @@ public static class ServiceCollectionExtensions
         }
     }
 }
+
