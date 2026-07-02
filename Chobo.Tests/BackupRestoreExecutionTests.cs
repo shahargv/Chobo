@@ -1363,6 +1363,47 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Backup_queue_claim_waits_behind_earlier_backup_rows()
+    {
+        await using var fixture = await TestFixture.CreateAsync(clusterMaxDop: 4, options: new ChoboBackupRestoreOptions { MaxDop = 4, PollInterval = TimeSpan.FromMilliseconds(1) });
+        var first = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "aaa_first", BackupTableStatus.Queued, null, true)
+        ], shardCount: 2);
+        var second = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "zzz_second", BackupTableStatus.Queued, null, true)
+        ], shardCount: 2);
+
+        using (var scope = fixture.Services.CreateScope())
+        {
+            var queue = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
+            await queue.EnsureBackupQueueItemsAsync(first.Id);
+            await queue.EnsureBackupQueueItemsAsync(second.Id);
+        }
+
+        using (var scope = fixture.Services.CreateScope())
+        {
+            var queue = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
+            var earlySecondClaim = await queue.TryTakeNextBackupWorkAsync(second.Id);
+            Assert.Null(earlySecondClaim.WorkItem);
+            Assert.True(earlySecondClaim.HasQueuedWork);
+        }
+
+        using (var scope = fixture.Services.CreateScope())
+        {
+            var queue = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
+            var firstClaim = await queue.TryTakeNextBackupWorkAsync(first.Id);
+            Assert.NotNull(firstClaim.WorkItem);
+            Assert.Equal(first.Id, await fixture.Db.BackupRestoreQueueItems
+                .Where(x => x.ShardId == firstClaim.WorkItem!.ShardId)
+                .Select(x => x.OperationId)
+                .SingleAsync());
+        }
+
+        fixture.Db.ChangeTracker.Clear();
+        Assert.False(await fixture.Db.BackupRestoreQueueItems.AnyAsync(x => x.OperationId == second.Id && x.StartedAt != null));
+    }
+
+    [Fact]
     public async Task Backup_queue_active_list_filters_before_limit()
     {
         await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
