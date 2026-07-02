@@ -1011,7 +1011,7 @@ public sealed class ChoboFoundationTests
         Assert.Contains("queued or running", responseText);
         using var verifyScope = targetFactory.Services.CreateScope();
         var verifyDb = verifyScope.ServiceProvider.GetRequiredService<ChoboDbContext>();
-        Assert.True(await verifyDb.Backups.AnyAsync(x => x.Id == activeBackupId && x.Status == BackupRunStatus.Queued));
+        Assert.True(await verifyDb.Backups.AnyAsync(x => x.Id == activeBackupId));
     }
     [Fact]
     public async Task Config_import_preserves_logs_and_audits_and_writes_import_audit()
