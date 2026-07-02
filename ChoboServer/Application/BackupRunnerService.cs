@@ -71,6 +71,10 @@ public sealed class BackupRunnerService(
             await audit.RecordAsync("started", AuditEntityType.Backup, backup.Id.ToString(), new { backup.SourceClusterId, backup.TargetId });
 
             await preparation.PrepareQueueItemsAsync(backup.Id, cancellationToken);
+            if (backup.ContentMode == BackupContentMode.SchemaAndData)
+            {
+                await TryWriteInitialManifestAsync(backup.Id, cancellationToken);
+            }
 
             if (backup.ContentMode == BackupContentMode.SchemaOnly)
             {
@@ -222,6 +226,17 @@ public sealed class BackupRunnerService(
             "Final backup storage manifest write failed for backup {BackupId}; backup result remains {Status}.",
             new { tableCount },
             new object?[] { backup.Status },
+            cancellationToken);
+
+    private Task TryWriteInitialManifestAsync(Guid backupId, CancellationToken cancellationToken) =>
+        TryWriteManifestAsync(
+            backupId,
+            "initial",
+            "metadata-manifest-initial-written",
+            "metadata-manifest-initial-write-failed",
+            "Initial backup storage manifest write failed for backup {BackupId}.",
+            new { purpose = "initial" },
+            [],
             cancellationToken);
 
     private Task TryWriteFailedManifestAsync(Guid backupId) =>
