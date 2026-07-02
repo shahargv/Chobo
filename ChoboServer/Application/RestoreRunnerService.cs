@@ -21,7 +21,7 @@ public sealed class RestoreRunnerService(
     private static readonly ConcurrentDictionary<Guid, byte> ActiveRestoreRuns = new();
     private readonly Serilog.ILogger _logger = logger.ForContext<RestoreRunnerService>();
 
-    public async Task RunAsync(Guid restoreId, CancellationToken cancellationToken = default)
+    public async Task<BackupRestoreOperationRunResult> RunAsync(Guid restoreId, CancellationToken cancellationToken = default)
     {
         var restore = await db.Restores
             .Include(x => x.TargetCluster).ThenInclude(x => x!.AccessNodes)
@@ -30,7 +30,7 @@ public sealed class RestoreRunnerService(
             .FirstOrDefaultAsync(x => x.Id == restoreId, cancellationToken);
         if (restore is null)
         {
-            return;
+            return BackupRestoreOperationRunResult.Completed;
         }
 
         using var operationCorrelationScope = OperationCorrelationContext.Push(restore.Id.ToString());
@@ -38,36 +38,45 @@ public sealed class RestoreRunnerService(
 
         if (restore.Status is RestoreRunStatus.Succeeded or RestoreRunStatus.Failed or RestoreRunStatus.Canceled)
         {
-            return;
+            return BackupRestoreOperationRunResult.Completed;
         }
 
         if (!ActiveRestoreRuns.TryAdd(restore.Id, 0))
         {
             _logger.Information("Restore run {RestoreId} is already active in this process; duplicate execution request skipped.", restore.Id);
-            return;
+            return BackupRestoreOperationRunResult.Completed;
         }
 
         try
         {
             _logger.Information("Starting restore run {RestoreId}. Current status: {Status}.", restore.Id, restore.Status);
             ValidateRestore(restore);
+            var wasRunning = restore.Status == RestoreRunStatus.Running;
             if (!await TryClaimRestoreAsync(restore, cancellationToken))
             {
-                return;
+                return BackupRestoreOperationRunResult.Completed;
             }
             await queue.EnsureRestoreQueueItemsAsync(restore.Id, cancellationToken);
             await queue.ResetIncompleteRestoreClaimsAsync(restore.Id, cancellationToken);
-            await audit.RecordAsync("started", AuditEntityType.Restore, restore.Id.ToString(), new { restore.BackupId, restore.TargetClusterId });
+            var hasStartedAudit = wasRunning && await db.AuditEntries.AsNoTracking().AnyAsync(x => x.Action == "started" && x.EntityType == AuditEntityTypes.ToStorageValue(AuditEntityType.Restore) && x.EntityId == restore.Id.ToString(), cancellationToken);
+            if (!hasStartedAudit)
+            {
+                await audit.RecordAsync("started", AuditEntityType.Restore, restore.Id.ToString(), new { restore.BackupId, restore.TargetClusterId });
+            }
 
             var maxDop = EffectiveMaxDop(restore.TargetCluster!);
             _logger.Information("Executing restore {RestoreId} with per-cluster maxdop {MaxDop} and {TableCount} table(s).", restore.Id, maxDop, restore.Tables.Count);
             await PrepareRestoreTablesAsync(restore.Id, cancellationToken);
-            await RunRestoreShardWorkAsync(restore.Id, maxDop, cancellationToken);
+            if (!await RunRestoreShardWorkAsync(restore.Id, maxDop, cancellationToken))
+            {
+                _logger.Information("Restore {RestoreId} deferred because queue work is currently blocked.", restore.Id);
+                return BackupRestoreOperationRunResult.Deferred;
+            }
 
             if (await db.Restores.Where(x => x.Id == restore.Id).Select(x => x.Status).FirstAsync(cancellationToken) == RestoreRunStatus.Canceled)
             {
                 _logger.Information("Restore {RestoreId} observed cancellation and will not overwrite canceled status.", restore.Id);
-                return;
+                return BackupRestoreOperationRunResult.Completed;
             }
 
             await FinalizeRestoreTablesAsync(restore.Id, cancellationToken);
@@ -89,6 +98,7 @@ public sealed class RestoreRunnerService(
             {
                 await queue.RemoveActiveOperationItemsAsync(BackupRestoreQueueKind.Restore, restore.Id, "restore-finished-unsuccessfully", cancellationToken);
             }
+            return BackupRestoreOperationRunResult.Completed;
         }
         catch (Exception ex)
         {
@@ -117,6 +127,7 @@ public sealed class RestoreRunnerService(
             await db.SaveChangesAsync(CancellationToken.None);
             await audit.RecordAsync("failed", AuditEntityType.Restore, restore.Id.ToString(), new { error = ex.Message, restore.FailureReason });
             await queue.RemoveActiveOperationItemsAsync(BackupRestoreQueueKind.Restore, restore.Id, "restore-runner-exception", CancellationToken.None);
+            return BackupRestoreOperationRunResult.Completed;
         }
         finally
         {
@@ -303,18 +314,19 @@ public sealed class RestoreRunnerService(
         }
     }
 
-    private async Task RunRestoreShardWorkAsync(Guid restoreId, int maxDop, CancellationToken cancellationToken)
+    private async Task<bool> RunRestoreShardWorkAsync(Guid restoreId, int maxDop, CancellationToken cancellationToken)
     {
         var queuedWorkCount = await db.BackupRestoreQueueItems.AsNoTracking()
             .CountAsync(x => x.Kind == BackupRestoreQueueKind.Restore && x.OperationId == restoreId && x.CompletedAt == null, cancellationToken);
         if (queuedWorkCount == 0)
         {
-            return;
+            return true;
         }
 
         var forcedWorkCount = await db.BackupRestoreQueueItems.AsNoTracking()
             .CountAsync(x => x.Kind == BackupRestoreQueueKind.Restore && x.OperationId == restoreId && x.StartedAt == null && x.CompletedAt == null && x.IsForced, cancellationToken);
         var retryCounts = new System.Collections.Concurrent.ConcurrentDictionary<Guid, int>();
+        var deferred = 0;
         var failedEndpoints = new System.Collections.Concurrent.ConcurrentDictionary<Guid, System.Collections.Concurrent.ConcurrentDictionary<string, byte>>();
         var workerCount = Math.Min(queuedWorkCount, Math.Max(1, maxDop) + forcedWorkCount);
         var workers = Enumerable.Range(0, workerCount)
@@ -322,6 +334,10 @@ public sealed class RestoreRunnerService(
             {
                 while (true)
                 {
+                    if (Volatile.Read(ref deferred) != 0)
+                    {
+                        return;
+                    }
                     BackupRestoreQueueApplicationService.QueueClaimResult claim;
                     using (var statusScope = scopeFactory.CreateScope())
                     {
@@ -340,6 +356,11 @@ public sealed class RestoreRunnerService(
                         {
                             return;
                         }
+                        if (claim.BlockedByEarlierOperation)
+                        {
+                            Interlocked.Exchange(ref deferred, 1);
+                            return;
+                        }
                         await Task.Delay(options.CurrentValue.PollInterval, cancellationToken);
                         continue;
                     }
@@ -355,6 +376,7 @@ public sealed class RestoreRunnerService(
             .ToList();
 
         await Task.WhenAll(workers);
+        return Volatile.Read(ref deferred) == 0;
     }
 
     private static async Task<bool> IsRestoreCancellationTerminalAsync(ChoboDbContext scopedDb, Guid restoreId, CancellationToken cancellationToken)
@@ -950,3 +972,8 @@ public sealed class RestoreRunnerService(
         return RestoreTableStatus.Failed;
     }
 }
+
+
+
+
+

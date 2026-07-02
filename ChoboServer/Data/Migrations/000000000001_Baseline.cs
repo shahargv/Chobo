@@ -401,13 +401,14 @@ public sealed class Baseline : Migration
             CREATE INDEX IF NOT EXISTS IX_BackupTableShards_Status ON BackupTableShards (Status);
             CREATE INDEX IF NOT EXISTS IX_BackupTableShards_ParentFullBackupTableShardId ON BackupTableShards (ParentFullBackupTableShardId);
             CREATE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_IsForced_Position ON BackupRestoreQueueItems (IsForced, Position);
+            CREATE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_Position ON BackupRestoreQueueItems (Position);
             CREATE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_CompletedAt ON BackupRestoreQueueItems (CompletedAt);
+            CREATE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_StartedAt_CompletedAt_IsForced_Position_CreatedAt ON BackupRestoreQueueItems (StartedAt, CompletedAt, IsForced, Position, CreatedAt);
             CREATE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_Kind_OperationId ON BackupRestoreQueueItems (Kind, OperationId);
             CREATE UNIQUE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_ShardId ON BackupRestoreQueueItems (ShardId);
-            CREATE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_ClusterId_LogicalShardNumber ON BackupRestoreQueueItems (ClusterId, LogicalShardNumber);
-            CREATE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_NodeHost_NodePort_NodeUseTls ON BackupRestoreQueueItems (NodeHost, NodePort, NodeUseTls);
             CREATE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_ClusterId_NodeHost_NodePort_NodeUseTls_StartedAt_CompletedAt ON BackupRestoreQueueItems (ClusterId, NodeHost, NodePort, NodeUseTls, StartedAt, CompletedAt);
-            CREATE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_Kind_StartedAt_CompletedAt_IsForced_Position ON BackupRestoreQueueItems (Kind, StartedAt, CompletedAt, IsForced, Position);
+            CREATE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_ClusterId_StartedAt_CompletedAt ON BackupRestoreQueueItems (ClusterId, StartedAt, CompletedAt);
+            CREATE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_ClusterId_LogicalShardNumber_StartedAt_CompletedAt ON BackupRestoreQueueItems (ClusterId, LogicalShardNumber, StartedAt, CompletedAt);
             CREATE INDEX IF NOT EXISTS IX_Restores_Status ON Restores (Status);
             CREATE INDEX IF NOT EXISTS IX_Restores_BackupId ON Restores (BackupId);
             CREATE INDEX IF NOT EXISTS IX_Restores_TargetClusterId ON Restores (TargetClusterId);
@@ -445,3 +446,5 @@ public sealed class Baseline : Migration
             """);
     }
 }
+
+

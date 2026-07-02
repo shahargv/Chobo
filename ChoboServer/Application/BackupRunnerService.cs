@@ -23,7 +23,7 @@ public sealed class BackupRunnerService(
     private static readonly ConcurrentDictionary<Guid, byte> ActiveBackupRuns = new();
     private readonly Serilog.ILogger _logger = logger.ForContext<BackupRunnerService>();
 
-    public async Task RunAsync(Guid backupId, CancellationToken cancellationToken = default)
+    public async Task<BackupRestoreOperationRunResult> RunAsync(Guid backupId, CancellationToken cancellationToken = default)
     {
         var backup = await db.Backups
             .Include(x => x.SourceCluster).ThenInclude(x => x!.AccessNodes)
@@ -33,7 +33,7 @@ public sealed class BackupRunnerService(
             .FirstOrDefaultAsync(x => x.Id == backupId, cancellationToken);
         if (backup is null)
         {
-            return;
+            return BackupRestoreOperationRunResult.Completed;
         }
         if (backup.Status is BackupRunStatus.Succeeded or
             BackupRunStatus.Failed or
@@ -45,7 +45,7 @@ public sealed class BackupRunnerService(
             BackupRunStatus.BackupExpiredDeleteStarted or
             BackupRunStatus.BackupExpiredDeleted)
         {
-            return;
+            return BackupRestoreOperationRunResult.Completed;
         }
 
         using var operationCorrelationScope = OperationCorrelationContext.Push(backup.Id.ToString());
@@ -53,25 +53,31 @@ public sealed class BackupRunnerService(
         if (!ActiveBackupRuns.TryAdd(backup.Id, 0))
         {
             _logger.Information("Backup run {BackupId} is already active in this process; duplicate execution request skipped.", backup.Id);
-            return;
+            return BackupRestoreOperationRunResult.Completed;
         }
 
         try
         {
             _logger.Information("Starting backup run {BackupId}. Current status: {Status}.", backup.Id, backup.Status);
-            if (backup.Status == BackupRunStatus.Running)
+            var wasRunning = backup.Status == BackupRunStatus.Running;
+            if (wasRunning)
             {
                 await queue.ResetIncompleteBackupNodeClaimsAsync(backup.Id, cancellationToken);
             }
             if (!await TryClaimBackupAsync(backup, cancellationToken))
             {
-                return;
+                return BackupRestoreOperationRunResult.Completed;
             }
 
-            await audit.RecordAsync("started", AuditEntityType.Backup, backup.Id.ToString(), new { backup.SourceClusterId, backup.TargetId });
+            var hasStartedAudit = wasRunning && await db.AuditEntries.AsNoTracking().AnyAsync(x => x.Action == "started" && x.EntityType == AuditEntityTypes.ToStorageValue(AuditEntityType.Backup) && x.EntityId == backup.Id.ToString(), cancellationToken);
+            if (!hasStartedAudit)
+            {
+                await audit.RecordAsync("started", AuditEntityType.Backup, backup.Id.ToString(), new { backup.SourceClusterId, backup.TargetId });
+            }
 
             await preparation.PrepareQueueItemsAsync(backup.Id, cancellationToken);
-            if (backup.ContentMode == BackupContentMode.SchemaAndData)
+            var hasInitialManifestAudit = wasRunning && await db.AuditEntries.AsNoTracking().AnyAsync(x => x.Action == "metadata-manifest-initial-written" && x.EntityType == AuditEntityTypes.ToStorageValue(AuditEntityType.Backup) && x.EntityId == backup.Id.ToString(), cancellationToken);
+            if (!hasInitialManifestAudit && backup.ContentMode == BackupContentMode.SchemaAndData)
             {
                 await TryWriteInitialManifestAsync(backup.Id, cancellationToken);
             }
@@ -86,12 +92,16 @@ public sealed class BackupRunnerService(
             {
                 var maxDop = EffectiveMaxDop(backup.SourceCluster!);
                 _logger.Information("Executing backup {BackupId} with effective maxdop {MaxDop} across shard work for {TableCount} table(s).", backup.Id, maxDop, backup.Tables.Count);
-                await RunBackupShardWorkAsync(backup.Id, maxDop, cancellationToken);
+                if (!await RunBackupShardWorkAsync(backup.Id, maxDop, cancellationToken))
+                {
+                    _logger.Information("Backup {BackupId} deferred because queue work is currently blocked.", backup.Id);
+                    return BackupRestoreOperationRunResult.Deferred;
+                }
             }
             if (await db.Backups.Where(x => x.Id == backup.Id).Select(x => x.Status).FirstAsync(cancellationToken) == BackupRunStatus.Canceled)
             {
                 _logger.Information("Backup {BackupId} observed cancellation and will not overwrite canceled status.", backup.Id);
-                return;
+                return BackupRestoreOperationRunResult.Completed;
             }
 
             var statuses = await db.BackupTables.Where(x => x.BackupId == backup.Id).Select(x => x.Status).ToListAsync(cancellationToken);
@@ -118,6 +128,7 @@ public sealed class BackupRunnerService(
             {
                 await TryWriteFailedManifestAsync(backup.Id);
             }
+            return BackupRestoreOperationRunResult.Completed;
         }
         catch (Exception ex)
         {
@@ -133,6 +144,7 @@ public sealed class BackupRunnerService(
             }
             await audit.RecordAsync("failed", AuditEntityType.Backup, backup.Id.ToString(), new { error = ex.Message, backup.FailureReason });
             await queue.RemoveActiveOperationItemsAsync(BackupRestoreQueueKind.Backup, backup.Id, "backup-runner-exception", CancellationToken.None);
+            return BackupRestoreOperationRunResult.Completed;
         }
         finally
         {
@@ -384,12 +396,17 @@ public sealed class BackupRunnerService(
         return IsCancellationTerminalStatus(status);
     }
 
-    private async Task RunBackupShardWorkAsync(Guid backupId, int maxDop, CancellationToken cancellationToken)
+    private async Task<bool> RunBackupShardWorkAsync(Guid backupId, int maxDop, CancellationToken cancellationToken)
     {
         var workItems = await PrepareBackupTablesForShardWorkAsync(backupId, cancellationToken);
         if (workItems.Count > 0)
         {
+            await queue.EnsureBackupQueueItemsAsync(backupId, cancellationToken);
+        }
+        if (workItems.Count > 0)
+        {
             var completedShardAttempts = 0;
+            var deferred = 0;
             var checkpointInterval = options.CurrentValue.ManifestCheckpointShardInterval;
             var retryCounts = new ConcurrentDictionary<Guid, int>();
             var failedEndpoints = new ConcurrentDictionary<Guid, ConcurrentDictionary<string, byte>>();
@@ -400,6 +417,10 @@ public sealed class BackupRunnerService(
                 {
                     while (true)
                     {
+                        if (Volatile.Read(ref deferred) != 0)
+                        {
+                            return;
+                        }
                         BackupRestoreQueueApplicationService.QueueClaimResult claim;
                         using (var statusScope = scopeFactory.CreateScope())
                         {
@@ -416,6 +437,11 @@ public sealed class BackupRunnerService(
                         {
                             if (!claim.HasQueuedWork)
                             {
+                                return;
+                            }
+                            if (claim.BlockedByEarlierOperation)
+                            {
+                                Interlocked.Exchange(ref deferred, 1);
                                 return;
                             }
                             await Task.Delay(options.CurrentValue.PollInterval, cancellationToken);
@@ -448,6 +474,10 @@ public sealed class BackupRunnerService(
                 .ToList();
 
             await Task.WhenAll(workers);
+            if (Volatile.Read(ref deferred) != 0)
+            {
+                return false;
+            }
         }
 
         using var statusScope = scopeFactory.CreateScope();
@@ -455,10 +485,11 @@ public sealed class BackupRunnerService(
         if (await IsBackupCancellationTerminalAsync(statusDb, backupId, cancellationToken))
         {
             _logger.Information("Backup {BackupId} observed cancellation/delete-pending status before table finalization.", backupId);
-            return;
+            return true;
         }
 
         await FinalizeBackupTablesAsync(backupId, cancellationToken);
+        return true;
     }
 
     private async Task<int> CountForcedBackupWorkAsync(Guid backupId, CancellationToken cancellationToken) =>
@@ -1206,3 +1237,8 @@ public sealed class BackupRunnerService(
         message.Contains("Authentication failed", StringComparison.OrdinalIgnoreCase);
 
 }
+
+
+
+
+

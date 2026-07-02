@@ -20,6 +20,7 @@ public sealed class RestoreApplicationService(
     IClickHouseAdapter clickHouse,
     IBackupStorageProviderRegistry storageProviders,
     IOptionsMonitor<ChoboBackupRestoreOptions> options,
+    BackupRestoreOperationGate operationGate,
     IAuditService audit,
     ActorContext actor,
     Serilog.ILogger logger)
@@ -213,6 +214,7 @@ public sealed class RestoreApplicationService(
         using var operationCorrelationScope = OperationCorrelationContext.Push(restore.Id.ToString());
         using var operationLogScope = LogContext.PushProperty("OperationId", restore.Id.ToString());
 
+        await using var operationCreationGate = await operationGate.EnterAsync(cancellationToken);
         db.Restores.Add(restore);
         await db.SaveChangesAsync(cancellationToken);
         await queueItems.EnsureRestoreQueueItemsAsync(restore.Id, cancellationToken);

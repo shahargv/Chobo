@@ -915,6 +915,105 @@ public sealed class ChoboFoundationTests
     }
 
     [Fact]
+    public async Task Data_import_rejects_when_local_operation_is_active()
+    {
+        await using var sourceFactory = CreateFactory();
+        var sourceClient = AuthenticatedClient(sourceFactory);
+        await SeedFullExportGraphAsync(sourceFactory, includeCredentials: false);
+        var export = await sourceClient.GetFromJsonAsync<ExportEnvelope>("/api/v1/data/export", JsonOptions);
+        Assert.NotNull(export);
+
+        await using var targetFactory = CreateFactory();
+        var targetClient = AuthenticatedClient(targetFactory);
+        var activeBackupId = Guid.NewGuid();
+        using (var targetScope = targetFactory.Services.CreateScope())
+        {
+            var db = targetScope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+            var clusterId = Guid.NewGuid();
+            var targetId = Guid.NewGuid();
+            db.ClickHouseClusters.Add(new ClickHouseClusterEntity
+            {
+                Id = clusterId,
+                Name = "active-import-source",
+                Mode = ClusterMode.SingleInstance,
+                BackupRestoreMaxDop = 3,
+                AccessNodes = [new ClickHouseAccessNodeEntity { Host = "clickhouse-1", Port = 9000 }]
+            });
+            db.BackupTargets.Add(CreateS3TargetEntity(targetId, "active-import-target", "http://minio:9000", "us-east-1", "backups", null, true, false));
+            var tableId = Guid.NewGuid();
+            var shardId = Guid.NewGuid();
+            var createdAt = DateTimeOffset.UtcNow;
+            db.Backups.Add(new BackupEntity
+            {
+                Id = activeBackupId,
+                TriggerType = BackupTriggerType.Manual,
+                Status = BackupRunStatus.Queued,
+                BackupType = BackupType.Full,
+                SourceClusterId = clusterId,
+                TargetId = targetId,
+                RequestedByName = "test",
+                CreatedAt = createdAt,
+                QueuedAt = createdAt
+            });
+            db.BackupTables.Add(new BackupTableEntity
+            {
+                Id = tableId,
+                BackupId = activeBackupId,
+                EffectiveBackupType = BackupType.Full,
+                Database = "sales",
+                Table = "active_import_guard",
+                Engine = "MergeTree",
+                DataBackedUp = true,
+                StoragePath = "backups/active-import-guard",
+                Status = BackupTableStatus.Queued
+            });
+            db.BackupTableShards.Add(new BackupTableShardEntity
+            {
+                Id = shardId,
+                BackupTableId = tableId,
+                EffectiveBackupType = BackupType.Full,
+                SourceShardNumber = 1,
+                SourceShardName = "single",
+                ReplicaNumber = 1,
+                Host = "clickhouse-1",
+                Port = 9000,
+                StoragePath = "backups/active-import-guard/shard-1",
+                Status = BackupTableStatus.Queued
+            });
+            db.BackupRestoreQueueItems.Add(new BackupRestoreQueueItemEntity
+            {
+                Kind = BackupRestoreQueueKind.Backup,
+                OperationId = activeBackupId,
+                TableId = tableId,
+                ShardId = shardId,
+                ClusterId = clusterId,
+                LogicalShardNumber = 1,
+                LogicalShardName = "single",
+                Position = 1000,
+                CreatedAt = createdAt
+            });
+            await db.SaveChangesAsync();
+        }
+
+        using (var precheckScope = targetFactory.Services.CreateScope())
+        {
+            var precheckDb = precheckScope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+            Assert.True(await precheckDb.Backups.AnyAsync(x => x.Id == activeBackupId && x.Status == BackupRunStatus.Queued));
+            Assert.True(await precheckDb.BackupRestoreQueueItems.AnyAsync(x => x.OperationId == activeBackupId && x.CompletedAt == null));
+        }
+        var targetExportBeforeImport = await targetClient.GetFromJsonAsync<ExportEnvelope>("/api/v1/data/export", JsonOptions);
+        Assert.Contains(targetExportBeforeImport!.Data.Backups, x => x.Id == activeBackupId && x.Status == BackupRunStatus.Queued);
+
+        var response = await targetClient.PostAsJsonAsync("/api/v1/data/import", export, JsonOptions);
+        var responseText = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("queued or running", responseText);
+        using var verifyScope = targetFactory.Services.CreateScope();
+        var verifyDb = verifyScope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+        Assert.True(await verifyDb.Backups.AnyAsync(x => x.Id == activeBackupId && x.Status == BackupRunStatus.Queued));
+    }
+    [Fact]
     public async Task Config_import_preserves_logs_and_audits_and_writes_import_audit()
     {
         await using var factory = CreateFactory();

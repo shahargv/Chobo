@@ -33,7 +33,14 @@ public static class DatabasePerformanceMaintenance
             CREATE INDEX IF NOT EXISTS IX_BackupSchedules_PolicyId_IsDeleted ON BackupSchedules (PolicyId, IsDeleted);
             CREATE INDEX IF NOT EXISTS IX_Backups_IsPinned ON Backups (IsPinned);
             CREATE INDEX IF NOT EXISTS IX_Backups_DeletionRequestedAt ON Backups (DeletionRequestedAt);
+            CREATE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_Position ON BackupRestoreQueueItems (Position);
             CREATE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_CompletedAt ON BackupRestoreQueueItems (CompletedAt);
+            CREATE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_StartedAt_CompletedAt_IsForced_Position_CreatedAt ON BackupRestoreQueueItems (StartedAt, CompletedAt, IsForced, Position, CreatedAt);
+            CREATE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_Kind_OperationId ON BackupRestoreQueueItems (Kind, OperationId);
+            CREATE UNIQUE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_ShardId ON BackupRestoreQueueItems (ShardId);
+            CREATE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_ClusterId_StartedAt_CompletedAt ON BackupRestoreQueueItems (ClusterId, StartedAt, CompletedAt);
+            CREATE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_ClusterId_LogicalShardNumber_StartedAt_CompletedAt ON BackupRestoreQueueItems (ClusterId, LogicalShardNumber, StartedAt, CompletedAt);
+            CREATE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_ClusterId_NodeHost_NodePort_NodeUseTls_StartedAt_CompletedAt ON BackupRestoreQueueItems (ClusterId, NodeHost, NodePort, NodeUseTls, StartedAt, CompletedAt);
             CREATE INDEX IF NOT EXISTS IX_BackupTables_ParentFullBackupId ON BackupTables (ParentFullBackupId);
             CREATE INDEX IF NOT EXISTS IX_BackupTableShards_ParentFullBackupId ON BackupTableShards (ParentFullBackupId);
             """);
@@ -72,3 +79,5 @@ public static class DatabasePerformanceMaintenance
         await db.Database.ExecuteSqlRawAsync("ALTER TABLE AccessTokens ADD COLUMN TokenLookupHash TEXT NOT NULL DEFAULT '';");
     }
 }
+
+

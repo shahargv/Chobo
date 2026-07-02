@@ -44,12 +44,17 @@ public sealed class BackupRestoreResumeBackgroundService(
 
             var restores = await db.Restores
                 .Where(x => x.Status == RestoreRunStatus.Queued || x.Status == RestoreRunStatus.Running)
-                .Select(x => x.Id)
+                .Select(x => new { x.Id, x.Status })
                 .ToListAsync(stoppingToken);
-            foreach (var id in restores)
+            foreach (var restore in restores)
             {
-                await queues.QueueRestoreAsync(id, stoppingToken);
-                await audit.RecordAsync("resumed", AuditEntityType.Restore, id.ToString(), new { reason = "server-startup" });
+                if (restore.Status == RestoreRunStatus.Running)
+                {
+                    await queueService.ResetIncompleteRestoreClaimsAsync(restore.Id, stoppingToken);
+                }
+
+                await queues.QueueRestoreAsync(restore.Id, stoppingToken);
+                await audit.RecordAsync("resumed", AuditEntityType.Restore, restore.Id.ToString(), new { reason = "server-startup" });
             }
         }
         catch (Exception ex)
