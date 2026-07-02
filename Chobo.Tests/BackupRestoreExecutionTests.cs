@@ -136,6 +136,33 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Backup_runner_writes_initial_storage_manifest_with_storage_root()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+
+        var backupId = await fixture.CreateManualBackupAsync();
+        await fixture.RunBackupAsync(backupId);
+
+        var manifestWrites = fixture.StorageDeletion.ObjectWrites
+            .Where(x => x.Path.Contains("/_chobo/", StringComparison.Ordinal) && x.Path.EndsWith($"{backupId:N}.json", StringComparison.Ordinal))
+            .ToList();
+        Assert.True(manifestWrites.Count >= 2);
+
+        var initialManifest = JsonSerializer.Deserialize<BackupStorageManifestV1>(Encoding.UTF8.GetString(manifestWrites[0].Content), JsonOptions)!;
+        Assert.Equal(backupId, initialManifest.Backup.Id);
+        Assert.Equal(BackupRunStatus.Running, initialManifest.Backup.Status);
+        Assert.NotNull(initialManifest.Backup.StorageRootPath);
+        Assert.StartsWith("backups/runs/manual/", initialManifest.Backup.StorageRootPath);
+        Assert.All(initialManifest.RequiredStoragePaths, path => Assert.StartsWith(initialManifest.Backup.StorageRootPath, path));
+
+        var finalManifest = JsonSerializer.Deserialize<BackupStorageManifestV1>(Encoding.UTF8.GetString(manifestWrites[^1].Content), JsonOptions)!;
+        Assert.Equal(BackupRunStatus.Succeeded, finalManifest.Backup.Status);
+        Assert.Equal(initialManifest.Backup.StorageRootPath, finalManifest.Backup.StorageRootPath);
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "metadata-manifest-initial-written" && x.EntityId == backupId.ToString()));
+    }
+
+    [Fact]
     public async Task Backup_runner_keeps_success_when_storage_manifest_write_fails()
     {
         await using var fixture = await TestFixture.CreateAsync();
@@ -5632,6 +5659,7 @@ public sealed class BackupRestoreExecutionTests
         public List<string> DeletedObjects { get; } = [];
         public List<string> StorageOperations { get; } = [];
         public Dictionary<string, byte[]> Objects { get; } = new(StringComparer.Ordinal);
+        public List<(string Path, byte[] Content)> ObjectWrites { get; } = [];
         public bool FailNextDelete { get; set; }
         public string? FailDeleteDirectoryPath { get; set; }
         public int FailWriteCount { get; set; }
@@ -5705,6 +5733,7 @@ public sealed class BackupRestoreExecutionTests
             }
 
             Objects[path] = content;
+            ObjectWrites.Add((path, content));
         }
 
         public Task<byte[]> ReadObjectAsync(BackupTargetEntity target, string path, CancellationToken cancellationToken = default) =>
