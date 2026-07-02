@@ -368,7 +368,7 @@ public sealed class BackupRestoreQueueApplicationService(
         item.Position = await CalculateMovePositionAsync(item.Position, request, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         await audit.RecordAsync("queue-item-moved", item.Kind == BackupRestoreQueueKind.Backup ? AuditEntityType.BackupTableShard : AuditEntityType.RestoreTableShard, item.ShardId.ToString(), new { queueItemId = item.Id, item.Kind, oldPosition, item.Position, request.Direction, request.BeforeItemId });
-        return (await ListAsync(BackupRestoreQueueKind.All, "all", 500, cancellationToken)).FirstOrDefault(x => x.Id == id);
+        return await GetItemDtoAsync(id, cancellationToken);
     }
 
     public async Task<IReadOnlyList<BackupRestoreQueueItemDto>> MoveTableAsync(BackupRestoreQueueKind kind, Guid tableId, MoveQueueItemRequest request, CancellationToken cancellationToken = default)
@@ -455,7 +455,7 @@ public sealed class BackupRestoreQueueApplicationService(
         item.Position = await MinPositionAsync(cancellationToken) - PositionStep;
         await db.SaveChangesAsync(cancellationToken);
         await audit.RecordAsync("queue-item-forced", item.Kind == BackupRestoreQueueKind.Backup ? AuditEntityType.BackupTableShard : AuditEntityType.RestoreTableShard, item.ShardId.ToString(), new { queueItemId = item.Id, item.Kind, item.OperationId, item.TableId, item.ShardId, item.ForcedByUserId, item.ForcedByName });
-        return (await ListAsync(BackupRestoreQueueKind.All, "all", 500, cancellationToken)).FirstOrDefault(x => x.Id == id);
+        return await GetItemDtoAsync(id, cancellationToken);
     }
 
     public async Task MarkStartedAsync(BackupRestoreQueueKind kind, Guid shardId, ClickHouseNodeEndpoint endpoint, CancellationToken cancellationToken = default)
@@ -733,6 +733,34 @@ public sealed class BackupRestoreQueueApplicationService(
     private async Task<long> MaxPositionAsync(CancellationToken cancellationToken) => await db.BackupRestoreQueueItems.Select(x => (long?)x.Position).MaxAsync(cancellationToken) ?? 0;
     private async Task<long?> PreviousPositionAsync(long position, CancellationToken cancellationToken) => await db.BackupRestoreQueueItems.Where(x => x.Position < position).OrderByDescending(x => x.Position).Select(x => (long?)x.Position).FirstOrDefaultAsync(cancellationToken);
     private async Task<long?> NextGreaterPositionAsync(long position, CancellationToken cancellationToken) => await db.BackupRestoreQueueItems.Where(x => x.Position > position).OrderBy(x => x.Position).Select(x => (long?)x.Position).FirstOrDefaultAsync(cancellationToken);
+
+    private async Task<BackupRestoreQueueItemDto?> GetItemDtoAsync(Guid id, CancellationToken cancellationToken)
+    {
+        var item = await db.BackupRestoreQueueItems.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+        if (item is null)
+        {
+            return null;
+        }
+
+        if (item.Kind == BackupRestoreQueueKind.Backup)
+        {
+            var backupShard = await db.BackupTableShards.AsNoTracking()
+                .Include(x => x.BackupTable)
+                .FirstOrDefaultAsync(x => x.Id == item.ShardId, cancellationToken);
+            var backupShards = backupShard is null
+                ? new Dictionary<Guid, BackupTableShardEntity>()
+                : new Dictionary<Guid, BackupTableShardEntity> { [backupShard.Id] = backupShard };
+            return ToDto(item, backupShards, new Dictionary<Guid, RestoreTableShardEntity>());
+        }
+
+        var restoreShard = await db.RestoreTableShards.AsNoTracking()
+            .Include(x => x.RestoreTable)
+            .FirstOrDefaultAsync(x => x.Id == item.ShardId, cancellationToken);
+        var restoreShards = restoreShard is null
+            ? new Dictionary<Guid, RestoreTableShardEntity>()
+            : new Dictionary<Guid, RestoreTableShardEntity> { [restoreShard.Id] = restoreShard };
+        return ToDto(item, new Dictionary<Guid, BackupTableShardEntity>(), restoreShards);
+    }
 
     private static string NormalizeStatusFilter(string status) =>
         status.Trim().ToLowerInvariant() switch
