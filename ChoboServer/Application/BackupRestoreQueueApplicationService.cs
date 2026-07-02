@@ -338,7 +338,8 @@ public sealed class BackupRestoreQueueApplicationService(
         query = ApplyQueueStateFilter(query, normalizedStatus);
 
         var items = await query
-            .OrderByDescending(x => x.IsForced)
+            .OrderByDescending(x => x.StartedAt != null && x.CompletedAt == null)
+            .ThenByDescending(x => x.IsForced)
             .ThenBy(x => x.Position)
             .Take(Math.Clamp(limit, 1, 10000))
             .ToListAsync(cancellationToken);

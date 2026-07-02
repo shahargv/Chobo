@@ -1431,6 +1431,51 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Backup_queue_active_list_shows_running_rows_before_queued_rows()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "aaa_forced_queued", BackupTableStatus.Queued, null, true),
+            new SeedBackupTable("sales", "bbb_queued", BackupTableStatus.Queued, null, true),
+            new SeedBackupTable("sales", "zzz_running", BackupTableStatus.Running, "backup-running", true)
+        ]);
+
+        using (var scope = fixture.Services.CreateScope())
+        {
+            await scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>().EnsureBackupQueueItemsAsync(backup.Id);
+        }
+
+        var queueItems = await fixture.Db.BackupRestoreQueueItems
+            .Where(x => x.Kind == BackupRestoreQueueKind.Backup && x.OperationId == backup.Id)
+            .OrderBy(x => x.Position)
+            .ToListAsync();
+        var forcedQueuedShardId = queueItems[0].ShardId;
+        var runningShardId = queueItems[2].ShardId;
+        var now = DateTimeOffset.UtcNow;
+        await fixture.Db.BackupRestoreQueueItems
+            .Where(x => x.ShardId == forcedQueuedShardId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(x => x.IsForced, true)
+                .SetProperty(x => x.ForcedAt, (DateTimeOffset?)now)
+                .SetProperty(x => x.ForcedByName, "tester"));
+        await fixture.Db.BackupRestoreQueueItems
+            .Where(x => x.ShardId == runningShardId)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.StartedAt, (DateTimeOffset?)now));
+        await fixture.Db.BackupTableShards
+            .Where(x => x.Id == runningShardId)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.StartedAt, (DateTimeOffset?)now));
+        fixture.Db.ChangeTracker.Clear();
+
+        using var listScope = fixture.Services.CreateScope();
+        var active = await listScope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>()
+            .ListAsync(BackupRestoreQueueKind.Backup, "active", 2);
+
+        Assert.Equal(2, active.Count);
+        Assert.Equal(runningShardId, active[0].ShardId);
+        Assert.Equal(BackupRestoreQueueStatus.Running, active[0].Status);
+        Assert.Equal(forcedQueuedShardId, active[1].ShardId);
+    }
+    [Fact]
     public async Task Backup_queue_clear_started_claim_keeps_retry_lease_until_released()
     {
         await using var fixture = await TestFixture.CreateAsync(clusterMaxDop: 1, options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
