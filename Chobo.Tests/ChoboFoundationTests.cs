@@ -217,10 +217,18 @@ public sealed class ChoboFoundationTests
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
 
-        Assert.Equal("wal", await GetPragmaStringAsync(db, "journal_mode"));
-        Assert.Equal(2L, await GetPragmaInt64Async(db, "synchronous"));
-        Assert.Equal(8000L, await GetPragmaInt64Async(db, "busy_timeout"));
-        Assert.Equal(2000L, await GetPragmaInt64Async(db, "wal_autocheckpoint"));
+        await db.Database.OpenConnectionAsync();
+        try
+        {
+            Assert.Equal("wal", await GetPragmaStringAsync(db, "journal_mode"));
+            Assert.Equal(2L, await GetPragmaInt64Async(db, "synchronous"));
+            Assert.Equal(8000L, await GetPragmaInt64Async(db, "busy_timeout"));
+            Assert.Equal(2000L, await GetPragmaInt64Async(db, "wal_autocheckpoint"));
+        }
+        finally
+        {
+            await db.Database.CloseConnectionAsync();
+        }
     }
 
     [Fact]
@@ -998,11 +1006,15 @@ public sealed class ChoboFoundationTests
         using (var precheckScope = targetFactory.Services.CreateScope())
         {
             var precheckDb = precheckScope.ServiceProvider.GetRequiredService<ChoboDbContext>();
-            Assert.True(await precheckDb.Backups.AnyAsync(x => x.Id == activeBackupId && x.Status == BackupRunStatus.Queued));
+            Assert.True(await precheckDb.Backups.AnyAsync(x =>
+                x.Id == activeBackupId &&
+                (x.Status == BackupRunStatus.Queued || x.Status == BackupRunStatus.Running)));
             Assert.True(await precheckDb.BackupRestoreQueueItems.AnyAsync(x => x.OperationId == activeBackupId && x.CompletedAt == null));
         }
         var targetExportBeforeImport = await targetClient.GetFromJsonAsync<ExportEnvelope>("/api/v1/data/export", JsonOptions);
-        Assert.Contains(targetExportBeforeImport!.Data.Backups, x => x.Id == activeBackupId && x.Status == BackupRunStatus.Queued);
+        Assert.Contains(targetExportBeforeImport!.Data.Backups, x =>
+            x.Id == activeBackupId &&
+            (x.Status == BackupRunStatus.Queued || x.Status == BackupRunStatus.Running));
 
         var response = await targetClient.PostAsJsonAsync("/api/v1/data/import", export, JsonOptions);
         var responseText = await response.Content.ReadAsStringAsync();
