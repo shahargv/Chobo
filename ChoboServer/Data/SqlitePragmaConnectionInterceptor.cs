@@ -54,6 +54,7 @@ public sealed class SqlitePragmaConnectionInterceptor(IOptionsMonitor<ChoboSqlit
 
     public static string BuildDatabasePragmaSql(ChoboSqliteOptions options) => $"""
         PRAGMA journal_mode={NormalizeJournalMode(options.JournalMode)};
+        PRAGMA busy_timeout={BusyTimeoutMilliseconds(options)};
         PRAGMA synchronous={NormalizeSynchronous(options.Synchronous)};
         PRAGMA wal_autocheckpoint={NormalizeWalAutoCheckpoint(options.WalAutoCheckpoint)};
         """;
