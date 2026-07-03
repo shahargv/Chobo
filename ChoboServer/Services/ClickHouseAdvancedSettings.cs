@@ -16,7 +16,7 @@ public static class ClickHouseAdvancedSettings
     private static readonly Regex SettingNamePattern = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.Compiled);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly HashSet<string> BackupReserved = new(StringComparer.OrdinalIgnoreCase) { "base_backup" };
-    private static readonly HashSet<string> RestoreReserved = new(StringComparer.OrdinalIgnoreCase) { "allow_non_empty_tables" };
+    private static readonly HashSet<string> RestoreReserved = new(StringComparer.OrdinalIgnoreCase) { "allow_non_empty_tables", "allow_different_table_def" };
 
     public static IReadOnlyDictionary<string, JsonElement> Empty { get; } = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
 

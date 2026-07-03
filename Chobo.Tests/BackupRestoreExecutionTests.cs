@@ -930,7 +930,7 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
-    public async Task Cluster_schema_only_inventory_queries_every_node_and_dedupes_by_name()
+    public async Task Cluster_schema_only_inventory_queries_every_node_and_dedupes_compatible_tables_by_name()
     {
         await using var fixture = await TestFixture.CreateAsync();
         var cluster = await fixture.Db.ClickHouseClusters.Include(x => x.AccessNodes).SingleAsync(x => x.Id == fixture.SourceClusterId);
@@ -941,7 +941,7 @@ public sealed class BackupRestoreExecutionTests
             new ClickHouseShardReplicaInfo(1, "shard-1", 1, "source-s1", 9000, false, 0)
         ]);
         fixture.ClickHouse.InventoryByEndpoint["source-s1:9000:False"] = [Table("sales", "orders", "MergeTree", createSql: "CREATE TABLE sales.orders (id UInt64) ENGINE = MergeTree ORDER BY id")];
-        fixture.ClickHouse.InventoryByEndpoint["source-s2:9000:False"] = [Table("sales", "orders", "MergeTree", createSql: "CREATE TABLE sales.orders (id UInt64, shard UInt8) ENGINE = MergeTree ORDER BY id"), Table("sales", "events", "Log")];
+        fixture.ClickHouse.InventoryByEndpoint["source-s2:9000:False"] = [Table("sales", "orders", "MergeTree", createSql: "CREATE TABLE sales.orders (id UInt64) ENGINE = MergeTree ORDER BY id"), Table("sales", "events", "Log")];
         await fixture.Db.SaveChangesAsync();
 
         var backupId = await fixture.CreateManualBackupAsync(schemaOnly: true);
@@ -952,7 +952,130 @@ public sealed class BackupRestoreExecutionTests
         var tables = await fixture.Db.BackupTables.Include(x => x.SchemaDefinition).Where(x => x.BackupId == backupId).OrderBy(x => x.Table).ToListAsync();
         Assert.Equal(["events", "orders"], tables.Select(x => x.Table).ToList());
         Assert.Equal("CREATE TABLE sales.orders (id UInt64) ENGINE = MergeTree ORDER BY id", tables.Single(x => x.Table == "orders").SchemaDefinition!.CreateTableSql);
-        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "schema-inventory-deduplicated" && x.EntityId == backupId.ToString()));
+        Assert.False(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "table-schema-conflict" && x.EntityId == backupId.ToString()));
+    }
+
+    [Fact]
+    public async Task Cluster_data_backup_plans_only_discovered_table_placements()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var cluster = await fixture.Db.ClickHouseClusters.Include(x => x.AccessNodes).SingleAsync(x => x.Id == fixture.SourceClusterId);
+        cluster.Mode = ClusterMode.Cluster;
+        cluster.ClickHouseClusterName = "prod";
+        fixture.ClickHouse.Topology.Clear();
+        fixture.ClickHouse.Topology.AddRange([
+            new ClickHouseShardReplicaInfo(1, "shard-1", 1, "source-s1-r1", 9000, false, 0),
+            new ClickHouseShardReplicaInfo(2, "shard-2", 1, "source-s2-r1", 9000, false, 0),
+            new ClickHouseShardReplicaInfo(2, "shard-2", 2, "source-s2-r2", 9000, false, 0),
+            new ClickHouseShardReplicaInfo(3, "shard-3", 1, "source-s3-r1", 9000, false, 0),
+            new ClickHouseShardReplicaInfo(3, "shard-3", 2, "source-s3-r2", 9000, false, 0)
+        ]);
+        var a = Table("hetero", "table_a", "MergeTree");
+        var b = Table("hetero", "table_b", "MergeTree");
+        var c = Table("hetero", "table_c", "ReplicatedMergeTree");
+        var d = Table("hetero", "table_d", "MergeTree");
+        var e = Table("hetero", "table_e", "MergeTree");
+        fixture.ClickHouse.InventoryByEndpoint["source-s1-r1:9000:False"] = [a, b, d];
+        fixture.ClickHouse.InventoryByEndpoint["source-s2-r1:9000:False"] = [b, c, d];
+        fixture.ClickHouse.InventoryByEndpoint["source-s2-r2:9000:False"] = [c, e];
+        fixture.ClickHouse.InventoryByEndpoint["source-s3-r1:9000:False"] = [c, d];
+        fixture.ClickHouse.InventoryByEndpoint["source-s3-r2:9000:False"] = [c];
+        await fixture.Db.SaveChangesAsync();
+
+        var backup = await fixture.Services.GetRequiredService<BackupApplicationService>()
+            .ManualAsync(new ManualBackupRequest(fixture.SourceClusterId, fixture.TargetId, PolicySelector.Empty));
+
+        fixture.Db.ChangeTracker.Clear();
+        var tables = await fixture.Db.BackupTables
+            .Include(x => x.Shards)
+            .Where(x => x.BackupId == backup.Id)
+            .OrderBy(x => x.Table)
+            .ToListAsync();
+        Assert.Equal(["table_a", "table_b", "table_c", "table_d", "table_e"], tables.Select(x => x.Table).ToList());
+        Assert.Equal(["source-s1-r1"], tables.Single(x => x.Table == "table_a").Shards.Select(x => x.Host).Order().ToList());
+        Assert.Equal(["source-s1-r1", "source-s2-r1"], tables.Single(x => x.Table == "table_b").Shards.Select(x => x.Host).Order().ToList());
+        Assert.Equal(["source-s2-r1", "source-s3-r1"], tables.Single(x => x.Table == "table_c").Shards.Select(x => x.Host).Order().ToList());
+        Assert.Equal(["source-s1-r1", "source-s2-r1", "source-s3-r1"], tables.Single(x => x.Table == "table_d").Shards.Select(x => x.Host).Order().ToList());
+        Assert.Equal(["source-s2-r2"], tables.Single(x => x.Table == "table_e").Shards.Select(x => x.Host).Order().ToList());
+        Assert.Equal(9, tables.Sum(x => x.Shards.Count));
+    }
+
+    [Fact]
+    public async Task Backup_accepts_replicated_tables_with_different_replica_engine_arguments()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var cluster = await fixture.Db.ClickHouseClusters.Include(x => x.AccessNodes).SingleAsync(x => x.Id == fixture.SourceClusterId);
+        cluster.Mode = ClusterMode.Cluster;
+        cluster.ClickHouseClusterName = "prod";
+        fixture.ClickHouse.Topology.Clear();
+        fixture.ClickHouse.Topology.AddRange([
+            new ClickHouseShardReplicaInfo(1, "shard-1", 1, "source-s1-r1", 9000, false, 0),
+            new ClickHouseShardReplicaInfo(1, "shard-1", 2, "source-s1-r2", 9000, false, 0)
+        ]);
+        fixture.ClickHouse.InventoryByEndpoint["source-s1-r1:9000:False"] = [Table("sales", "orders", "ReplicatedMergeTree", createSql: "CREATE TABLE sales.orders (id UInt64) ENGINE = ReplicatedMergeTree('/clickhouse/tables/s1/orders', 'r1') ORDER BY id")];
+        fixture.ClickHouse.InventoryByEndpoint["source-s1-r2:9000:False"] = [Table("sales", "orders", "ReplicatedMergeTree", createSql: "CREATE TABLE sales.orders (id UInt64) ENGINE = ReplicatedMergeTree('/clickhouse/tables/s1/orders', 'r2') ORDER BY id")];
+        await fixture.Db.SaveChangesAsync();
+
+        var backupId = await fixture.CreateManualBackupAsync();
+        await fixture.RunBackupAsync(backupId);
+
+        fixture.Db.ChangeTracker.Clear();
+        var backup = await fixture.Db.Backups.Include(x => x.Tables).ThenInclude(x => x.Shards).SingleAsync(x => x.Id == backupId);
+        Assert.Equal(BackupRunStatus.Succeeded, backup.Status);
+        var table = Assert.Single(backup.Tables);
+        Assert.Single(table.Shards);
+        Assert.False(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "table-schema-conflict" && x.EntityId == backupId.ToString()));
+    }
+
+    [Fact]
+    public async Task Backup_fails_when_any_topology_node_inventory_scan_fails()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var cluster = await fixture.Db.ClickHouseClusters.Include(x => x.AccessNodes).SingleAsync(x => x.Id == fixture.SourceClusterId);
+        cluster.Mode = ClusterMode.Cluster;
+        cluster.ClickHouseClusterName = "prod";
+        fixture.ClickHouse.Topology.Clear();
+        fixture.ClickHouse.Topology.AddRange([
+            new ClickHouseShardReplicaInfo(1, "shard-1", 1, "source-s1", 9000, false, 0),
+            new ClickHouseShardReplicaInfo(2, "shard-2", 1, "source-s2", 9000, false, 0)
+        ]);
+        fixture.ClickHouse.InventoryByEndpoint["source-s1:9000:False"] = [Table("sales", "orders", "MergeTree")];
+        fixture.ClickHouse.InventoryFailureEndpoints.Add("source-s2:9000:False");
+        await fixture.Db.SaveChangesAsync();
+
+        var backupId = await fixture.CreateManualBackupAsync();
+        await fixture.RunBackupAsync(backupId);
+
+        fixture.Db.ChangeTracker.Clear();
+        var backup = await fixture.Db.Backups.SingleAsync(x => x.Id == backupId);
+        Assert.Equal(BackupRunStatus.Failed, backup.Status);
+        Assert.Contains("every source node", backup.FailureReason, StringComparison.OrdinalIgnoreCase);
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "inventory-node-scan-failed" && x.EntityId == backupId.ToString()));
+    }
+    [Fact]
+    public async Task Backup_fails_same_name_tables_with_incompatible_schemas_across_nodes()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var cluster = await fixture.Db.ClickHouseClusters.Include(x => x.AccessNodes).SingleAsync(x => x.Id == fixture.SourceClusterId);
+        cluster.Mode = ClusterMode.Cluster;
+        cluster.ClickHouseClusterName = "prod";
+        fixture.ClickHouse.Topology.Clear();
+        fixture.ClickHouse.Topology.AddRange([
+            new ClickHouseShardReplicaInfo(1, "shard-1", 1, "source-s1", 9000, false, 0),
+            new ClickHouseShardReplicaInfo(2, "shard-2", 1, "source-s2", 9000, false, 0)
+        ]);
+        fixture.ClickHouse.InventoryByEndpoint["source-s1:9000:False"] = [Table("sales", "orders", "MergeTree", createSql: "CREATE TABLE sales.orders (id UInt64) ENGINE = MergeTree ORDER BY id")];
+        fixture.ClickHouse.InventoryByEndpoint["source-s2:9000:False"] = [Table("sales", "orders", "MergeTree", columnsJson: "[{\"name\":\"id\",\"type\":\"UInt64\"},{\"name\":\"shard\",\"type\":\"UInt8\"}]", createSql: "CREATE TABLE sales.orders (id UInt64, shard UInt8) ENGINE = MergeTree ORDER BY id")];
+        await fixture.Db.SaveChangesAsync();
+
+        var backupId = await fixture.CreateManualBackupAsync();
+        await fixture.RunBackupAsync(backupId);
+
+        fixture.Db.ChangeTracker.Clear();
+        var backup = await fixture.Db.Backups.SingleAsync(x => x.Id == backupId);
+        Assert.Equal(BackupRunStatus.Failed, backup.Status);
+        Assert.Contains("incompatible schemas", backup.FailureReason, StringComparison.OrdinalIgnoreCase);
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "table-schema-conflict" && x.EntityId == backupId.ToString()));
     }
 
     [Fact]
@@ -4340,6 +4463,42 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public void Restore_statement_allows_different_table_definition_only_when_requested()
+    {
+        var backupTable = new BackupTableEntity
+        {
+            Database = "sales",
+            Table = "orders",
+            Engine = "ReplicatedMergeTree"
+        };
+        var shard = new RestoreTableShardEntity
+        {
+            RestoreDatabase = "sales_restore",
+            RestoreTableName = "orders"
+        };
+        var destination = new ClickHouseStorageDestination("<target>", [], [], [], []);
+
+        var clusterSql = ClickHouseRestoreSqlBuilder.Build(backupTable, shard, destination, false, false, ClickHouseAdvancedSettings.Empty);
+        var singleNodeSql = ClickHouseRestoreSqlBuilder.Build(backupTable, shard, destination, false, true, ClickHouseAdvancedSettings.Empty);
+
+        Assert.DoesNotContain("allow_different_table_def", clusterSql, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("allow_different_table_def = 1", singleNodeSql, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Replicated_merge_tree_rewrite_normalizes_engine_arguments_without_touching_table_name()
+    {
+        var replacing = ClickHouseSql.RewriteReplicatedMergeTreeToLocalMergeTreeOrThrow(
+            "CREATE TABLE sales.ReplicatedOrders (id UInt64, version UInt64) ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/orders', '{replica}', version) ORDER BY id");
+        var aggregating = ClickHouseSql.RewriteReplicatedMergeTreeToLocalMergeTreeOrThrow(
+            "CREATE TABLE sales.metrics (id UInt64) ENGINE = ReplicatedAggregatingMergeTree('/path,with,commas(and parens)', 'replica') ORDER BY id");
+
+        Assert.Contains("CREATE TABLE sales.ReplicatedOrders", replacing, StringComparison.Ordinal);
+        Assert.Contains("ENGINE = ReplacingMergeTree(version)", replacing, StringComparison.Ordinal);
+        Assert.DoesNotContain("ReplicatedReplacingMergeTree", replacing, StringComparison.Ordinal);
+        Assert.Contains("ENGINE = AggregatingMergeTree ORDER BY id", aggregating, StringComparison.Ordinal);
+    }
+    [Fact]
     public async Task Restore_shard_retries_transient_failure_and_succeeds()
     {
         await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions
@@ -5416,6 +5575,7 @@ public sealed class BackupRestoreExecutionTests
             if (table.SchemaDefinition is not null)
             {
                 table.SchemaDefinition.Engine = "ReplicatedMergeTree";
+                table.SchemaDefinition.CreateTableSql = $"CREATE TABLE {table.Database}.{table.Table} (id UInt64) ENGINE = ReplicatedMergeTree('/clickhouse/tables/{{shard}}/{table.Table}', '{{replica}}') ORDER BY id";
             }
         }
     }
@@ -5522,6 +5682,7 @@ public sealed class BackupRestoreExecutionTests
         public List<ClickHouseNodeEndpoint> GetTablesEndpoints { get; } = [];
         public int GetTablesCallCount { get; private set; }
         public Dictionary<string, List<ClickHouseTableInfo>> InventoryByEndpoint { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> InventoryFailureEndpoints { get; } = new(StringComparer.OrdinalIgnoreCase);
         public List<string> KilledQueries { get; } = [];
         public List<ClickHouseNodeEndpoint> KilledQueryEndpoints { get; } = [];
         public List<ClickHouseNodeEndpoint> ExecuteEndpoints { get; } = [];
@@ -5570,6 +5731,10 @@ public sealed class BackupRestoreExecutionTests
         public Task<IReadOnlyList<ClickHouseTableInfo>> GetTablesAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, CancellationToken cancellationToken)
         {
             GetTablesEndpoints.Add(endpoint);
+            if (InventoryFailureEndpoints.Contains(EndpointKey(endpoint)))
+            {
+                throw new InvalidOperationException($"Inventory failed for {endpoint.Host}:{endpoint.Port}.");
+            }
             if (InventoryByEndpoint.TryGetValue(EndpointKey(endpoint), out var inventory))
             {
                 return Task.FromResult<IReadOnlyList<ClickHouseTableInfo>>(inventory.ToList());
@@ -5722,8 +5887,9 @@ public sealed class BackupRestoreExecutionTests
                 RestoreStartTables.Add(backupTable.Table);
                 RestoreStartShardNumbers.Add(table.TargetShardNumber ?? table.SourceShardNumber);
                 RestoreStartEndpoints.Add(endpoint);
-                var choboSettings = allowNonEmptyTables ? new[] { ("allow_non_empty_tables", "1") } : [];
-                RestoreStartSql.Add($"RESTORE TABLE {ClickHouseSql.Qualified(backupTable.Database, backupTable.Table)} AS {ClickHouseSql.Qualified(table.RestoreDatabase, table.RestoreTableName)} FROM <target>{ClickHouseAdvancedSettings.ToSettingsClause(settings, choboSettings)} ASYNC");
+                var allowDifferentTableDefinition = cluster.Mode == ClusterMode.SingleInstance && ClickHouseSql.IsReplicatedMergeTreeEngine(backupTable.Engine);
+                var destination = new ClickHouseStorageDestination("<target>", [], [], [], []);
+                RestoreStartSql.Add(ClickHouseRestoreSqlBuilder.Build(backupTable, table, destination, allowNonEmptyTables, allowDifferentTableDefinition, settings));
                 RestoreTargetTables.Add(table.RestoreTableName);
                 RestoreAllowNonEmptyTables.Add(allowNonEmptyTables);
                 RestoreSettings.Add(settings);
@@ -6486,7 +6652,3 @@ public sealed class BackupRestoreExecutionTests
         public override DateTimeOffset GetUtcNow() => utcNow;
     }
 }
-
-
-
-

@@ -10,11 +10,20 @@ public static class ClickHouseRestoreSqlBuilder
         RestoreTableShardEntity restoreShard,
         ClickHouseStorageDestination destination,
         bool allowNonEmptyTables,
+        bool allowDifferentTableDefinition,
         IReadOnlyDictionary<string, JsonElement> settings)
     {
         var from = ClickHouseSql.Qualified(backupTable.Database, backupTable.Table);
         var to = ClickHouseSql.Qualified(restoreShard.RestoreDatabase, restoreShard.RestoreTableName);
-        var choboSettings = allowNonEmptyTables ? new[] { ("allow_non_empty_tables", "1") } : [];
+        var choboSettings = new List<(string Name, string Value)>();
+        if (allowNonEmptyTables)
+        {
+            choboSettings.Add(("allow_non_empty_tables", "1"));
+        }
+        if (allowDifferentTableDefinition)
+        {
+            choboSettings.Add(("allow_different_table_def", "1"));
+        }
         var settingsClause = ClickHouseAdvancedSettings.ToSettingsClause(settings, choboSettings.Concat(destination.Settings).ToArray());
         return $"RESTORE TABLE {from} AS {to} FROM {destination.Expression}{settingsClause} ASYNC";
     }

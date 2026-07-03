@@ -534,7 +534,7 @@ public sealed class RestoreApplicationService(
 
             var candidates = await LoadShardCandidatesAsync(policyId, anchor, table, request.AnchorBackupId is not null, cancellationToken);
             var defaults = ChooseDefaultShardSources(table, candidates, mapping);
-            var selectedShards = defaults.Values
+            var selectedShards = defaults
                 .Where(x => MatchesRequestedSourceShard(x.SourceShardNumber, initiateRequest))
                 .OrderBy(x => x.SourceShardNumber)
                 .ToList();
@@ -587,7 +587,7 @@ public sealed class RestoreApplicationService(
                     candidate.SourceShardName,
                     candidate.Status,
                     IsShardCandidateCompatible(table, candidate),
-                    defaults.TryGetValue(candidate.SourceShardNumber, out var selectedDefault) && selectedDefault.Id == candidate.Id,
+                    defaults.Any(selectedDefault => selectedDefault.Id == candidate.Id),
                     IsShardCandidateCompatible(table, candidate) ? null : "Schema does not match the anchor table."))
                 .OrderBy(x => x.SourceShardNumber)
                 .ThenByDescending(x => x.CreatedAt)
@@ -668,9 +668,9 @@ public sealed class RestoreApplicationService(
                 .OrderBy(x => x.SourceShardNumber)
                 .ToList();
         }
-        if (shardSources.Select(x => x.SourceShardNumber).Distinct().Count() != shardSources.Count)
+        if (shardSources.Select(x => x.BackupTableShardId).Distinct().Count() != shardSources.Count)
         {
-            throw new ArgumentException("Shard source mappings must not contain duplicate source shard numbers.");
+            throw new ArgumentException("Shard source mappings must not contain duplicate backup shard ids.");
         }
         var ids = shardSources.Select(x => x.BackupTableShardId).ToList();
         var selected = await db.BackupTableShards
@@ -712,20 +712,38 @@ public sealed class RestoreApplicationService(
         return await query.OrderBy(x => x.SourceShardNumber).ThenByDescending(x => x.BackupTable!.Backup!.CreatedAt).ToListAsync(cancellationToken);
     }
 
-    private static Dictionary<int, BackupTableShardEntity> ChooseDefaultShardSources(BackupTableEntity anchorTable, IReadOnlyList<BackupTableShardEntity> candidates, RestoreTableMappingRequest? mapping)
+    private static IReadOnlyList<BackupTableShardEntity> ChooseDefaultShardSources(BackupTableEntity anchorTable, IReadOnlyList<BackupTableShardEntity> candidates, RestoreTableMappingRequest? mapping)
     {
-        var defaults = candidates
-            .Where(candidate => IsShardCandidateCompatible(anchorTable, candidate))
-            .GroupBy(x => x.SourceShardNumber)
-            .ToDictionary(group => group.Key, group => group.OrderByDescending(x => x.BackupTable!.Backup!.CreatedAt).First());
-        foreach (var source in mapping?.ShardSources ?? [])
+        if (mapping?.ShardSources is { Count: > 0 } shardSources)
         {
-            var shard = candidates.FirstOrDefault(x => x.Id == source.BackupTableShardId)
-                ?? throw new ArgumentException($"Shard source {source.BackupTableShardId} was not found in the available candidates.");
-            ValidateShardSource(anchorTable, shard, source.SourceShardNumber);
-            defaults[source.SourceShardNumber] = shard;
+            var mapped = new List<BackupTableShardEntity>();
+            foreach (var source in shardSources)
+            {
+                var shard = candidates.FirstOrDefault(x => x.Id == source.BackupTableShardId)
+                    ?? throw new ArgumentException($"Shard source {source.BackupTableShardId} was not found in the available candidates.");
+                ValidateShardSource(anchorTable, shard, source.SourceShardNumber);
+                mapped.Add(shard);
+            }
+            return mapped;
         }
-        return defaults;
+
+        var selected = candidates
+            .Where(candidate => IsShardCandidateCompatible(anchorTable, candidate))
+            .Where(candidate => candidate.BackupTable?.BackupId == anchorTable.BackupId)
+            .ToList();
+        var selectedSourceShards = selected.Select(x => x.SourceShardNumber).ToHashSet();
+        var missingSourceShardFallbacks = candidates
+            .Where(candidate => IsShardCandidateCompatible(anchorTable, candidate))
+            .Where(candidate => !selectedSourceShards.Contains(candidate.SourceShardNumber))
+            .GroupBy(candidate => candidate.SourceShardNumber)
+            .Select(group => group.OrderByDescending(x => x.BackupTable!.Backup!.CreatedAt).First());
+        selected.AddRange(missingSourceShardFallbacks);
+        return selected
+            .OrderBy(x => x.SourceShardNumber)
+            .ThenBy(x => x.ReplicaNumber)
+            .ThenBy(x => x.Host, StringComparer.Ordinal)
+            .ThenBy(x => x.Port)
+            .ToList();
     }
 
     private static void ValidateShardSource(BackupTableEntity anchorTable, BackupTableShardEntity shard, int requestedSourceShard)
@@ -773,7 +791,7 @@ public sealed class RestoreApplicationService(
             RestoreDatabase = restoreTable.TargetDatabase,
             RestoreTableName = restoreTable.TargetTable
         };
-        var sql = ClickHouseRestoreSqlBuilder.Build(backupTable, previewShard, destination, restoreTable.Append, settings);
+        var sql = ClickHouseRestoreSqlBuilder.Build(backupTable, previewShard, destination, restoreTable.Append, false, settings);
         return ClickHouseRestoreSqlBuilder.RedactForPreview(sql, destination.SensitiveValues);
     }
     private static bool IsBackupRestorable(BackupRunStatus status) =>
