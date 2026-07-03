@@ -665,6 +665,36 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Backup_shard_retries_clickhouse_backup_already_exists_with_new_attempt_path()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions
+        {
+            MaxDop = 1,
+            PollInterval = TimeSpan.FromMilliseconds(1),
+            TransientShardRetryDelay = TimeSpan.FromMilliseconds(1),
+            TransientShardMaxRetries = 3
+        });
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+        fixture.ClickHouse.BackupStartOutcomes.Enqueue((
+            "BACKUP_FAILED",
+            "Code: 598. DB::Exception: Backup failed: backup already exists. (BACKUP_ALREADY_EXISTS)"));
+        fixture.ClickHouse.BackupStartOutcomes.Enqueue(("BACKUP_CREATED", null));
+
+        var backupId = await fixture.CreateManualBackupAsync();
+        await fixture.RunBackupAsync(backupId);
+
+        fixture.Db.ChangeTracker.Clear();
+        var backup = await fixture.Db.Backups.Include(x => x.Tables).ThenInclude(x => x.Shards).SingleAsync(x => x.Id == backupId);
+        var shard = Assert.Single(Assert.Single(backup.Tables).Shards);
+        Assert.Equal(BackupRunStatus.Succeeded, backup.Status);
+        Assert.Equal(BackupTableStatus.Succeeded, shard.Status);
+        Assert.Equal(2, fixture.ClickHouse.BackupStartStoragePaths.Count);
+        Assert.NotEqual(fixture.ClickHouse.BackupStartStoragePaths[0], fixture.ClickHouse.BackupStartStoragePaths[1]);
+        Assert.Equal(fixture.ClickHouse.BackupStartStoragePaths[1], shard.StoragePath);
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "shard-retry-scheduled" && x.EntityId == shard.Id.ToString() && x.Details.Contains("freshDestination")));
+    }
+
+    [Fact]
     public async Task Backup_statement_includes_cluster_and_policy_advanced_settings()
     {
         await using var fixture = await TestFixture.CreateAsync();
@@ -5664,6 +5694,7 @@ public sealed class BackupRestoreExecutionTests
         public List<ClickHouseShardReplicaInfo> Topology { get; } = [new(1, "single", 1, "source", 9000, false, 0)];
         public Dictionary<string, string> KnownOperations { get; } = new(StringComparer.Ordinal);
         public List<(string OperationId, string StoragePath)> BackupOperations { get; } = [];
+        public Queue<(string Status, string? Error)> BackupStartOutcomes { get; } = [];
         public List<string> BackupStartStoragePaths { get; } = [];
         public List<string> BackupStartTables { get; } = [];
         public List<int> BackupStartShardNumbers { get; } = [];
@@ -5858,11 +5889,14 @@ public sealed class BackupRestoreExecutionTests
             var operationId = $"backup-{table.Table}-s{shard.SourceShardNumber}-{Guid.NewGuid():N}";
             if (!DropStartedBackupOperation)
             {
-                KnownOperations[operationId] = NextBackupStatus;
+                (string Status, string? Error) outcome = BackupStartOutcomes.Count > 0
+                    ? BackupStartOutcomes.Dequeue()
+                    : (NextBackupStatus, NextBackupError);
+                KnownOperations[operationId] = outcome.Status;
                 BackupOperations.Add((operationId, shard.StoragePath));
-                if (!string.IsNullOrWhiteSpace(NextBackupError))
+                if (!string.IsNullOrWhiteSpace(outcome.Error))
                 {
-                    OperationErrors[operationId] = NextBackupError;
+                    OperationErrors[operationId] = outcome.Error;
                 }
             }
             return operationId;
@@ -6652,3 +6686,4 @@ public sealed class BackupRestoreExecutionTests
         public override DateTimeOffset GetUtcNow() => utcNow;
     }
 }
+
