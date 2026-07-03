@@ -1996,6 +1996,8 @@ public sealed class ChoboFoundationTests
         Assert.Contains(list.Items, x => x.Key == "Chobo:Sqlite:JournalMode" && x.EffectiveValue == "WAL" && x.ValueType == RuntimeSettingValueType.String && x.ApplyMode == RuntimeSettingApplyMode.Live);
         Assert.Contains(list.Items, x => x.Key == "Chobo:Sqlite:BusyTimeout" && x.EffectiveValue == "00:00:05" && x.ValueType == RuntimeSettingValueType.TimeSpan && x.ApplyMode == RuntimeSettingApplyMode.Live);
         Assert.Contains(list.Items, x => x.Key == "Chobo:Sqlite:WalAutoCheckpoint" && x.EffectiveValue == "1000" && x.ValueType == RuntimeSettingValueType.Integer && x.ApplyMode == RuntimeSettingApplyMode.Live);
+        Assert.Contains(list.Items, x => x.Key == "Chobo:ClusterMetadata:CacheDuration" && x.EffectiveValue == "01:00:00" && x.ValueType == RuntimeSettingValueType.TimeSpan && x.ApplyMode == RuntimeSettingApplyMode.Live);
+        Assert.Contains(list.Items, x => x.Key == "Chobo:ClusterMetadata:RefreshInterval" && x.EffectiveValue == "00:30:00" && x.ValueType == RuntimeSettingValueType.TimeSpan && x.ApplyMode == RuntimeSettingApplyMode.Live);
         Assert.DoesNotContain(list.Items, x => x.Key == "Chobo:EncryptionKeyBase64");
         Assert.DoesNotContain(list.Items, x => x.Key == "Chobo:Init:AccessToken");
         Assert.DoesNotContain(list.Items, x => x.Key == "Chobo:Settings:HiddenKeys");

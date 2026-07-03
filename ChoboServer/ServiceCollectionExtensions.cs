@@ -28,6 +28,7 @@ public static class ServiceCollectionExtensions
         services.AddOptions<ChoboDataRetentionOptions>().Bind(configuration.GetSection("Chobo:DataRetention"));
         services.AddOptions<ChoboSqliteSelfBackupOptions>().Bind(configuration.GetSection("Chobo:SqliteSelfBackup"));
         services.AddOptions<ChoboBackupRestoreOptions>().Bind(configuration.GetSection("Chobo:BackupRestore"));
+        services.AddOptions<ChoboClusterMetadataOptions>().Bind(configuration.GetSection("Chobo:ClusterMetadata"));
         services.AddOptions<ChoboDatabaseLoggingOptions>().Bind(configuration.GetSection("Chobo:DatabaseLogging"));
         services.AddOptions<BackupStorageOperationOptions>().Bind(configuration.GetSection("Chobo:BackupStorageOperations"));
         services.AddOptions<RetentionManagementOptions>().Bind(configuration.GetSection("Chobo:RetentionManagement"));
@@ -127,6 +128,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IEndpointRewriteService, EndpointRewriteService>();
         services.AddScoped<ClickHouseAdapter>();
         services.AddScoped<IClickHouseAdapter>(serviceProvider => serviceProvider.GetRequiredService<ClickHouseAdapter>());
+        services.AddSingleton<IClickHouseClusterMetadataService, ClickHouseClusterMetadataService>();
         services.AddScoped<IBackupStorageProvider, S3StorageProvider>();
         services.AddScoped<IBackupStorageProviderRegistry, BackupStorageProviderRegistry>();
         services.AddScoped<IBackupStorageOperations, BackupStorageOperations>();
@@ -164,6 +166,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(TimeProvider.System);
         services.AddSingleton<IBackupRestoreQueues, BackupRestoreQueues>();
         services.AddHostedService<BackupRestoreResumeBackgroundService>();
+        services.AddHostedService<ClickHouseClusterMetadataRefreshBackgroundService>();
         services.AddHostedService<BackupRestoreOperationDispatcherBackgroundService>();
         services.AddHostedService<BackupSchedulerDispatcherBackgroundService>();
         services.AddHostedService<RetentionManagementBackgroundService>();
@@ -222,4 +225,3 @@ public static class ServiceCollectionExtensions
         }
     }
 }
-

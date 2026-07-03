@@ -11,6 +11,7 @@ public sealed class ClusterApplicationService(
     IUnitOfWork unitOfWork,
     ICredentialProtector protector,
     IClickHouseAdapter clickHouse,
+    IClickHouseClusterMetadataService metadata,
     IAuditService audit,
     SystemDefaultBackupPolicyService systemDefaults)
 {
@@ -35,7 +36,7 @@ public sealed class ClusterApplicationService(
             return null;
         }
 
-        var topology = await clickHouse.GetTopologyAsync(cluster, cancellationToken);
+        var topology = (await metadata.GetAsync(cluster, cancellationToken)).Topology;
         return new ClickHouseClusterTopologyDto(
             id,
             topology
@@ -73,6 +74,7 @@ public sealed class ClusterApplicationService(
 
         await clusters.AddAsync(cluster);
         await unitOfWork.SaveChangesAsync();
+        metadata.Invalidate(cluster.Id);
 
         var current = ToDto(cluster);
         await audit.RecordAsync("create", AuditEntityType.Cluster, cluster.Id.ToString(), AuditDetails.Change(null, current));
@@ -127,6 +129,7 @@ public sealed class ClusterApplicationService(
         await clusters.AddNodesAsync(replacementNodes);
 
         await unitOfWork.SaveChangesAsync();
+        metadata.Invalidate(id);
         cluster.AccessNodes = replacementNodes;
         var current = ToDto(cluster);
         await audit.RecordAsync("update", AuditEntityType.Cluster, id.ToString(), AuditDetails.Change(previous, current));
@@ -161,6 +164,7 @@ public sealed class ClusterApplicationService(
 
         cluster.UpdatedAt = DateTimeOffset.UtcNow;
         await unitOfWork.SaveChangesAsync();
+        metadata.Invalidate(id);
         var current = ToDto(cluster);
         await audit.RecordAsync("update-credentials", AuditEntityType.Cluster, id.ToString(), new
         {
@@ -186,6 +190,7 @@ public sealed class ClusterApplicationService(
         cluster.IsDeleted = true;
         cluster.DeletedAt = DateTimeOffset.UtcNow;
         await unitOfWork.SaveChangesAsync();
+        metadata.Invalidate(id);
 
         await audit.RecordAsync("delete", AuditEntityType.Cluster, id.ToString(), AuditDetails.Deactivation(previous, ToDto(cluster)));
         return true;

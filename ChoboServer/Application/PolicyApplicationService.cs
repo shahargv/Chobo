@@ -6,7 +6,6 @@ using ChoboServer.Data;
 using ChoboServer.Repositories;
 using ChoboServer.Services;
 using ChoboServer.Options;
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 
 namespace ChoboServer.Application;
@@ -16,15 +15,13 @@ public sealed class PolicyApplicationService(
     IScheduleRepository schedules,
     IClusterRepository clusters,
     ITargetRepository targets,
-    IClickHouseAdapter clickHouse,
-    IMemoryCache memoryCache,
+    IClickHouseClusterMetadataService metadata,
     IUnitOfWork unitOfWork,
     IAuditService audit,
     PolicySelectorEvaluationService selectorEvaluation,
     IOptionsMonitor<ChoboBackupRestoreOptions> backupRestoreOptions)
 {
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
-    private static readonly TimeSpan InventoryCacheDuration = TimeSpan.FromMinutes(5);
 
     public async Task<IReadOnlyList<BackupPolicyDto>> ListAsync(bool includeDeleted = false) =>
         (await policies.ListAsync(includeDeleted)).Select(ToDto).ToList();
@@ -123,16 +120,17 @@ public sealed class PolicyApplicationService(
             return null;
         }
 
-        return await memoryCache.GetOrCreateAsync(
-            $"policy-inventory:{sourceClusterId:N}",
-            async entry =>
-            {
-                entry.AbsoluteExpirationRelativeToNow = InventoryCacheDuration;
-                var inventory = await clickHouse.GetTablesAsync(cluster, cancellationToken);
-                return new PolicyInventory(inventory
-                    .Select(x => new PolicyInventoryTable(x.Database, x.Table))
-                    .ToList());
-            });
+        var snapshot = await metadata.GetAsync(cluster, cancellationToken);
+        if (snapshot.NodeFailures.Count > 0)
+        {
+            throw new InvalidOperationException($"Could not read ClickHouse table inventory from every source node. Failed node count: {snapshot.NodeFailures.Count}. First error: {snapshot.NodeFailures.First().Error}");
+        }
+
+        return new PolicyInventory(snapshot.Placements
+            .Select(x => x.Table)
+            .DistinctBy(x => ClickHouseBackupIdentity.Table(x.Database, x.Table))
+            .Select(x => new PolicyInventoryTable(x.Database, x.Table))
+            .ToList());
     }
 
     public async Task<PolicySimulationDto?> SimulateAsync(PolicySimulationRequest request, CancellationToken cancellationToken = default)
@@ -312,4 +310,3 @@ public sealed class PolicyApplicationService(
         return options;
     }
 }
-

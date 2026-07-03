@@ -16,6 +16,7 @@ public sealed class RestoreRunnerService(
     IOptionsMonitor<ChoboBackupRestoreOptions> options,
     BackupRestoreQueueApplicationService queue,
     IAuditService audit,
+    IClickHouseClusterMetadataService metadata,
     Serilog.ILogger logger)
 {
     private static readonly ConcurrentDictionary<Guid, byte> ActiveRestoreRuns = new();
@@ -94,6 +95,7 @@ public sealed class RestoreRunnerService(
             LogRestoreCompletion(restore);
             var auditAction = restore.Status == RestoreRunStatus.Succeeded ? "succeeded" : restore.Status == RestoreRunStatus.PartiallySucceeded ? "partially-succeeded" : "failed";
             await audit.RecordAsync(auditAction, AuditEntityType.Restore, restore.Id.ToString(), new { tableCount, layout = restore.Layout, restore.SourceShard, restore.TargetShard, restore.FailureReason });
+            metadata.Invalidate(restore.TargetClusterId);
             if (restore.Status is RestoreRunStatus.Failed or RestoreRunStatus.PartiallySucceeded)
             {
                 await queue.RemoveActiveOperationItemsAsync(BackupRestoreQueueKind.Restore, restore.Id, "restore-finished-unsuccessfully", cancellationToken);
@@ -125,6 +127,7 @@ public sealed class RestoreRunnerService(
                 item.CompletedAt = now;
             }
             await db.SaveChangesAsync(CancellationToken.None);
+            metadata.Invalidate(restore.TargetClusterId);
             await audit.RecordAsync("failed", AuditEntityType.Restore, restore.Id.ToString(), new { error = ex.Message, restore.FailureReason });
             await queue.RemoveActiveOperationItemsAsync(BackupRestoreQueueKind.Restore, restore.Id, "restore-runner-exception", CancellationToken.None);
             return BackupRestoreOperationRunResult.Completed;
@@ -200,6 +203,7 @@ public sealed class RestoreRunnerService(
         using var scope = scopeFactory.CreateScope();
         var scopedDb = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
         var scopedClickHouse = scope.ServiceProvider.GetRequiredService<IClickHouseAdapter>();
+        var scopedMetadata = scope.ServiceProvider.GetRequiredService<IClickHouseClusterMetadataService>();
         var scopedAudit = scope.ServiceProvider.GetRequiredService<IAuditService>();
         var scopedQueue = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
 
@@ -238,7 +242,7 @@ public sealed class RestoreRunnerService(
             var firstShardNumber = orderedShards.Count == 0
                 ? (int?)null
                 : orderedShards[0].TargetShardNumber ?? orderedShards[0].SourceShardNumber;
-            firstEndpoint = await ResolveAvailableRestorePreparationEndpointAsync(scopedClickHouse, restore.TargetCluster!, firstEndpoint, firstShardNumber, cancellationToken);
+            firstEndpoint = await ResolveAvailableRestorePreparationEndpointAsync(scopedClickHouse, scopedMetadata, restore.TargetCluster!, firstEndpoint, firstShardNumber, cancellationToken);
             await scopedClickHouse.ExecuteAsync(firstEndpoint, restore.TargetCluster!, $"CREATE DATABASE IF NOT EXISTS {ClickHouseSql.Identifier(table.TargetDatabase)}", cancellationToken);
             var existing = await scopedClickHouse.GetTableAsync(firstEndpoint, restore.TargetCluster!, table.TargetDatabase, table.TargetTable, cancellationToken);
             if (!hasSubmittedOperations && existing is not null && !table.Append)
@@ -267,7 +271,7 @@ public sealed class RestoreRunnerService(
             }
             if (!hasSubmittedOperations && existing is null && !table.Append && restore.Layout != RestoreLayout.Redistribute)
             {
-                await EnsureTargetTableExistsOnAllShardsAsync(scopedClickHouse, restore, backupTable, table, cancellationToken);
+                await EnsureTargetTableExistsOnAllShardsAsync(scopedClickHouse, scopedMetadata, restore, backupTable, table, cancellationToken);
             }
 
             if (orderedShards.Count == 0)
@@ -390,6 +394,7 @@ public sealed class RestoreRunnerService(
         using var scope = scopeFactory.CreateScope();
         var scopedDb = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
         var scopedClickHouse = scope.ServiceProvider.GetRequiredService<IClickHouseAdapter>();
+        var scopedMetadata = scope.ServiceProvider.GetRequiredService<IClickHouseClusterMetadataService>();
         var scopedAudit = scope.ServiceProvider.GetRequiredService<IAuditService>();
         var scopedOptions = scope.ServiceProvider.GetRequiredService<IOptionsMonitor<ChoboBackupRestoreOptions>>();
         var scopedQueue = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
@@ -418,7 +423,7 @@ public sealed class RestoreRunnerService(
         if (string.IsNullOrWhiteSpace(shard.ClickHouseOperationId) && ClickHouseSql.IsReplicatedMergeTreeEngine(backupTable.Engine))
         {
             var failedEndpointKeys = failedEndpoints.TryGetValue(shard.Id, out var failed) ? failed.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase) : [];
-            var candidates = (await scopedClickHouse.GetTopologyAsync(restore.TargetCluster!, cancellationToken))
+            var candidates = (await scopedMetadata.GetAsync(restore.TargetCluster!, cancellationToken)).Topology
                 .Where(x => x.ShardNumber == (shard.TargetShardNumber ?? shard.SourceShardNumber))
                 .OrderBy(x => failedEndpointKeys.Contains(EndpointKey(x.Endpoint)))
                 .ThenBy(_ => Random.Shared.Next())
@@ -587,10 +592,10 @@ public sealed class RestoreRunnerService(
         }
         await scopedDb.SaveChangesAsync(cancellationToken);
     }
-    private async Task EnsureTargetTableExistsOnAllShardsAsync(IClickHouseAdapter adapter, RestoreEntity restore, BackupTableEntity backupTable, RestoreTableEntity table, CancellationToken cancellationToken)
+    private async Task EnsureTargetTableExistsOnAllShardsAsync(IClickHouseAdapter adapter, IClickHouseClusterMetadataService metadata, RestoreEntity restore, BackupTableEntity backupTable, RestoreTableEntity table, CancellationToken cancellationToken)
     {
         var cluster = restore.TargetCluster!;
-        var topology = await adapter.GetTopologyAsync(cluster, cancellationToken);
+        var topology = (await metadata.GetAsync(cluster, cancellationToken)).Topology;
         var createTableSql = BuildCreateTableSql(restore, backupTable, table);
 
         if (topology.Count == 0 && cluster.AccessNodes.Count > 0)
@@ -613,20 +618,20 @@ public sealed class RestoreRunnerService(
                 .ThenBy(x => x.Port)
                 .First()
                 .Endpoint;
-            var endpoint = await ResolveAvailableRestorePreparationEndpointAsync(adapter, cluster, preferred, shard.Key, cancellationToken);
+            var endpoint = await ResolveAvailableRestorePreparationEndpointAsync(adapter, metadata, cluster, preferred, shard.Key, cancellationToken);
             await adapter.ExecuteAsync(endpoint, cluster, $"CREATE DATABASE IF NOT EXISTS {ClickHouseSql.Identifier(table.TargetDatabase)}", cancellationToken);
             await adapter.ExecuteAsync(endpoint, cluster, createTableSql, cancellationToken);
         }
     }
 
-    private async Task<ClickHouseNodeEndpoint> ResolveAvailableRestorePreparationEndpointAsync(IClickHouseAdapter adapter, ClickHouseClusterEntity cluster, ClickHouseNodeEndpoint preferred, int? shardNumber, CancellationToken cancellationToken)
+    private async Task<ClickHouseNodeEndpoint> ResolveAvailableRestorePreparationEndpointAsync(IClickHouseAdapter adapter, IClickHouseClusterMetadataService metadata, ClickHouseClusterEntity cluster, ClickHouseNodeEndpoint preferred, int? shardNumber, CancellationToken cancellationToken)
     {
         if (await IsRestorePreparationEndpointAvailableAsync(adapter, cluster, preferred, shardNumber, cancellationToken))
         {
             return preferred;
         }
 
-        var topology = await adapter.GetTopologyAsync(cluster, cancellationToken);
+        var topology = (await metadata.GetAsync(cluster, cancellationToken)).Topology;
         var candidates = topology
             .Where(x => shardNumber is null || x.ShardNumber == shardNumber.Value)
             .OrderBy(x => x.ReplicaNumber)

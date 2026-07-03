@@ -19,6 +19,7 @@ public interface IBackupStorageManifestService
 public sealed class BackupStorageManifestService(
     ChoboDbContext db,
     IBackupStorageOperations storage,
+    IClickHouseClusterMetadataService metadata,
     IAuditService audit,
     Serilog.ILogger logger) : IBackupStorageManifestService
 {
@@ -162,6 +163,10 @@ public sealed class BackupStorageManifestService(
             }
 
             await transaction.CommitAsync(cancellationToken);
+            foreach (var clusterId in importScope.ClusterIds)
+            {
+                metadata.Invalidate(clusterId);
+            }
         }
         catch
         {

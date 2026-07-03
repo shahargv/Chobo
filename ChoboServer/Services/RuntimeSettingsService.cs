@@ -44,6 +44,7 @@ public sealed class RuntimeSettingsService(
         new(typeof(ChoboDataRetentionOptions), "Chobo:DataRetention", RuntimeSettingApplyMode.Live, null),
         new(typeof(ChoboSqliteSelfBackupOptions), "Chobo:SqliteSelfBackup", RuntimeSettingApplyMode.Live, null),
         new(typeof(ChoboBackupRestoreOptions), "Chobo:BackupRestore", RuntimeSettingApplyMode.Live, null),
+        new(typeof(ChoboClusterMetadataOptions), "Chobo:ClusterMetadata", RuntimeSettingApplyMode.Live, null),
         new(typeof(ChoboDatabaseLoggingOptions), "Chobo:DatabaseLogging", RuntimeSettingApplyMode.Live, "Slow SQLite query logging is emitted at Information level. Set a negative threshold to disable it."),
         new(typeof(BackupStorageOperationOptions), "Chobo:BackupStorageOperations", RuntimeSettingApplyMode.Live, null),
         new(typeof(RetentionManagementOptions), "Chobo:RetentionManagement", RuntimeSettingApplyMode.Live, null),
@@ -281,6 +282,12 @@ public sealed class RuntimeSettingsService(
             value is null)
         {
             throw new InvalidOperationException("Slow query threshold must be a TimeSpan value.");
+        }
+        if ((string.Equals(setting.Key, "Chobo:ClusterMetadata:CacheDuration", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(setting.Key, "Chobo:ClusterMetadata:RefreshInterval", StringComparison.OrdinalIgnoreCase)) &&
+            (value is null || TimeSpan.Parse(value.GetValue<string>(), CultureInfo.InvariantCulture) <= TimeSpan.Zero))
+        {
+            throw new InvalidOperationException("Cluster metadata durations must be greater than zero.");
         }
 
         if (setting.Key.StartsWith("Chobo:Sqlite:", StringComparison.OrdinalIgnoreCase))

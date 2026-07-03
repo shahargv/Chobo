@@ -12,7 +12,7 @@ namespace ChoboServer.Application;
 
 public sealed class BackupPreparationService(
     ChoboDbContext db,
-    IClickHouseAdapter clickHouse,
+    IClickHouseClusterMetadataService metadata,
     PolicySelectorEvaluationService selectorEvaluation,
     BackupRestoreQueueApplicationService queue,
     IAuditService audit,
@@ -97,8 +97,11 @@ public sealed class BackupPreparationService(
             backup.StorageRootPath ??= BuildStorageRootPath(backup);
         }
 
-        var topology = await clickHouse.GetTopologyAsync(backup.SourceCluster!, cancellationToken);
-        var placements = await ReadClusterTablePlacementsAsync(backup, topology, selector, cancellationToken);
+        var snapshot = backup.BackupType == BackupType.Incremental
+            ? await metadata.RefreshAsync(backup.SourceCluster!, cancellationToken)
+            : await metadata.GetAsync(backup.SourceCluster!, cancellationToken);
+        var topology = snapshot.Topology;
+        var placements = await ReadClusterTablePlacementsAsync(backup, snapshot, selector, cancellationToken);
         _logger.Information("Backup {BackupId} inventory contains {PlacementCount} table placement(s).", backup.Id, placements.Count);
         var selectablePlacements = placements
             .Where(x => !IsExcludedSystemDatabase(x.Table.Database))
@@ -249,45 +252,15 @@ public sealed class BackupPreparationService(
     }
 
 
-    private async Task<IReadOnlyList<TablePlacement>> ReadClusterTablePlacementsAsync(BackupEntity backup, IReadOnlyList<ClickHouseShardReplicaInfo> topology, PolicySelector selector, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<TablePlacement>> ReadClusterTablePlacementsAsync(BackupEntity backup, ClickHouseClusterMetadataSnapshot snapshot, PolicySelector selector, CancellationToken cancellationToken)
     {
-        var orderedNodes = topology
-            .OrderBy(x => x.ShardNumber)
-            .ThenBy(x => x.ReplicaNumber)
-            .ThenBy(x => x.Host, StringComparer.Ordinal)
-            .ThenBy(x => x.Port)
+        var placements = snapshot.Placements
+            .Select(x => new TablePlacement(x.Table, x.Node))
             .ToList();
-        if (orderedNodes.Count == 0)
-        {
-            var fallbackTables = await clickHouse.GetTablesAsync(backup.SourceCluster!, cancellationToken);
-            var fallbackNode = new ClickHouseShardReplicaInfo(1, "single", 1, backup.SourceCluster!.AccessNodes[0].Host, backup.SourceCluster.AccessNodes[0].Port, backup.SourceCluster.AccessNodes[0].UseTls, 0);
-            return fallbackTables.Select(x => new TablePlacement(x, fallbackNode)).ToList();
-        }
-
-        var placements = new List<TablePlacement>();
-        var failedNodes = new List<object>();
-        var failedNodeErrors = new List<string>();
-        foreach (var node in orderedNodes)
-        {
-            try
-            {
-                var tables = await clickHouse.GetTablesAsync(node.Endpoint, backup.SourceCluster!, cancellationToken);
-                foreach (var table in tables)
-                {
-                    placements.Add(new TablePlacement(table, node));
-                }
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                failedNodes.Add(new { node.ShardNumber, node.ReplicaNumber, node.Host, node.Port, error = ex.Message });
-                failedNodeErrors.Add(ex.Message);
-                _logger.Warning(ex, "Could not read ClickHouse inventory from {Host}:{Port} for backup {BackupId}.", node.Host, node.Port, backup.Id);
-            }
-        }
+        var failedNodes = snapshot.NodeFailures
+            .Select(x => (object)new { x.Node.ShardNumber, x.Node.ReplicaNumber, x.Node.Host, x.Node.Port, error = x.Error })
+            .ToList();
+        var failedNodeErrors = snapshot.NodeFailures.Select(x => x.Error).ToList();
 
         if (failedNodes.Count > 0)
         {
@@ -297,7 +270,7 @@ public sealed class BackupPreparationService(
                 throw new InvalidOperationException($"Could not read ClickHouse table inventory from every source node. Failed node count: {failedNodes.Count}. First error: {failedNodeErrors.FirstOrDefault() ?? "unknown"}");
             }
         }
-        if (placements.Count == 0 && orderedNodes.Count > 0)
+        if (placements.Count == 0 && snapshot.Topology.Count > 0)
         {
             throw new InvalidOperationException(failedNodeErrors.FirstOrDefault() ?? "Could not read ClickHouse table inventory from any source node.");
         }

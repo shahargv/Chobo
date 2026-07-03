@@ -66,6 +66,64 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Backup_preparation_reuses_fresh_cluster_metadata_for_repeated_backups()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+
+        var first = await fixture.CreateManualBackupAsync();
+        await fixture.RunBackupAsync(first);
+        var second = await fixture.CreateManualBackupAsync();
+        await fixture.RunBackupAsync(second);
+
+        Assert.Equal(1, fixture.ClickHouse.ClusterNamesCallCount);
+        Assert.Equal(1, fixture.ClickHouse.TopologyCallCount);
+        Assert.Single(fixture.ClickHouse.GetTablesEndpoints);
+    }
+
+    [Fact]
+    public async Task Cluster_metadata_invalidation_forces_backup_preparation_refresh()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+
+        var first = await fixture.CreateManualBackupAsync();
+        await fixture.RunBackupAsync(first);
+
+        fixture.ClickHouse.Inventory.Add(Table("sales", "products", "MergeTree"));
+        fixture.Services.GetRequiredService<IClickHouseClusterMetadataService>().Invalidate(fixture.SourceClusterId);
+        var second = await fixture.CreateManualBackupAsync();
+        await fixture.RunBackupAsync(second);
+
+        Assert.Equal(2, fixture.ClickHouse.TopologyCallCount);
+        Assert.Equal(2, fixture.ClickHouse.GetTablesEndpoints.Count);
+        var secondTables = await fixture.Db.BackupTables
+            .Where(x => x.BackupId == second)
+            .OrderBy(x => x.Table)
+            .Select(x => x.Table)
+            .ToListAsync();
+        Assert.Equal(["orders", "products"], secondTables);
+    }
+
+    [Fact]
+    public async Task Replicated_backup_shard_selection_reuses_cached_topology()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        fixture.ClickHouse.Topology.Clear();
+        fixture.ClickHouse.Topology.AddRange([
+            new ClickHouseShardReplicaInfo(1, "shard-1", 1, "source-r1", 9000, false, 0),
+            new ClickHouseShardReplicaInfo(1, "shard-1", 2, "source-r2", 9000, false, 0)
+        ]);
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "ReplicatedMergeTree"));
+
+        var backupId = await fixture.CreateManualBackupAsync();
+        await fixture.RunBackupAsync(backupId);
+
+        Assert.Equal(1, fixture.ClickHouse.TopologyCallCount);
+        Assert.Equal(2, fixture.ClickHouse.GetTablesEndpoints.Count);
+        Assert.Single(fixture.ClickHouse.BackupStartEndpoints);
+    }
+    [Fact]
     public async Task Backup_paths_keep_slash_and_underscore_table_names_distinct()
     {
         await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
@@ -5681,6 +5739,8 @@ public sealed class BackupRestoreExecutionTests
         public List<string> ExecuteSql { get; } = [];
         public List<ClickHouseNodeEndpoint> GetTablesEndpoints { get; } = [];
         public int GetTablesCallCount { get; private set; }
+        public int TopologyCallCount { get; private set; }
+        public int ClusterNamesCallCount { get; private set; }
         public Dictionary<string, List<ClickHouseTableInfo>> InventoryByEndpoint { get; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> InventoryFailureEndpoints { get; } = new(StringComparer.OrdinalIgnoreCase);
         public List<string> KilledQueries { get; } = [];
@@ -5745,7 +5805,11 @@ public sealed class BackupRestoreExecutionTests
 
         private static string EndpointKey(ClickHouseNodeEndpoint endpoint) => $"{endpoint.Host}:{endpoint.Port}:{endpoint.UseTls}";
 
-        public Task<IReadOnlyList<string>> GetClusterNamesAsync(ClickHouseClusterEntity cluster, CancellationToken cancellationToken) =>Task.FromResult<IReadOnlyList<string>>(["test_cluster"]);
+        public Task<IReadOnlyList<string>> GetClusterNamesAsync(ClickHouseClusterEntity cluster, CancellationToken cancellationToken)
+        {
+            ClusterNamesCallCount++;
+            return Task.FromResult<IReadOnlyList<string>>(["test_cluster"]);
+        }
 
         public Task<ClickHouseTableInfo?> GetTableAsync(ClickHouseClusterEntity cluster, string database, string table, CancellationToken cancellationToken) =>
             Task.FromResult(Inventory.FirstOrDefault(x => x.Database == database && x.Table == table));
@@ -5784,6 +5848,7 @@ public sealed class BackupRestoreExecutionTests
 
         public async Task<IReadOnlyList<ClickHouseShardReplicaInfo>> GetTopologyAsync(ClickHouseClusterEntity cluster, CancellationToken cancellationToken)
         {
+            TopologyCallCount++;
             if (BlockTopology)
             {
                 _topologyBlocked.TrySetResult();
@@ -6179,6 +6244,7 @@ public sealed class BackupRestoreExecutionTests
                 .AddDbContextFactory<ChoboDbContext>(builder => builder.UseSqlite(connectionString), ServiceLifetime.Scoped)
                 .AddSingleton(fake)
                 .AddScoped<IClickHouseAdapter>(provider => provider.GetRequiredService<FakeClickHouseAdapter>())
+                .AddSingleton<IClickHouseClusterMetadataService, ClickHouseClusterMetadataService>()
                 .AddSingleton(storageDeletion)
                 .AddScoped<IBackupStorageOperations>(provider => provider.GetRequiredService<FakeBackupStorageOperations>())
                 .AddScoped<IBackupStorageProvider>(provider => provider.GetRequiredService<FakeBackupStorageOperations>())
@@ -6216,6 +6282,7 @@ public sealed class BackupRestoreExecutionTests
                 .AddScoped<BackupCleanupService>()
                 .AddSingleton<IBackupRestoreQueues, BackupRestoreQueues>()
                 .AddSingleton(TestOptionsMonitor.Create(options ?? new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1), SchedulerInterval = TimeSpan.FromSeconds(1) }))
+                .AddSingleton(TestOptionsMonitor.Create(new ChoboClusterMetadataOptions { CacheDuration = TimeSpan.FromHours(1), RefreshInterval = TimeSpan.FromMinutes(30) }))
                 .AddSingleton(TestOptionsMonitor.Create(new RetentionManagementOptions { Interval = TimeSpan.FromSeconds(1), MaxDop = 2 }))
                 .AddSingleton(TestOptionsMonitor.Create(new BackupsGarbageCollectorOptions { Interval = TimeSpan.FromSeconds(1), MaxDop = 2 }))
                 .AddSingleton(timeProvider ?? TimeProvider.System)
