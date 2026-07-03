@@ -14,7 +14,7 @@ public interface IExportImportService
     Task ImportAsync(ExportEnvelope envelope, bool configOnly);
 }
 
-public sealed class ExportImportService(ChoboDbContext db, IActorContext actor, BackupRestoreOperationGate operationGate) : IExportImportService
+public sealed class ExportImportService(ChoboDbContext db, IActorContext actor, BackupRestoreOperationGate operationGate, IClickHouseClusterMetadataService metadata) : IExportImportService
 {
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
@@ -89,6 +89,7 @@ public sealed class ExportImportService(ChoboDbContext db, IActorContext actor, 
         }
 
         var import = BuildImportPlan(envelope.Data, configOnly);
+        var existingClusterIds = await db.ClickHouseClusters.Select(x => x.Id).ToListAsync();
 
         await using var transaction = await db.Database.BeginTransactionAsync();
         try
@@ -195,6 +196,10 @@ public sealed class ExportImportService(ChoboDbContext db, IActorContext actor, 
 
             await db.SaveChangesAsync();
             await transaction.CommitAsync();
+            foreach (var clusterId in existingClusterIds.Concat(import.Payload.Clusters.Select(x => x.Id)).Distinct())
+            {
+                metadata.Invalidate(clusterId);
+            }
         }
         catch
         {
@@ -452,4 +457,3 @@ public sealed class ExportImportService(ChoboDbContext db, IActorContext actor, 
         return options;
     }
 }
-

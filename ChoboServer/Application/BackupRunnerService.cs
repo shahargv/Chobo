@@ -589,6 +589,7 @@ public sealed class BackupRunnerService(
         using var scope = scopeFactory.CreateScope();
         var scopedDb = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
         var scopedClickHouse = scope.ServiceProvider.GetRequiredService<IClickHouseAdapter>();
+        var scopedMetadata = scope.ServiceProvider.GetRequiredService<IClickHouseClusterMetadataService>();
         var scopedAudit = scope.ServiceProvider.GetRequiredService<IAuditService>();
         var scopedOptions = scope.ServiceProvider.GetRequiredService<IOptionsMonitor<ChoboBackupRestoreOptions>>();
         var scopedQueue = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
@@ -623,7 +624,7 @@ public sealed class BackupRunnerService(
             if (!isResumeQueueItem && string.IsNullOrWhiteSpace(shard.ClickHouseOperationId) && IsReplicatedMergeTreeEngine(table.Engine))
             {
                 var failedEndpointKeys = failedEndpoints.TryGetValue(shard.Id, out var failed) ? failed.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase) : [];
-                var shardReplicas = (await scopedClickHouse.GetTopologyAsync(backup.SourceCluster!, cancellationToken))
+                var shardReplicas = (await scopedMetadata.GetAsync(backup.SourceCluster!, cancellationToken)).Topology
                     .Where(x => x.ShardNumber == shard.SourceShardNumber)
                     .ToList();
                 var availableReplicas = await GetAvailableBackupReplicaCandidatesAsync(scopedClickHouse, backup.SourceCluster!, shardReplicas, cancellationToken);
@@ -1270,4 +1271,3 @@ public sealed class BackupRunnerService(
         message.Contains("Authentication failed", StringComparison.OrdinalIgnoreCase);
 
 }
-

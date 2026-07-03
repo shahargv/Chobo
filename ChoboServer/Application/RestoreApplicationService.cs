@@ -18,6 +18,7 @@ public sealed class RestoreApplicationService(
     IBackupRestoreQueues queues,
     BackupRestoreQueueApplicationService queueItems,
     IClickHouseAdapter clickHouse,
+    IClickHouseClusterMetadataService metadata,
     IBackupStorageProviderRegistry storageProviders,
     IOptionsMonitor<ChoboBackupRestoreOptions> options,
     BackupRestoreOperationGate operationGate,
@@ -125,7 +126,7 @@ public sealed class RestoreApplicationService(
             throw new ArgumentException("Target database/table overrides are supported only for a single table restore.");
         }
 
-        var targetRepresentatives = SelectShardRepresentatives(await clickHouse.GetTopologyAsync(targetCluster, cancellationToken));
+        var targetRepresentatives = SelectShardRepresentatives((await metadata.GetAsync(targetCluster, cancellationToken)).Topology);
         var inheritedSettings = await PreviewSettingsAsync(new RestoreSettingsPreviewRequest(request.BackupId, request.TargetClusterId), cancellationToken);
         var effectiveSettings = request.ClickHouseRestoreSettings is null
             ? inheritedSettings.Settings
@@ -514,7 +515,7 @@ public sealed class RestoreApplicationService(
             throw new ArgumentException("No anchor backup tables match the restore request.");
         }
 
-        var targetRepresentatives = SelectShardRepresentatives(await clickHouse.GetTopologyAsync(targetCluster, cancellationToken));
+        var targetRepresentatives = SelectShardRepresentatives((await metadata.GetAsync(targetCluster, cancellationToken)).Topology);
         var layout = request.Layout ?? RestoreLayout.Preserve;
         var dtoTables = new List<RestorePlanTableDto>();
         foreach (var (table, rawMapping) in selected)
