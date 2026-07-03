@@ -1,0 +1,7 @@
+<clickhouse>
+  <macros>
+    <cluster>chobo_demo_cluster</cluster>
+    <shard>s1</shard>
+    <replica>r2</replica>
+  </macros>
+</clickhouse>
