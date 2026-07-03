@@ -1,0 +1,35 @@
+<clickhouse>
+  <listen_host>0.0.0.0</listen_host>
+  <remote_servers>
+    <chobo_demo_cluster>
+      <shard>
+        <internal_replication>true</internal_replication>
+        <replica>
+          <host>clickhouse-s1-r1</host>
+          <port>9000</port>
+        </replica>
+        <replica>
+          <host>clickhouse-s1-r2</host>
+          <port>9000</port>
+        </replica>
+      </shard>
+      <shard>
+        <internal_replication>true</internal_replication>
+        <replica>
+          <host>clickhouse-s2-r1</host>
+          <port>9000</port>
+        </replica>
+        <replica>
+          <host>clickhouse-s2-r2</host>
+          <port>9000</port>
+        </replica>
+      </shard>
+    </chobo_demo_cluster>
+  </remote_servers>
+  <zookeeper>
+    <node>
+      <host>clickhouse-keeper</host>
+      <port>9181</port>
+    </node>
+  </zookeeper>
+</clickhouse>

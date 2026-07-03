@@ -1,0 +1,4 @@
+interface:
+  display_name: "Initialize Demo"
+  short_description: "Run the scripted Chobo demo environment."
+  default_prompt: "Run the initialize-demo-skill local Docker Compose workflow and report the generated access and verification summary."

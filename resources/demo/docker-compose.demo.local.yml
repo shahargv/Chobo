@@ -1,0 +1,178 @@
+name: chobo-demo
+
+services:
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: chobo-access-key
+      MINIO_ROOT_PASSWORD: chobo-secret-key
+    ports:
+      - "19000:9000"
+      - "19001:9001"
+    volumes:
+      - chobo-demo-minio-data:/data
+    networks:
+      - chobo-demo
+
+  clickhouse-keeper:
+    image: clickhouse/clickhouse-server:26.3
+    command: ["clickhouse-keeper", "--config-file=/etc/clickhouse-keeper/keeper_config.xml"]
+    ports:
+      - "19181:9181"
+      - "19234:9234"
+    volumes:
+      - ./clickhouse-keeper/keeper_config.xml:/etc/clickhouse-keeper/keeper_config.xml:ro
+      - chobo-demo-keeper-data:/var/lib/clickhouse
+    networks:
+      - chobo-demo
+
+  clickhouse-s1-r1:
+    image: clickhouse/clickhouse-server:26.3
+    environment:
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    depends_on:
+      - clickhouse-keeper
+    ports:
+      - "18111:8123"
+      - "8153:8123"
+      - "19111:9000"
+    volumes:
+      - ./clickhouse-cluster/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+      - ./clickhouse-cluster/macros-s1-r1.xml:/etc/clickhouse-server/config.d/macros.xml:ro
+      - chobo-demo-clickhouse-s1-r1-data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    networks:
+      - chobo-demo
+
+  clickhouse-s1-r2:
+    image: clickhouse/clickhouse-server:26.3
+    environment:
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    depends_on:
+      - clickhouse-keeper
+    ports:
+      - "18112:8123"
+      - "19112:9000"
+    volumes:
+      - ./clickhouse-cluster/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+      - ./clickhouse-cluster/macros-s1-r2.xml:/etc/clickhouse-server/config.d/macros.xml:ro
+      - chobo-demo-clickhouse-s1-r2-data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    networks:
+      - chobo-demo
+
+  clickhouse-s2-r1:
+    image: clickhouse/clickhouse-server:26.3
+    environment:
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    depends_on:
+      - clickhouse-keeper
+    ports:
+      - "18121:8123"
+      - "19121:9000"
+    volumes:
+      - ./clickhouse-cluster/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+      - ./clickhouse-cluster/macros-s2-r1.xml:/etc/clickhouse-server/config.d/macros.xml:ro
+      - chobo-demo-clickhouse-s2-r1-data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    networks:
+      - chobo-demo
+
+  clickhouse-s2-r2:
+    image: clickhouse/clickhouse-server:26.3
+    environment:
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    depends_on:
+      - clickhouse-keeper
+    ports:
+      - "18122:8123"
+      - "19122:9000"
+    volumes:
+      - ./clickhouse-cluster/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+      - ./clickhouse-cluster/macros-s2-r2.xml:/etc/clickhouse-server/config.d/macros.xml:ro
+      - chobo-demo-clickhouse-s2-r2-data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    networks:
+      - chobo-demo
+
+  choboserver:
+    user: root
+    build:
+      context: ../..
+      dockerfile: ChoboServer/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: SystemTest
+      ASPNETCORE_URLS: http://0.0.0.0:8080
+      CHOBO_INIT_ADMIN_USER: admin
+      CHOBO_INIT_ACCESS_TOKEN: demo-static-access-token
+      Chobo__DataDirectory: /tmp/chobo-data
+      Chobo__BackupRestore__SchedulerInterval: "00:00:05"
+      Chobo__BackupRestore__PollInterval: "00:00:02"
+      Chobo__BackupStorageOperations__S3RequestTimeout: "00:10:00"
+    ports:
+      - "18080:8080"
+    depends_on:
+      - minio
+      - clickhouse-s1-r1
+      - clickhouse-s1-r2
+      - clickhouse-s2-r1
+      - clickhouse-s2-r2
+    volumes:
+      - chobo-demo-server-data:/tmp/chobo-data
+    networks:
+      - chobo-demo
+
+  demo-init:
+    build:
+      context: ../..
+      dockerfile: resources/demo/scripts/Dockerfile.demo-init
+    environment:
+      CHOBO_INTERNAL_URL: http://choboserver:8080
+      CHOBO_PUBLIC_URL: http://host.docker.internal:18080
+      CHOBO_ACCESS_TOKEN: demo-static-access-token
+      MINIO_INTERNAL_ENDPOINT: http://minio:9000
+      MINIO_PUBLIC_ENDPOINT: http://host.docker.internal:19000
+      MINIO_CONSOLE_URL: http://host.docker.internal:19001
+      MINIO_ACCESS_KEY: chobo-access-key
+      MINIO_SECRET_KEY: chobo-secret-key
+      MINIO_BUCKET: data-bucket
+      CHOBO_DEMO_BIG_TABLE_TARGET_GB: ${CHOBO_DEMO_BIG_TABLE_TARGET_GB:-5}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ../../.artifacts/demo:/demo-output
+    depends_on:
+      - choboserver
+      - minio
+      - clickhouse-s1-r1
+      - clickhouse-s1-r2
+      - clickhouse-s2-r1
+      - clickhouse-s2-r2
+    networks:
+      - chobo-demo
+
+networks:
+  chobo-demo:
+    driver: bridge
+
+volumes:
+  chobo-demo-minio-data:
+  chobo-demo-keeper-data:
+  chobo-demo-clickhouse-s1-r1-data:
+  chobo-demo-clickhouse-s1-r2-data:
+  chobo-demo-clickhouse-s2-r1-data:
+  chobo-demo-clickhouse-s2-r2-data:
+  chobo-demo-server-data:
