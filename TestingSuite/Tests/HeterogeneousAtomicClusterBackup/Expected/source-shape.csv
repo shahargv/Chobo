@@ -1,0 +1,5 @@
+"table_a_node_one_only","['clickhouse-source-s1-r1']"
+"table_b_two_nodes_divergent","['clickhouse-source-s1-r1','clickhouse-source-s2-r1']"
+"table_c_replicated","['clickhouse-source-s2-r1','clickhouse-source-s2-r2','clickhouse-source-s3-r1','clickhouse-source-s3-r2']"
+"table_d_all_shards_control","['clickhouse-source-s1-r1','clickhouse-source-s2-r1','clickhouse-source-s3-r1']"
+"table_e_replica_only","['clickhouse-source-s2-r2']"

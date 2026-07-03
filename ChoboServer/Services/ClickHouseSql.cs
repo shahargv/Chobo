@@ -38,8 +38,161 @@ public static class ClickHouseSql
                 : rewritten;
     }
 
+    public static string RewriteReplicatedMergeTreeToLocalMergeTree(string createSql)
+    {
+        return TryRewriteReplicatedMergeTreeToLocalMergeTree(createSql, out var rewritten)
+            ? rewritten
+            : createSql;
+    }
+
+    public static string RewriteReplicatedMergeTreeToLocalMergeTreeOrThrow(string createSql)
+    {
+        if (TryRewriteReplicatedMergeTreeToLocalMergeTree(createSql, out var rewritten))
+        {
+            return rewritten;
+        }
+
+        throw new InvalidOperationException("Could not rewrite replicated MergeTree table DDL to a local MergeTree engine for single-node restore.");
+    }
+
+    public static bool IsReplicatedMergeTreeEngine(string engine) =>
+        engine.Contains("Replicated", StringComparison.OrdinalIgnoreCase) && engine.Contains("MergeTree", StringComparison.OrdinalIgnoreCase);
+
+    private static bool TryRewriteReplicatedMergeTreeToLocalMergeTree(string createSql, out string rewritten)
+    {
+        var engineIndex = createSql.IndexOf("ENGINE", StringComparison.OrdinalIgnoreCase);
+        if (engineIndex < 0)
+        {
+            rewritten = createSql;
+            return false;
+        }
+
+        var replicatedIndex = createSql.IndexOf("Replicated", engineIndex, StringComparison.OrdinalIgnoreCase);
+        if (replicatedIndex < 0)
+        {
+            rewritten = createSql;
+            return false;
+        }
+
+        var open = createSql.IndexOf('(', replicatedIndex);
+        if (open < 0)
+        {
+            rewritten = createSql;
+            return false;
+        }
+
+        var replicatedEngine = createSql[replicatedIndex..open].Trim();
+        if (!replicatedEngine.StartsWith("Replicated", StringComparison.OrdinalIgnoreCase) || !replicatedEngine.EndsWith("MergeTree", StringComparison.OrdinalIgnoreCase))
+        {
+            rewritten = createSql;
+            return false;
+        }
+
+        var close = FindMatchingCloseParenthesis(createSql, open);
+        if (close < 0)
+        {
+            rewritten = createSql;
+            return false;
+        }
+
+        var args = SplitTopLevelArguments(createSql[(open + 1)..close]);
+        if (args.Count < 2)
+        {
+            rewritten = createSql;
+            return false;
+        }
+
+        var localEngine = replicatedEngine["Replicated".Length..];
+        var remainingArgs = args.Skip(2).ToList();
+        var replacement = remainingArgs.Count == 0
+            ? localEngine
+            : $"{localEngine}({string.Join(", ", remainingArgs)})";
+        rewritten = createSql[..replicatedIndex] + replacement + createSql[(close + 1)..];
+        return true;
+    }
     public static string NormalizeCreateTableName(string createSql) =>
         RewriteCreateTableName(createSql, "__chobo_schema__.__table__");
+
+    private static int FindMatchingCloseParenthesis(string value, int openIndex)
+    {
+        var depth = 0;
+        var quote = '\0';
+        for (var i = openIndex; i < value.Length; i++)
+        {
+            var ch = value[i];
+            if (quote != '\0')
+            {
+                if (ch == quote && (i == 0 || value[i - 1] != '\\'))
+                {
+                    quote = '\0';
+                }
+                continue;
+            }
+            if (ch is '\'' or '"')
+            {
+                quote = ch;
+                continue;
+            }
+            if (ch == '(')
+            {
+                depth++;
+                continue;
+            }
+            if (ch == ')')
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    return i;
+                }
+            }
+        }
+
+        return -1;
+    }
+
+    private static IReadOnlyList<string> SplitTopLevelArguments(string value)
+    {
+        var args = new List<string>();
+        var start = 0;
+        var depth = 0;
+        var quote = '\0';
+        for (var i = 0; i < value.Length; i++)
+        {
+            var ch = value[i];
+            if (quote != '\0')
+            {
+                if (ch == quote && (i == 0 || value[i - 1] != '\\'))
+                {
+                    quote = '\0';
+                }
+                continue;
+            }
+            if (ch is '\'' or '"')
+            {
+                quote = ch;
+                continue;
+            }
+            if (ch == '(')
+            {
+                depth++;
+                continue;
+            }
+            if (ch == ')')
+            {
+                depth--;
+                continue;
+            }
+            if (ch == ',' && depth == 0)
+            {
+                args.Add(value[start..i].Trim());
+                start = i + 1;
+            }
+        }
+
+        args.Add(value[start..].Trim());
+        return args;
+    }
 
     private static string RewriteCreateTableName(string createSql, string replacement)
     {

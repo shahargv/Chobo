@@ -415,7 +415,7 @@ public sealed class RestoreRunnerService(
         var endpoint = new ClickHouseNodeEndpoint(shard.TargetHost, shard.TargetPort, shard.TargetUseTls);
         var nodeReserved = false;
 
-        if (string.IsNullOrWhiteSpace(shard.ClickHouseOperationId) && IsReplicatedMergeTreeEngine(backupTable.Engine))
+        if (string.IsNullOrWhiteSpace(shard.ClickHouseOperationId) && ClickHouseSql.IsReplicatedMergeTreeEngine(backupTable.Engine))
         {
             var failedEndpointKeys = failedEndpoints.TryGetValue(shard.Id, out var failed) ? failed.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase) : [];
             var candidates = (await scopedClickHouse.GetTopologyAsync(restore.TargetCluster!, cancellationToken))
@@ -670,6 +670,11 @@ public sealed class RestoreRunnerService(
     private static string BuildCreateTableSql(RestoreEntity restore, BackupTableEntity backupTable, RestoreTableEntity table)
     {
         var createTableSql = GetCreateTableSqlOverride(restore.RequestJson, table.BackupTableId) ?? backupTable.SchemaDefinition!.CreateTableSql;
+        if (restore.TargetCluster?.Mode == ClusterMode.SingleInstance && ClickHouseSql.IsReplicatedMergeTreeEngine(backupTable.Engine))
+        {
+            createTableSql = ClickHouseSql.RewriteReplicatedMergeTreeToLocalMergeTreeOrThrow(createTableSql);
+        }
+
         return ClickHouseSql.RewriteCreateTableNameIfNotExists(createTableSql, table.TargetDatabase, table.TargetTable);
     }
 
@@ -808,8 +813,6 @@ public sealed class RestoreRunnerService(
     }
 
 
-    private static bool IsReplicatedMergeTreeEngine(string engine) =>
-        engine.Contains("Replicated", StringComparison.OrdinalIgnoreCase) && engine.Contains("MergeTree", StringComparison.OrdinalIgnoreCase);
     private int EffectiveMaxDop(ClickHouseClusterEntity cluster) =>
         Math.Max(1, cluster.BackupRestoreMaxDop > 0 ? cluster.BackupRestoreMaxDop : options.CurrentValue.MaxDop <= 0 ? 3 : options.CurrentValue.MaxDop);
 
@@ -972,8 +975,3 @@ public sealed class RestoreRunnerService(
         return RestoreTableStatus.Failed;
     }
 }
-
-
-
-
-

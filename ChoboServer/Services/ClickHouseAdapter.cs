@@ -213,7 +213,8 @@ public sealed class ClickHouseAdapter(ICredentialProtector protector, IEndpointR
     public async Task<ClickHouseOperationResult> StartRestoreShardAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, BackupTargetEntity target, RestoreTableShardEntity shard, BackupTableEntity backupTable, BackupTableShardEntity backupShard, bool allowNonEmptyTables, IReadOnlyDictionary<string, JsonElement> settings, CancellationToken cancellationToken)
     {
         var destination = await storageProviders.Get(target).CreateRestoreDestinationAsync(target, backupShard.StoragePath, cancellationToken);
-        var sql = ClickHouseRestoreSqlBuilder.Build(backupTable, shard, destination, allowNonEmptyTables, settings);
+        var allowDifferentTableDefinition = cluster.Mode == Chobo.Contracts.ClusterMode.SingleInstance && ClickHouseSql.IsReplicatedMergeTreeEngine(backupTable.Engine);
+        var sql = ClickHouseRestoreSqlBuilder.Build(backupTable, shard, destination, allowNonEmptyTables, allowDifferentTableDefinition, settings);
         _logger.Information("Submitting ClickHouse restore for {SourceDatabase}.{SourceTable} source shard {SourceShard} to {TargetDatabase}.{TargetTable} on {Host}:{Port}.", backupTable.Database, backupTable.Table, backupShard.SourceShardNumber, shard.RestoreDatabase, shard.RestoreTableName, endpoint.Host, endpoint.Port);
         return await StartOperationAsync(endpoint, cluster, sql, destination.SensitiveValues, cancellationToken);
     }

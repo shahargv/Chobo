@@ -98,20 +98,37 @@ public sealed class BackupPreparationService(
         }
 
         var topology = await clickHouse.GetTopologyAsync(backup.SourceCluster!, cancellationToken);
-        var representatives = SelectShardRepresentatives(topology);
-        var inventory = schemaOnly
-            ? await ReadClusterSchemaInventoryAsync(backup, topology, cancellationToken)
-            : await clickHouse.GetTablesAsync(backup.SourceCluster!, cancellationToken);
-        _logger.Information("Backup {BackupId} inventory contains {InventoryCount} table(s).", backup.Id, inventory.Count);
-        var selectableInventory = inventory
-            .Where(x => !IsExcludedSystemDatabase(x.Database))
+        var placements = await ReadClusterTablePlacementsAsync(backup, topology, selector, cancellationToken);
+        _logger.Information("Backup {BackupId} inventory contains {PlacementCount} table placement(s).", backup.Id, placements.Count);
+        var selectablePlacements = placements
+            .Where(x => !IsExcludedSystemDatabase(x.Table.Database))
+            .ToList();
+        var selectableInventory = selectablePlacements
+            .Select(x => x.Table)
+            .DistinctBy(x => ClickHouseBackupIdentity.Table(x.Database, x.Table))
             .ToList();
         var selected = selectorEvaluation.Evaluate(selector, new PolicyInventory(selectableInventory.Select(x => new PolicyInventoryTable(x.Database, x.Table)).ToList()));
         _logger.Information("Backup {BackupId} selector matched {SelectedCount} table(s).", backup.Id, selected.Count);
         var selectedSet = selected.Select(x => ClickHouseBackupIdentity.Table(x.Database, x.Table)).ToHashSet(StringComparer.Ordinal);
-        var selectedTables = selectableInventory
-            .Where(x => selectedSet.Contains(ClickHouseBackupIdentity.Table(x.Database, x.Table)))
+        var selectedPlacements = selectablePlacements
+            .Where(x => selectedSet.Contains(ClickHouseBackupIdentity.Table(x.Table.Database, x.Table.Table)))
             .ToList();
+        var selectedTableGroups = selectedPlacements
+            .GroupBy(x => ClickHouseBackupIdentity.Table(x.Table.Database, x.Table.Table), StringComparer.Ordinal)
+            .OrderBy(x => x.Min(p => p.Table.Database), StringComparer.Ordinal)
+            .ThenBy(x => x.Min(p => p.Table.Table), StringComparer.Ordinal)
+            .ToList();
+        foreach (var group in selectedTableGroups)
+        {
+            var compatibilityKeys = group.Select(x => BuildSchemaCompatibilityKey(x.Table)).Distinct(StringComparer.Ordinal).ToList();
+            if (compatibilityKeys.Count > 1)
+            {
+                var table = group.First().Table;
+                await audit.RecordAsync("table-schema-conflict", AuditEntityType.Backup, backup.Id.ToString(), new { table.Database, table.Table, schemaCount = compatibilityKeys.Count });
+                throw new InvalidOperationException($"Table {table.Database}.{table.Table} has incompatible schemas across source nodes and cannot be backed up as one logical table.");
+            }
+        }
+        var selectedTables = selectedTableGroups.Select(x => x.First().Table).ToList();
         var selectedSchemaHashes = selectedTables
             .Select(x => x.SchemaHash)
             .Distinct(StringComparer.Ordinal)
@@ -149,13 +166,13 @@ public sealed class BackupPreparationService(
 
             var dataBackedUp = !schemaOnly && IsMergeTreeDataEngine(table.Engine);
             var tableIdentity = ClickHouseBackupIdentity.Table(table.Database, table.Table);
+            var tablePlacements = selectedTableGroups.First(x => x.Key == tableIdentity).ToList();
             var parentTable = backup.BackupType == BackupType.Incremental && dataBackedUp
                 ? parentTablesByIdentity.GetValueOrDefault(tableIdentity)
                 : null;
             var tableParentShards = dataBackedUp
                 ? parentShardsByIdentity
-                    .Where(x => x.Value.BackupTable is not null && ClickHouseBackupIdentity.Table(x.Value.BackupTable.Database, x.Value.BackupTable.Table) == tableIdentity)
-                    .Select(x => x.Value)
+                    .Where(x => x.BackupTable is not null && ClickHouseBackupIdentity.Table(x.BackupTable.Database, x.BackupTable.Table) == tableIdentity)
                     .ToList()
                 : [];
             var effectiveTableType = parentTable is null && tableParentShards.Count == 0 ? BackupType.Full : BackupType.Incremental;
@@ -179,19 +196,28 @@ public sealed class BackupPreparationService(
             }
             if (dataBackedUp)
             {
+                var plannedPlacements = PlanDataPlacements(table.Engine, tablePlacements, topology);
+                var duplicateSourceShards = plannedPlacements
+                    .GroupBy(x => x.Node.ShardNumber)
+                    .Where(x => x.Count() > 1)
+                    .Select(x => x.Key)
+                    .ToHashSet();
                 var hasAnyShardParent = tableParentShards.Count > 0;
-                foreach (var representative in representatives)
+                foreach (var placement in plannedPlacements)
                 {
-                    parentShardsByIdentity.TryGetValue(ClickHouseBackupIdentity.Shard(table.Database, table.Table, representative.ShardNumber), out var parentShard);
+                    var representative = placement.Node;
+                    var requiresExactParentPlacement = !ClickHouseSql.IsReplicatedMergeTreeEngine(table.Engine) || duplicateSourceShards.Contains(representative.ShardNumber);
+                    var parentShard = FindParentShard(tableParentShards, representative, requiresExactParentPlacement);
                     var effectiveShardType = parentShard is null ? BackupType.Full : BackupType.Incremental;
                     if (backup.BackupType == BackupType.Incremental && (parentTable is not null || hasAnyShardParent) && parentShard is null)
                     {
-                        await audit.RecordAsync("incremental-shard-fallback-to-full", AuditEntityType.Backup, backup.Id.ToString(), new { table.Database, table.Table, sourceShard = representative.ShardNumber, reason = "missing-parent-full-shard" });
+                        await audit.RecordAsync("incremental-shard-fallback-to-full", AuditEntityType.Backup, backup.Id.ToString(), new { table.Database, table.Table, sourceShard = representative.ShardNumber, sourceNode = $"{representative.Host}:{representative.Port}", reason = "missing-parent-full-shard" });
                     }
                     var shardParentBackupId = parentShard?.BackupTable?.BackupId;
                     var shardPath = BuildShardStoragePath(
                         BuildStoragePath(backup, table.Database, table.Table, effectiveShardType, shardParentBackupId),
-                        representative.ShardNumber);
+                        representative,
+                        duplicateSourceShards.Contains(representative.ShardNumber));
                     backupTable.Shards.Add(new BackupTableShardEntity
                     {
                         EffectiveBackupType = effectiveShardType,
@@ -207,7 +233,6 @@ public sealed class BackupPreparationService(
                     });
                 }
             }
-
             db.BackupTables.Add(backupTable);
             if (!schemaOnly)
             {
@@ -224,7 +249,7 @@ public sealed class BackupPreparationService(
     }
 
 
-    private async Task<IReadOnlyList<ClickHouseTableInfo>> ReadClusterSchemaInventoryAsync(BackupEntity backup, IReadOnlyList<ClickHouseShardReplicaInfo> topology, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<TablePlacement>> ReadClusterTablePlacementsAsync(BackupEntity backup, IReadOnlyList<ClickHouseShardReplicaInfo> topology, PolicySelector selector, CancellationToken cancellationToken)
     {
         var orderedNodes = topology
             .OrderBy(x => x.ShardNumber)
@@ -234,37 +259,62 @@ public sealed class BackupPreparationService(
             .ToList();
         if (orderedNodes.Count == 0)
         {
-            return await clickHouse.GetTablesAsync(backup.SourceCluster!, cancellationToken);
+            var fallbackTables = await clickHouse.GetTablesAsync(backup.SourceCluster!, cancellationToken);
+            var fallbackNode = new ClickHouseShardReplicaInfo(1, "single", 1, backup.SourceCluster!.AccessNodes[0].Host, backup.SourceCluster.AccessNodes[0].Port, backup.SourceCluster.AccessNodes[0].UseTls, 0);
+            return fallbackTables.Select(x => new TablePlacement(x, fallbackNode)).ToList();
         }
 
-        var byName = new Dictionary<string, ClickHouseTableInfo>(StringComparer.Ordinal);
-        var duplicateCount = 0;
+        var placements = new List<TablePlacement>();
+        var failedNodes = new List<object>();
+        var failedNodeErrors = new List<string>();
         foreach (var node in orderedNodes)
         {
-            var tables = await clickHouse.GetTablesAsync(node.Endpoint, backup.SourceCluster!, cancellationToken);
-            foreach (var table in tables)
+            try
             {
-                var key = ClickHouseBackupIdentity.Table(table.Database, table.Table);
-                if (byName.ContainsKey(key))
+                var tables = await clickHouse.GetTablesAsync(node.Endpoint, backup.SourceCluster!, cancellationToken);
+                foreach (var table in tables)
                 {
-                    duplicateCount++;
-                    continue;
+                    placements.Add(new TablePlacement(table, node));
                 }
-
-                byName[key] = table;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                failedNodes.Add(new { node.ShardNumber, node.ReplicaNumber, node.Host, node.Port, error = ex.Message });
+                failedNodeErrors.Add(ex.Message);
+                _logger.Warning(ex, "Could not read ClickHouse inventory from {Host}:{Port} for backup {BackupId}.", node.Host, node.Port, backup.Id);
             }
         }
 
-        if (duplicateCount > 0)
+        if (failedNodes.Count > 0)
         {
-            await audit.RecordAsync("schema-inventory-deduplicated", AuditEntityType.Backup, backup.Id.ToString(), new { operationId = backup.Id, duplicateCount, nodeCount = orderedNodes.Count });
+            await audit.RecordAsync("inventory-node-scan-failed", AuditEntityType.Backup, backup.Id.ToString(), new { operationId = backup.Id, failedNodeCount = failedNodes.Count, nodes = failedNodes });
+            if (!IsExactIncludeOnlySelector(selector))
+            {
+                throw new InvalidOperationException($"Could not read ClickHouse table inventory from every source node. Failed node count: {failedNodes.Count}. First error: {failedNodeErrors.FirstOrDefault() ?? "unknown"}");
+            }
+        }
+        if (placements.Count == 0 && orderedNodes.Count > 0)
+        {
+            throw new InvalidOperationException(failedNodeErrors.FirstOrDefault() ?? "Could not read ClickHouse table inventory from any source node.");
         }
 
-        return byName.Values
-            .OrderBy(x => x.Database, StringComparer.Ordinal)
-            .ThenBy(x => x.Table, StringComparer.Ordinal)
+        return placements
+            .OrderBy(x => x.Table.Database, StringComparer.Ordinal)
+            .ThenBy(x => x.Table.Table, StringComparer.Ordinal)
+            .ThenBy(x => x.Node.ShardNumber)
+            .ThenBy(x => x.Node.ReplicaNumber)
             .ToList();
     }
+    private static bool IsExactIncludeOnlySelector(PolicySelector selector) =>
+        selector.Rules.Count > 0 && selector.Rules.All(rule =>
+            rule.Action == PolicySelectorAction.Include &&
+            rule.Database.Kind == PolicyMatchKind.Exact &&
+            rule.Table.Kind == PolicyMatchKind.Exact);
+
     private static bool IsMergeTreeDataEngine(string engine) =>
         engine.EndsWith("MergeTree", StringComparison.OrdinalIgnoreCase);
 
@@ -308,7 +358,7 @@ public sealed class BackupPreparationService(
             .ToDictionary(x => x.Key, x => x.First(), StringComparer.Ordinal);
     }
 
-    private async Task<Dictionary<string, BackupTableShardEntity>> FindParentFullShardsAsync(Guid policyId, IReadOnlyList<ClickHouseTableInfo> selectedTables, DateTimeOffset? baseBackupCutoff, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<BackupTableShardEntity>> FindParentFullShardsAsync(Guid policyId, IReadOnlyList<ClickHouseTableInfo> selectedTables, DateTimeOffset? baseBackupCutoff, CancellationToken cancellationToken)
     {
         var selectedIdentities = selectedTables
             .Select(x => ClickHouseBackupIdentity.Table(x.Database, x.Table))
@@ -339,8 +389,7 @@ public sealed class BackupPreparationService(
 
         return candidates
             .Where(x => x.BackupTable is not null && selectedIdentities.Contains(ClickHouseBackupIdentity.Table(x.BackupTable.Database, x.BackupTable.Table)))
-            .GroupBy(x => ClickHouseBackupIdentity.Shard(x.BackupTable!.Database, x.BackupTable.Table, x.SourceShardNumber), StringComparer.Ordinal)
-            .ToDictionary(x => x.Key, x => x.First(), StringComparer.Ordinal);
+            .ToList();
     }
 
     private int ResolveMaxAgeHoursForBaseBackup(BackupPolicyEntity policy)
@@ -376,20 +425,95 @@ public sealed class BackupPreparationService(
         return $"{backup.StorageRootPath}/tables/{EscapePathPart(database)}/{EscapePathPart(table)}/full";
     }
 
-    private static string BuildShardStoragePath(string tablePath, int shardNumber) =>
-        string.IsNullOrWhiteSpace(tablePath) ? "" : $"{tablePath}/shards/shard-{shardNumber:0000}";
+    private static string BuildShardStoragePath(string tablePath, ClickHouseShardReplicaInfo representative, bool includeReplicaIdentity)
+    {
+        if (string.IsNullOrWhiteSpace(tablePath))
+        {
+            return "";
+        }
 
-    private static IReadOnlyList<ClickHouseShardReplicaInfo> SelectShardRepresentatives(IReadOnlyList<ClickHouseShardReplicaInfo> topology) =>
-        topology
+        var shardPath = $"{tablePath}/shards/shard-{representative.ShardNumber:0000}";
+        return includeReplicaIdentity
+            ? $"{shardPath}/replica-{representative.ReplicaNumber:0000}-{EscapePathPart(representative.Host)}-{representative.Port}"
+            : shardPath;
+    }
+
+    private static IReadOnlyList<TablePlacement> PlanDataPlacements(string engine, IReadOnlyList<TablePlacement> placements, IReadOnlyList<ClickHouseShardReplicaInfo> topology)
+    {
+        if (ClickHouseSql.IsReplicatedMergeTreeEngine(engine))
+        {
+            return SelectBestPlacementPerSourceShard(placements);
+        }
+
+        var topologyReplicaCounts = topology
             .GroupBy(x => x.ShardNumber)
+            .ToDictionary(x => x.Key, x => x.Count());
+        return placements
+            .GroupBy(x => x.Node.ShardNumber)
             .OrderBy(x => x.Key)
-            .Select(group => group
-                .OrderBy(x => x.ErrorsCount)
-                .ThenBy(x => x.ReplicaNumber)
-                .ThenBy(x => x.Host, StringComparer.Ordinal)
-                .ThenBy(x => x.Port)
+            .SelectMany(group => topologyReplicaCounts.TryGetValue(group.Key, out var replicaCount) && group.Count() == replicaCount
+                ? SelectBestPlacementPerSourceShard(group).ToList()
+                : group
+                    .OrderBy(x => x.Node.ReplicaNumber)
+                    .ThenBy(x => x.Node.Host, StringComparer.Ordinal)
+                    .ThenBy(x => x.Node.Port)
+                    .ToList())
+            .ToList();
+    }
+
+    private static IReadOnlyList<TablePlacement> SelectBestPlacementPerSourceShard(IEnumerable<TablePlacement> placements) =>
+        placements
+            .GroupBy(x => x.Node.ShardNumber)
+            .OrderBy(x => x.Key)
+            .Select(x => x
+                .OrderBy(p => p.Node.ErrorsCount)
+                .ThenBy(p => p.Node.ReplicaNumber)
+                .ThenBy(p => p.Node.Host, StringComparer.Ordinal)
+                .ThenBy(p => p.Node.Port)
                 .First())
             .ToList();
+
+    private static BackupTableShardEntity? FindParentShard(IReadOnlyList<BackupTableShardEntity> parentShards, ClickHouseShardReplicaInfo representative, bool requireExactPlacement)
+    {
+        var candidates = parentShards
+            .Where(x => x.SourceShardNumber == representative.ShardNumber)
+            .ToList();
+        if (candidates.Count == 0)
+        {
+            return null;
+        }
+
+        var exact = candidates.FirstOrDefault(x =>
+            x.ReplicaNumber == representative.ReplicaNumber &&
+            string.Equals(x.Host, representative.Host, StringComparison.OrdinalIgnoreCase) &&
+            x.Port == representative.Port &&
+            x.UseTls == representative.UseTls);
+        if (exact is not null)
+        {
+            return exact;
+        }
+        if (requireExactPlacement)
+        {
+            return candidates.Count == 1 && IsLegacySingleShardParent(candidates[0]) ? candidates[0] : null;
+        }
+
+        return candidates
+            .OrderByDescending(x => x.BackupTable!.Backup!.CompletedAt ?? x.BackupTable.Backup.CreatedAt)
+            .First();
+    }
+
+    private static bool IsLegacySingleShardParent(BackupTableShardEntity shard) =>
+        shard.SourceShardNumber == 1 &&
+        string.Equals(shard.SourceShardName, "single", StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(shard.Host, "source", StringComparison.OrdinalIgnoreCase);
+
+    private static string BuildSchemaCompatibilityKey(ClickHouseTableInfo table)
+    {
+        var createSql = ClickHouseSql.IsReplicatedMergeTreeEngine(table.Engine)
+            ? ClickHouseSql.RewriteReplicatedMergeTreeToLocalMergeTree(table.CreateTableSql)
+            : table.CreateTableSql;
+        return $"{ClickHouseSql.NormalizeCreateTableName(createSql)}\n{table.ColumnsJson}";
+    }
 
     private static string EscapePathPart(string value) =>
         Uri.EscapeDataString(value);
@@ -401,4 +525,6 @@ public sealed class BackupPreparationService(
         options.Converters.Add(new JsonStringEnumConverter());
         return options;
     }
+
+    private sealed record TablePlacement(ClickHouseTableInfo Table, ClickHouseShardReplicaInfo Node);
 }
