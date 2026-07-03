@@ -789,6 +789,7 @@ public sealed class BackupRunnerService(
 
             var maxRetries = Math.Max(0, scopedOptions.CurrentValue.TransientShardMaxRetries);
             var attempt = retryCounts.AddOrUpdate(shard.Id, 1, (_, current) => current + 1);
+            var retryWithFreshDestination = IsBackupAlreadyExistsFailure(ex);
             if (attempt <= maxRetries && IsTransientShardFailure(ex, cancellationToken))
             {
                 var retryDelay = scopedOptions.CurrentValue.TransientShardRetryDelay <= TimeSpan.Zero ? TimeSpan.FromMinutes(1) : scopedOptions.CurrentValue.TransientShardRetryDelay;
@@ -798,8 +799,19 @@ public sealed class BackupRunnerService(
                 shard.Error = ex.Message;
                 shard.CompletedAt = null;
                 shard.StartedAt = null;
+                if (retryWithFreshDestination)
+                {
+                    if (string.Equals(table.ClickHouseOperationId, shard.ClickHouseOperationId, StringComparison.Ordinal))
+                    {
+                        table.ClickHouseOperationId = null;
+                        table.ClickHouseStatus = null;
+                    }
+
+                    shard.ClickHouseOperationId = null;
+                    shard.ClickHouseStatus = null;
+                }
                 await scopedDb.SaveChangesAsync(CancellationToken.None);
-                await scopedAudit.RecordAsync("shard-retry-scheduled", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { error = ex.Message, sourceShard = shard.SourceShardNumber, retryAttempt = attempt, maxRetries, retryDelaySeconds = retryDelay.TotalSeconds });
+                await scopedAudit.RecordAsync("shard-retry-scheduled", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { error = ex.Message, sourceShard = shard.SourceShardNumber, retryAttempt = attempt, maxRetries, retryDelaySeconds = retryDelay.TotalSeconds, freshDestination = retryWithFreshDestination });
                 await scopedQueue.ClearStartedClaimAsync(BackupRestoreQueueKind.Backup, shard.Id, CancellationToken.None);
                 await Task.Delay(retryDelay, CancellationToken.None);
                 scopedQueue.ReleaseInMemoryClaim(BackupRestoreQueueKind.Backup, shard.Id);
@@ -1200,6 +1212,11 @@ public sealed class BackupRunnerService(
             }
 
             var message = current.Message;
+            if (IsBackupAlreadyExistsFailure(message))
+            {
+                return true;
+            }
+
             if (IsStorageOrCredentialFailure(message))
             {
                 return false;
@@ -1225,6 +1242,22 @@ public sealed class BackupRunnerService(
         return false;
     }
 
+    private static bool IsBackupAlreadyExistsFailure(Exception exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            if (IsBackupAlreadyExistsFailure(current.Message))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsBackupAlreadyExistsFailure(string message) =>
+        message.Contains("BACKUP_ALREADY_EXISTS", StringComparison.OrdinalIgnoreCase);
+
     private static bool IsStorageOrCredentialFailure(string message) =>
         message.Contains("S3_ERROR", StringComparison.OrdinalIgnoreCase) ||
         message.Contains("Aws::S3", StringComparison.OrdinalIgnoreCase) ||
@@ -1237,8 +1270,4 @@ public sealed class BackupRunnerService(
         message.Contains("Authentication failed", StringComparison.OrdinalIgnoreCase);
 
 }
-
-
-
-
 
