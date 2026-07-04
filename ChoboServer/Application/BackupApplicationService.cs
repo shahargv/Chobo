@@ -16,6 +16,7 @@ public sealed class BackupApplicationService(
     BackupRestoreQueueApplicationService queueItems,
     BackupPreparationService preparation,
     IClickHouseAdapter clickHouse,
+    IClickHouseClusterMetadataService metadata,
     IOptionsMonitor<ChoboBackupRestoreOptions> options,
     BackupRestoreOperationGate operationGate,
     IAuditService audit,
@@ -89,9 +90,27 @@ public sealed class BackupApplicationService(
         {
             throw new ArgumentException("Only selector version 1 is supported.");
         }
-        if (!await db.ClickHouseClusters.AnyAsync(x => x.Id == clusterId && !x.IsDeleted, cancellationToken))
+        var cluster = await db.ClickHouseClusters
+            .Include(x => x.AccessNodes)
+            .FirstOrDefaultAsync(x => x.Id == clusterId && !x.IsDeleted, cancellationToken);
+        if (cluster is null)
         {
             throw new ArgumentException("Cluster was not found.");
+        }
+        if (request.RefreshClusterMetadata == true)
+        {
+            var snapshot = await metadata.RefreshAsync(cluster, cancellationToken);
+            await audit.RecordAsync("metadata-refreshed", AuditEntityType.Cluster, clusterId.ToString(), new
+            {
+                reason = "manual-backup",
+                backupType = request.BackupType,
+                policyId = request.PolicyId,
+                snapshot.RefreshedAt,
+                tablePlacementCount = snapshot.Placements.Count,
+                topologyCount = snapshot.Topology.Count,
+                failedNodeCount = snapshot.NodeFailures.Count,
+                snapshot.IsComplete
+            });
         }
         if (targetId is { } concreteTargetId && concreteTargetId != Guid.Empty && !await db.BackupTargets.AnyAsync(x => x.Id == concreteTargetId && !x.IsDeleted, cancellationToken))
         {

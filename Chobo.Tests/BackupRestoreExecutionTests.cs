@@ -121,6 +121,31 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Manual_backup_refresh_option_forces_cluster_metadata_refresh()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+
+        var first = await fixture.CreateManualBackupAsync();
+        await fixture.RunBackupAsync(first);
+
+        fixture.ClickHouse.Inventory.Add(Table("sales", "products", "MergeTree"));
+        var second = await fixture.Services.GetRequiredService<BackupApplicationService>()
+            .ManualAsync(new ManualBackupRequest(fixture.SourceClusterId, fixture.TargetId, PolicySelector.Empty, RefreshClusterMetadata: true));
+        await fixture.RunBackupAsync(second.Id);
+
+        fixture.Db.ChangeTracker.Clear();
+        var secondTables = await fixture.Db.BackupTables
+            .Where(x => x.BackupId == second.Id)
+            .OrderBy(x => x.Table)
+            .Select(x => x.Table)
+            .ToListAsync();
+        Assert.Equal(["orders", "products"], secondTables);
+        Assert.Equal(2, fixture.ClickHouse.TopologyCallCount);
+        Assert.Equal(2, fixture.ClickHouse.GetTablesEndpoints.Count);
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "metadata-refreshed" && x.EntityId == fixture.SourceClusterId.ToString()));
+    }
+    [Fact]
     public async Task Cluster_metadata_invalidation_forces_backup_preparation_refresh()
     {
         await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
@@ -775,6 +800,36 @@ public sealed class BackupRestoreExecutionTests
         fixture.ClickHouse.BackupStartOutcomes.Enqueue((
             "BACKUP_FAILED",
             "Code: 598. DB::Exception: Backup failed: backup already exists. (BACKUP_ALREADY_EXISTS)"));
+        fixture.ClickHouse.BackupStartOutcomes.Enqueue(("BACKUP_CREATED", null));
+
+        var backupId = await fixture.CreateManualBackupAsync();
+        await fixture.RunBackupAsync(backupId);
+
+        fixture.Db.ChangeTracker.Clear();
+        var backup = await fixture.Db.Backups.Include(x => x.Tables).ThenInclude(x => x.Shards).SingleAsync(x => x.Id == backupId);
+        var shard = Assert.Single(Assert.Single(backup.Tables).Shards);
+        Assert.Equal(BackupRunStatus.Succeeded, backup.Status);
+        Assert.Equal(BackupTableStatus.Succeeded, shard.Status);
+        Assert.Equal(2, fixture.ClickHouse.BackupStartStoragePaths.Count);
+        Assert.NotEqual(fixture.ClickHouse.BackupStartStoragePaths[0], fixture.ClickHouse.BackupStartStoragePaths[1]);
+        Assert.Equal(fixture.ClickHouse.BackupStartStoragePaths[1], shard.StoragePath);
+        Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "shard-retry-scheduled" && x.EntityId == shard.Id.ToString() && x.Details.Contains("freshDestination")));
+    }
+
+    [Fact]
+    public async Task Backup_shard_retries_clickhouse_code_655_status_error_with_new_attempt_path()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions
+        {
+            MaxDop = 1,
+            PollInterval = TimeSpan.FromMilliseconds(1),
+            TransientShardRetryDelay = TimeSpan.FromMilliseconds(1),
+            TransientShardMaxRetries = 3
+        });
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+        fixture.ClickHouse.BackupStartOutcomes.Enqueue((
+            "BACKUP_FAILED",
+            "Code: 655. DB::Exception: Backup failed while creating backup. (UNKNOWN_EXCEPTION)"));
         fixture.ClickHouse.BackupStartOutcomes.Enqueue(("BACKUP_CREATED", null));
 
         var backupId = await fixture.CreateManualBackupAsync();

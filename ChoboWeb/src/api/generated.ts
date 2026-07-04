@@ -40,6 +40,7 @@ export type BackupTriggerType = "Manual" | "Scheduled";
 export type BackupType = "Full" | "Incremental";
 export interface ClearApplicationLogsRequest { before: string; }
 export interface ClearAuditEntriesRequest { before: string; }
+export interface ClickHouseClusterMetadataRefreshDto { clusterId: string; refreshedAt: string; tablePlacementCount: number; topologyCount: number; failedNodeCount: number; isComplete: boolean; }
 export interface ClickHouseClusterNamesDto { clusterId: string; names: string[]; }
 export interface ClickHouseClusterShardDto { shardNumber: number; shardName: string; replicaNumber: number; host: string; port: number; useTls: boolean; errorsCount: number; }
 export interface ClickHouseClusterTopologyDto { clusterId: string; shards: ClickHouseClusterShardDto[]; }
@@ -69,7 +70,7 @@ export interface InitiateRestoreRequest { backupId: string; targetClusterId: str
 export interface InstallRequest { adminUser: string; }
 export interface InstallResponse { userId: string; userName?: string | null; accessToken: string; }
 export interface InstallStatusDto { requiresInstallation: boolean; message: string; }
-export interface ManualBackupRequest { clusterId: string; targetId: string; selector: PolicySelector; backupType: BackupType; policyId?: string | null; schemaOnly: boolean; clickHouseBackupSettings?: Record<string, ClickHouseSettingValue> | null; }
+export interface ManualBackupRequest { clusterId: string; targetId: string; selector: PolicySelector; backupType: BackupType; policyId?: string | null; schemaOnly: boolean; clickHouseBackupSettings?: Record<string, ClickHouseSettingValue> | null; refreshClusterMetadata: boolean; }
 export interface MoveQueueItemRequest { direction: BackupRestoreQueueMoveDirection; beforeItemId: string; }
 export interface PolicyEvaluationDto { policyId: string; policyName?: string | null; sourceClusterId: string; selectorJsonVersion: number; selector: PolicySelector; tables: PolicyInventoryTable[]; }
 export interface PolicyEvaluationRequest { inventory: PolicyInventory; }
@@ -164,6 +165,7 @@ export const openApiSchemaNames = [
   "BackupType",
   "ClearApplicationLogsRequest",
   "ClearAuditEntriesRequest",
+  "ClickHouseClusterMetadataRefreshDto",
   "ClickHouseClusterNamesDto",
   "ClickHouseClusterShardDto",
   "ClickHouseClusterTopologyDto",

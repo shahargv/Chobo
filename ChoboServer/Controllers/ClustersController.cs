@@ -32,6 +32,17 @@ public sealed class ClustersController(ClusterApplicationService clusters) : Con
         catch (InvalidOperationException ex) { return BadRequest(new ErrorResponse(ex.Message)); }
     }
 
+    [HttpPost("{id:guid}/metadata/refresh")]
+    public async Task<ActionResult<ClickHouseClusterMetadataRefreshDto>> RefreshMetadata(Guid id, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await clusters.RefreshMetadataAsync(id, cancellationToken);
+            return result is null ? NotFound() : result;
+        }
+        catch (InvalidOperationException ex) { return BadRequest(new ErrorResponse(ex.Message)); }
+    }
+
     [HttpPost]
     public async Task<ActionResult<ClusterDto>> Add(UpsertClusterRequest request)
     {

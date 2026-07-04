@@ -20,4 +20,6 @@ public sealed record ClickHouseClusterNamesDto(Guid ClusterId, IReadOnlyList<str
 
 public sealed record ClickHouseClusterTopologyDto(Guid ClusterId, IReadOnlyList<ClickHouseClusterShardDto> Shards);
 
+public sealed record ClickHouseClusterMetadataRefreshDto(Guid ClusterId, DateTimeOffset RefreshedAt, int TablePlacementCount, int TopologyCount, int FailedNodeCount, bool IsComplete);
+
 public sealed record ClickHouseClusterShardDto(int ShardNumber, string? ShardName, int ReplicaNumber, string Host, int Port, bool UseTls, int ErrorsCount);

@@ -389,6 +389,7 @@ function ManualBackupPanel({ policies, onQueued }: { policies: BackupPolicyDto[]
         backupType: policy.contentMode === "SchemaOnly" ? "Full" : backupType,
         policyId: policy.id,
         schemaOnly: policy.contentMode === "SchemaOnly",
+        refreshClusterMetadata: false,
         clickHouseBackupSettings: clickHouseSettings
       });
     },

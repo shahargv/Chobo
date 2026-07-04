@@ -77,7 +77,7 @@
         @{
             Name = 'start-incremental-backup'
             Type = 'Cli'
-            Args = @('backup', 'manual', '--policy-id', '{policy.id}', '--backup-type', 'Incremental')
+            Args = @('backup', 'manual', '--policy-id', '{policy.id}', '--backup-type', 'Incremental', '--refresh-cluster-metadata')
             SaveJsonAs = 'incrementalBackup'
         }
         @{

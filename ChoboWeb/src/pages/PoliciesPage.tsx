@@ -65,6 +65,7 @@ export function Policies() {
       backupType: backupTypeForPolicyRun(policy, mode),
       policyId: policy.id,
       schemaOnly: policy.contentMode === "SchemaOnly",
+      refreshClusterMetadata: false,
       clickHouseBackupSettings
     }),
     onSuccess: () => {
