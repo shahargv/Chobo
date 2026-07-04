@@ -81,18 +81,7 @@ public static class ServiceCollectionExtensions
                 [new OpenApiSecuritySchemeReference("Bearer", document, null)] = []
             });
         });
-        services.AddSingleton<Serilog.ILogger>(serviceProvider =>
-        {
-            var storage = serviceProvider.GetRequiredService<IOptions<ChoboStorageOptions>>().Value;
-            var dataDirectory = ChoboPaths.GetDataDirectory(storage.DataDirectory);
-            Directory.CreateDirectory(dataDirectory);
-            var sqlite = serviceProvider.GetRequiredService<IOptions<ChoboSqliteOptions>>().Value;
-            return new LoggerConfiguration()
-                .Enrich.FromLogContext()
-                .ReadFrom.Configuration(configuration)
-                .WriteTo.Sink(new ApplicationLogSqliteSink(dataDirectory, sqlite))
-                .CreateLogger();
-        });
+        services.AddSingleton<Serilog.ILogger>(_ => Log.Logger);
 
         services.AddSingleton<SlowSqliteQueryLoggingInterceptor>();
         services.AddSingleton<SqlitePragmaConnectionInterceptor>();

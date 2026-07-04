@@ -16,6 +16,11 @@ public sealed class ApplicationLogSqliteSink(string dataDirectory, ChoboSqliteOp
 
     public void Emit(LogEvent logEvent)
     {
+        if (IsExcludedSource(logEvent))
+        {
+            return;
+        }
+
         try
         {
             using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
@@ -47,6 +52,16 @@ public sealed class ApplicationLogSqliteSink(string dataDirectory, ChoboSqliteOp
         {
             // Logging must never break the application path.
         }
+    }
+
+    private static bool IsExcludedSource(LogEvent logEvent)
+    {
+        if (!logEvent.Properties.TryGetValue("SourceContext", out var value) || value is not ScalarValue { Value: string sourceContext })
+        {
+            return false;
+        }
+
+        return sourceContext.StartsWith("Microsoft.EntityFrameworkCore", StringComparison.Ordinal);
     }
 
     private static string? GetOperationId(LogEvent logEvent)

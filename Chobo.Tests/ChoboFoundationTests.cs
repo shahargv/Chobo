@@ -1680,6 +1680,39 @@ public sealed class ChoboFoundationTests
     }
 
     [Fact]
+    public async Task Request_and_injected_logs_are_written_to_configured_text_file()
+    {
+        var dataDir = NewTestDataDirectory();
+        var logDir = Path.Combine(dataDir, "text-logs");
+        var logPath = Path.Combine(logDir, "chobo-.log");
+        await using var factory = CreateFactory(dataDir, extraConfiguration: new Dictionary<string, string?>
+        {
+            ["Serilog:Using:0"] = "Serilog.Sinks.File",
+            ["Serilog:MinimumLevel:Default"] = "Information",
+            ["Serilog:MinimumLevel:Override:Microsoft.EntityFrameworkCore"] = "Warning",
+            ["Serilog:WriteTo:0:Name"] = "File",
+            ["Serilog:WriteTo:0:Args:path"] = logPath,
+            ["Serilog:WriteTo:0:Args:rollingInterval"] = "Day",
+            ["Serilog:WriteTo:0:Args:outputTemplate"] = "{SourceContext} {Message:lj}{NewLine}{Exception}"
+        });
+        var client = factory.CreateClient();
+
+        var health = await client.GetAsync("/health");
+        Assert.True(health.IsSuccessStatusCode);
+        using (var scope = factory.Services.CreateScope())
+        {
+            var logger = scope.ServiceProvider.GetRequiredService<Serilog.ILogger>().ForContext<ChoboFoundationTests>();
+            logger.Information("DI text file regression log.");
+        }
+
+        var text = await ReadTextLogsUntilAsync(
+            logDir,
+            x => x.Contains("HTTP GET /health responded 200") && x.Contains("DI text file regression log"));
+        Assert.Contains("HTTP GET /health responded 200", text);
+        Assert.Contains("DI text file regression log", text);
+    }
+
+    [Fact]
     public async Task Audit_clear_api_deletes_old_records_and_writes_clear_audit()
     {
         await using var factory = CreateFactory();
@@ -2489,6 +2522,40 @@ public sealed class ChoboFoundationTests
         var text = await response.Content.ReadAsStringAsync();
         Assert.True(response.IsSuccessStatusCode, text);
         return JsonSerializer.Deserialize<T>(text, JsonOptions)!;
+    }
+
+    private static async Task<string> ReadTextLogsUntilAsync(string logDirectory, Func<string, bool> predicate)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
+        var text = string.Empty;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (Directory.Exists(logDirectory))
+            {
+                var parts = new List<string>();
+                foreach (var file in Directory.EnumerateFiles(logDirectory, "*.log"))
+                {
+                    parts.Add(await ReadSharedTextAsync(file));
+                }
+
+                text = string.Join('\n', parts);
+                if (predicate(text))
+                {
+                    return text;
+                }
+            }
+
+            await Task.Delay(100);
+        }
+
+        return text;
+    }
+
+    private static async Task<string> ReadSharedTextAsync(string path)
+    {
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return await reader.ReadToEndAsync();
     }
 
     private static JsonSerializerOptions CreateJsonOptions()

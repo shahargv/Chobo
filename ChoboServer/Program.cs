@@ -16,7 +16,6 @@ var initializedMarkerPath = Path.Combine(choboDataDirectory, "_initialized");
 var missingDatabaseAfterInitialized = !File.Exists(dbPath) && File.Exists(initializedMarkerPath);
 var firstStartup = !File.Exists(dbPath);
 var webOptions = builder.Configuration.GetSection("Chobo:Web").Get<ChoboWebOptions>() ?? new ChoboWebOptions();
-var sqliteOptions = builder.Configuration.GetSection("Chobo:Sqlite").Get<ChoboSqliteOptions>() ?? new ChoboSqliteOptions();
 Console.WriteLine($"ChoboServer starting. Data directory: {choboDataDirectory}");
 Console.WriteLine($"Chobo GUI: {(webOptions.IsGuiEnabled ? "enabled" : "disabled")}; port: {(webOptions.GuiPort?.ToString() ?? "same as API")}.");
 if (webOptions.IsGuiEnabled && webOptions.GuiPort is { } guiPort)
@@ -41,15 +40,18 @@ builder.Services.AddOpenTelemetry()
         .AddMeter("System.Runtime", "Microsoft.AspNetCore.Hosting", "Microsoft.AspNetCore.Server.Kestrel")
         .AddPrometheusExporter());
 
-Log.Logger = new LoggerConfiguration()
-    .Enrich.FromLogContext()
-    .ReadFrom.Configuration(builder.Configuration)
-    .WriteTo.Sink(new ApplicationLogSqliteSink(choboDataDirectory, sqliteOptions))
-    .CreateLogger();
-builder.Host.UseSerilog();
-Log.Information("ChoboServer runtime GC mode: ServerGC={ServerGC}.", GCSettings.IsServerGC);
+builder.Host.UseSerilog((context, _, loggerConfiguration) =>
+{
+    var dataDirectory = GetChoboDataDirectory(context.Configuration);
+    var sqlite = context.Configuration.GetSection("Chobo:Sqlite").Get<ChoboSqliteOptions>() ?? new ChoboSqliteOptions();
+    loggerConfiguration
+        .Enrich.FromLogContext()
+        .ReadFrom.Configuration(context.Configuration)
+        .WriteTo.Sink(new ApplicationLogSqliteSink(dataDirectory, sqlite));
+});
 
 var app = builder.Build();
+Log.Information("ChoboServer runtime GC mode: ServerGC={ServerGC}.", GCSettings.IsServerGC);
 Console.WriteLine("Initializing Chobo SQLite database...");
 await app.Services.InitializeChoboDatabaseAsync(firstStartup, missingDatabaseAfterInitialized);
 Console.WriteLine("Chobo SQLite database is ready.");
