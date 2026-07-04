@@ -40,7 +40,8 @@ public sealed class BackupCommand : CliSubject
             backupType,
             policyId,
             context.Command.Options.Has("--schema-only"),
-            settings);
+            settings,
+            context.Command.Options.Has("--refresh-cluster-metadata"));
         return await CommandHelpers.WithClient(context, client => client.PostAsync("backups/manual", request));
     }
 

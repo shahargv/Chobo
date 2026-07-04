@@ -17,6 +17,7 @@ import type {
   BackupRunStatus,
   BackupScheduleDto,
   BackupTargetDto,
+  ClickHouseClusterMetadataRefreshDto,
   ClickHouseClusterNamesDto,
   ClickHouseClusterTopologyDto,
   ClusterConnectionTestResult,
@@ -104,6 +105,7 @@ export class ChoboApiClient {
   updateClusterCredentials(id: string, request: UpdateClusterCredentialsRequest) { return this.post<ClusterDto>(`clusters/${id}/credentials`, request); }
   removeCluster(id: string) { return this.deleteVoid(`clusters/${id}`); }
   testCluster(id: string) { return this.post<ClusterConnectionTestResult>(`clusters/${id}/test-connection`, {}); }
+  refreshClusterMetadata(id: string) { return this.post<ClickHouseClusterMetadataRefreshDto>(`clusters/${id}/metadata/refresh`, {}); }
   clickHouseClusterNames(id: string) { return this.get<ClickHouseClusterNamesDto>(`clusters/${id}/clickhouse-cluster-names`); }
   clusterTopology(id: string) { return this.get<ClickHouseClusterTopologyDto>(`clusters/${id}/topology`); }
 

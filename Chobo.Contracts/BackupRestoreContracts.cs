@@ -113,7 +113,8 @@ public sealed record ManualBackupRequest(
     BackupType BackupType = BackupType.Full,
     Guid? PolicyId = null,
     bool SchemaOnly = false,
-    IReadOnlyDictionary<string, JsonElement>? ClickHouseBackupSettings = null);
+    IReadOnlyDictionary<string, JsonElement>? ClickHouseBackupSettings = null,
+    bool? RefreshClusterMetadata = null);
 
 public sealed record SchemaBackupSummaryDto(Guid Id, BackupRunStatus Status, BackupContentMode ContentMode, BackupType BackupType, Guid SourceClusterId, string SourceClusterName, Guid? PolicyId, string? PolicyName, DateTimeOffset CreatedAt, DateTimeOffset? EndedAt, int TableCount);
 

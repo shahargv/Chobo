@@ -48,6 +48,28 @@ public sealed class ClusterApplicationService(
                 .ToList());
     }
 
+    public async Task<ClickHouseClusterMetadataRefreshDto?> RefreshMetadataAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var cluster = await clusters.FindActiveAsync(id);
+        if (cluster is null)
+        {
+            return null;
+        }
+
+        var snapshot = await metadata.RefreshAsync(cluster, cancellationToken);
+        var result = ToMetadataRefreshDto(snapshot);
+        await audit.RecordAsync("metadata-refreshed", AuditEntityType.Cluster, id.ToString(), new
+        {
+            reason = "api-request",
+            result.RefreshedAt,
+            result.TablePlacementCount,
+            result.TopologyCount,
+            result.FailedNodeCount,
+            result.IsComplete
+        });
+        return result;
+    }
+
     public async Task<ClusterDto> AddAsync(UpsertClusterRequest request)
     {
         Validate(request);
@@ -251,6 +273,9 @@ public sealed class ClusterApplicationService(
 
     private static ClickHouseAccessNodeEntity ToEntity(UpsertAccessNodeRequest request) =>
         new() { Host = request.Host, Port = request.Port, UseTls = request.UseTls };
+
+    private static ClickHouseClusterMetadataRefreshDto ToMetadataRefreshDto(ClickHouseClusterMetadataSnapshot snapshot) =>
+        new(snapshot.ClusterId, snapshot.RefreshedAt, snapshot.Placements.Count, snapshot.Topology.Count, snapshot.NodeFailures.Count, snapshot.IsComplete);
 
     private static ClusterDto ToDto(ClickHouseClusterEntity x) =>
         new(

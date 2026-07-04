@@ -790,7 +790,7 @@ public sealed class BackupRunnerService(
 
             var maxRetries = Math.Max(0, scopedOptions.CurrentValue.TransientShardMaxRetries);
             var attempt = retryCounts.AddOrUpdate(shard.Id, 1, (_, current) => current + 1);
-            var retryWithFreshDestination = IsBackupAlreadyExistsFailure(ex);
+            var retryWithFreshDestination = IsFreshDestinationBackupRetryFailure(ex);
             if (attempt <= maxRetries && IsTransientShardFailure(ex, cancellationToken))
             {
                 var retryDelay = scopedOptions.CurrentValue.TransientShardRetryDelay <= TimeSpan.Zero ? TimeSpan.FromMinutes(1) : scopedOptions.CurrentValue.TransientShardRetryDelay;
@@ -1218,6 +1218,11 @@ public sealed class BackupRunnerService(
                 return true;
             }
 
+            if (IsClickHouseBackupCode655Failure(message))
+            {
+                return true;
+            }
+
             if (IsStorageOrCredentialFailure(message))
             {
                 return false;
@@ -1256,8 +1261,24 @@ public sealed class BackupRunnerService(
         return false;
     }
 
+    private static bool IsFreshDestinationBackupRetryFailure(Exception exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            if (IsBackupAlreadyExistsFailure(current.Message) || IsClickHouseBackupCode655Failure(current.Message))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static bool IsBackupAlreadyExistsFailure(string message) =>
         message.Contains("BACKUP_ALREADY_EXISTS", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsClickHouseBackupCode655Failure(string message) =>
+        message.StartsWith("Code: 655.", StringComparison.Ordinal);
 
     private static bool IsStorageOrCredentialFailure(string message) =>
         message.Contains("S3_ERROR", StringComparison.OrdinalIgnoreCase) ||
@@ -1271,3 +1292,4 @@ public sealed class BackupRunnerService(
         message.Contains("Authentication failed", StringComparison.OrdinalIgnoreCase);
 
 }
+

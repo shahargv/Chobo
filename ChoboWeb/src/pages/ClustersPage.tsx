@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
+import { RefreshCw } from "lucide-react";
 import type { ClusterDto, UpsertClusterRequest } from "../api/generated";
 import { useApi } from "../api-context";
 import { CrudPage, DataTable, Input, Select } from "../components/ui";
@@ -47,6 +48,11 @@ export function Clusters() {
     ...draft,
     accessNodes: parseNodes(accessNodesText, draft.accessNodes.some((node) => node.useTls))
   });
+  const refreshMetadata = useMutation({
+    mutationFn: (id: string) => api.refreshClusterMetadata(id),
+    onSuccess: (result) => showToast({ kind: result.isComplete ? "success" : "error", text: `Metadata refreshed: ${result.tablePlacementCount} table placements, ${result.topologyCount} topology entries, ${result.failedNodeCount} failed nodes.` }),
+    onError: (error) => showToast({ kind: "error", text: String(error) })
+  });
   const save = useMutation({
     mutationFn: () => {
       const request = clusterRequest();
@@ -76,7 +82,7 @@ export function Clusters() {
       {(!editing || modifyCredentials) && <Input label="Password" type="password" value={draft.password ?? ""} onChange={(value) => setDraft({ ...draft, password: value || null })} />}
       <ClickHouseAdvancedSettingsEditor title="Backup advanced settings" value={(draft.clickHouseBackupSettings ?? {}) as Record<string, string | number | boolean>} onChange={(settings) => setDraft({ ...draft, clickHouseBackupSettings: settings })} />
       <ClickHouseAdvancedSettingsEditor title="Restore advanced settings" value={(draft.clickHouseRestoreSettings ?? {}) as Record<string, string | number | boolean>} onChange={(settings) => setDraft({ ...draft, clickHouseRestoreSettings: settings })} />
-    </>} table={<DataTable headers={["Name", "Mode", "Access nodes", "Max DOP", "Node DOP", "Shard DOP", "Actions"]} isLoading={clusters.isLoading}>{(clusters.data ?? []).map((cluster) => <tr key={cluster.id} className={editing?.id === cluster.id ? "editing-row" : undefined}><td>{cluster.name}</td><td>{cluster.mode}</td><td>{cluster.accessNodes.map((node) => `${node.host}:${node.port}`).join(", ")}</td><td>{cluster.backupRestoreMaxDop}</td><td>{cluster.nodeMaxDopDefault}</td><td>{cluster.shardMaxDopDefault}</td><td className="actions"><button className="ghost" onClick={() => editCluster(cluster)}>Edit</button><button className="ghost" onClick={() => api.testCluster(cluster.id).then((x) => showToast({ kind: x.succeeded ? "success" : "error", text: x.message }))}>Test</button></td></tr>)}</DataTable>} />
+    </>} table={<DataTable headers={["Name", "Mode", "Access nodes", "Max DOP", "Node DOP", "Shard DOP", "Actions"]} isLoading={clusters.isLoading}>{(clusters.data ?? []).map((cluster) => <tr key={cluster.id} className={editing?.id === cluster.id ? "editing-row" : undefined}><td>{cluster.name}</td><td>{cluster.mode}</td><td>{cluster.accessNodes.map((node) => `${node.host}:${node.port}`).join(", ")}</td><td>{cluster.backupRestoreMaxDop}</td><td>{cluster.nodeMaxDopDefault}</td><td>{cluster.shardMaxDopDefault}</td><td className="actions"><button className="ghost" onClick={() => editCluster(cluster)}>Edit</button><button className="ghost" onClick={() => api.testCluster(cluster.id).then((x) => showToast({ kind: x.succeeded ? "success" : "error", text: x.message }))}>Test</button><button className="ghost" disabled={refreshMetadata.isPending && refreshMetadata.variables === cluster.id} onClick={() => refreshMetadata.mutate(cluster.id)}><RefreshCw size={14} /> {refreshMetadata.isPending && refreshMetadata.variables === cluster.id ? "Refreshing" : "Refresh Metadata"}</button></td></tr>)}</DataTable>} />
   );
 }
 
