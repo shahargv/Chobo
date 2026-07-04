@@ -82,6 +82,45 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Incremental_backup_preparation_uses_fresh_cached_cluster_metadata()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+        var policy = await fixture.SeedPolicyAsync();
+        _ = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, DateTimeOffset.UtcNow.AddMinutes(-5), tableName: "orders");
+
+        var cluster = await fixture.Db.ClickHouseClusters
+            .Include(x => x.AccessNodes)
+            .SingleAsync(x => x.Id == fixture.SourceClusterId);
+        await fixture.Services.GetRequiredService<IClickHouseClusterMetadataService>().GetAsync(cluster);
+        var clusterNamesCalls = fixture.ClickHouse.ClusterNamesCallCount;
+        var topologyCalls = fixture.ClickHouse.TopologyCallCount;
+        var tableCalls = fixture.ClickHouse.GetTablesEndpoints.Count;
+
+        var backup = new BackupEntity
+        {
+            TriggerType = BackupTriggerType.Scheduled,
+            Status = BackupRunStatus.Queued,
+            BackupType = BackupType.Incremental,
+            SourceClusterId = fixture.SourceClusterId,
+            TargetId = fixture.TargetId,
+            PolicyId = policy.Id,
+            RequestedByName = "system"
+        };
+        fixture.Db.Backups.Add(backup);
+        await fixture.Db.SaveChangesAsync();
+
+        await fixture.RunBackupAsync(backup.Id);
+
+        Assert.Equal(clusterNamesCalls, fixture.ClickHouse.ClusterNamesCallCount);
+        Assert.Equal(topologyCalls, fixture.ClickHouse.TopologyCallCount);
+        Assert.Equal(tableCalls, fixture.ClickHouse.GetTablesEndpoints.Count);
+        var prepared = await fixture.Db.BackupTables.Include(x => x.Shards).SingleAsync(x => x.BackupId == backup.Id);
+        Assert.Equal(BackupType.Incremental, prepared.EffectiveBackupType);
+        Assert.All(prepared.Shards, shard => Assert.Equal(BackupType.Incremental, shard.EffectiveBackupType));
+    }
+
+    [Fact]
     public async Task Cluster_metadata_invalidation_forces_backup_preparation_refresh()
     {
         await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
@@ -1264,6 +1303,10 @@ public sealed class BackupRestoreExecutionTests
         await fixture.RunBackupAsync(full.Id);
 
         fixture.ClickHouse.Inventory.Add(Table("sales", "new_orders", "MergeTree"));
+        var sourceCluster = await fixture.Db.ClickHouseClusters
+            .Include(x => x.AccessNodes)
+            .SingleAsync(x => x.Id == fixture.SourceClusterId);
+        await fixture.Services.GetRequiredService<IClickHouseClusterMetadataService>().RefreshAsync(sourceCluster);
         var incremental = new BackupEntity
         {
             TriggerType = BackupTriggerType.Manual,
@@ -5088,6 +5131,123 @@ public sealed class BackupRestoreExecutionTests
 
         Assert.Contains("schema does not match", error.Message, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Fact]
+    public async Task Restore_initiation_uses_fresh_cached_target_metadata()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        fixture.ClickHouse.Topology.Clear();
+        fixture.ClickHouse.Topology.AddRange([
+            new ClickHouseShardReplicaInfo(1, "shard-1", 1, "restore-s1", 9000, false, 0),
+            new ClickHouseShardReplicaInfo(2, "shard-2", 1, "restore-s2", 9000, false, 0)
+        ]);
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Succeeded, "backup-op", true)
+        ], shardCount: 2);
+        backup.Status = BackupRunStatus.Succeeded;
+        await fixture.Db.SaveChangesAsync();
+
+        var cluster = await fixture.Db.ClickHouseClusters
+            .Include(x => x.AccessNodes)
+            .SingleAsync(x => x.Id == fixture.TargetClusterId);
+        await fixture.Services.GetRequiredService<IClickHouseClusterMetadataService>().GetAsync(cluster);
+        var clusterNamesCalls = fixture.ClickHouse.ClusterNamesCallCount;
+        var topologyCalls = fixture.ClickHouse.TopologyCallCount;
+        var tableCalls = fixture.ClickHouse.GetTablesEndpoints.Count;
+
+        var restore = await fixture.Services.GetRequiredService<RestoreApplicationService>().InitiateAsync(new InitiateRestoreRequest(
+            backup.Id,
+            fixture.TargetClusterId,
+            null,
+            null,
+            null,
+            null,
+            false,
+            false));
+
+        Assert.Equal(clusterNamesCalls, fixture.ClickHouse.ClusterNamesCallCount);
+        Assert.Equal(topologyCalls, fixture.ClickHouse.TopologyCallCount);
+        Assert.Equal(tableCalls, fixture.ClickHouse.GetTablesEndpoints.Count);
+        Assert.Equal(["restore-s1", "restore-s2"], Assert.Single(restore.Tables).Shards.OrderBy(x => x.TargetShardNumber).Select(x => x.TargetHost).ToArray());
+    }
+
+    [Fact]
+    public async Task Entity_restore_plan_uses_fresh_cached_target_metadata()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        fixture.ClickHouse.Topology.Clear();
+        fixture.ClickHouse.Topology.AddRange([
+            new ClickHouseShardReplicaInfo(1, "shard-1", 1, "restore-s1", 9000, false, 0),
+            new ClickHouseShardReplicaInfo(2, "shard-2", 1, "restore-s2", 9000, false, 0)
+        ]);
+        var policy = await fixture.SeedPolicyAsync();
+        var backup = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, DateTimeOffset.UtcNow.AddMinutes(-1), shardCount: 2, tableName: "orders");
+
+        var cluster = await fixture.Db.ClickHouseClusters
+            .Include(x => x.AccessNodes)
+            .SingleAsync(x => x.Id == fixture.TargetClusterId);
+        await fixture.Services.GetRequiredService<IClickHouseClusterMetadataService>().GetAsync(cluster);
+        var clusterNamesCalls = fixture.ClickHouse.ClusterNamesCallCount;
+        var topologyCalls = fixture.ClickHouse.TopologyCallCount;
+        var tableCalls = fixture.ClickHouse.GetTablesEndpoints.Count;
+
+        var plan = await fixture.Services.GetRequiredService<RestoreApplicationService>().PlanEntityRestoreAsync(new EntityRestorePlanRequest(
+            policy.Id,
+            backup.Id,
+            fixture.TargetClusterId,
+            Database: "sales",
+            Table: "orders"));
+
+        Assert.Equal(clusterNamesCalls, fixture.ClickHouse.ClusterNamesCallCount);
+        Assert.Equal(topologyCalls, fixture.ClickHouse.TopologyCallCount);
+        Assert.Equal(tableCalls, fixture.ClickHouse.GetTablesEndpoints.Count);
+        Assert.Equal(["restore-s1", "restore-s2"], Assert.Single(plan.Tables).Shards.OrderBy(x => x.TargetShardNumber).Select(x => x.TargetHost).ToArray());
+    }
+
+    [Fact]
+    public async Task Restore_runner_uses_fresh_cached_target_metadata_for_replicated_table()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        fixture.ClickHouse.Topology.Clear();
+        fixture.ClickHouse.Topology.AddRange([
+            new ClickHouseShardReplicaInfo(1, "shard-1", 1, "restore-r1", 9000, false, 0),
+            new ClickHouseShardReplicaInfo(1, "shard-1", 2, "restore-r2", 9000, false, 0)
+        ]);
+        var targetCluster = await fixture.Db.ClickHouseClusters
+            .Include(x => x.AccessNodes)
+            .SingleAsync(x => x.Id == fixture.TargetClusterId);
+        targetCluster.Mode = ClusterMode.Cluster;
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Succeeded, "backup-op", true)
+        ]);
+        backup.Status = BackupRunStatus.Succeeded;
+        var backupTable = Assert.Single(backup.Tables);
+        backupTable.Engine = "ReplicatedMergeTree";
+        backupTable.SchemaDefinition!.Engine = "ReplicatedMergeTree";
+        await fixture.Db.SaveChangesAsync();
+
+        await fixture.Services.GetRequiredService<IClickHouseClusterMetadataService>().GetAsync(targetCluster);
+        var clusterNamesCalls = fixture.ClickHouse.ClusterNamesCallCount;
+        var topologyCalls = fixture.ClickHouse.TopologyCallCount;
+        var tableCalls = fixture.ClickHouse.GetTablesEndpoints.Count;
+
+        var restore = await fixture.Services.GetRequiredService<RestoreApplicationService>().InitiateAsync(new InitiateRestoreRequest(
+            backup.Id,
+            fixture.TargetClusterId,
+            null,
+            null,
+            null,
+            null,
+            false,
+            false));
+        await fixture.RunRestoreAsync(restore.Id);
+
+        Assert.Equal(clusterNamesCalls, fixture.ClickHouse.ClusterNamesCallCount);
+        Assert.Equal(topologyCalls, fixture.ClickHouse.TopologyCallCount);
+        Assert.Equal(tableCalls, fixture.ClickHouse.GetTablesEndpoints.Count);
+        Assert.Single(fixture.ClickHouse.RestoreStartEndpoints);
+    }
+
     [Fact]
     public async Task Restore_redistribute_can_limit_target_shards_to_one_shard()
     {

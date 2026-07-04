@@ -97,9 +97,7 @@ public sealed class BackupPreparationService(
             backup.StorageRootPath ??= BuildStorageRootPath(backup);
         }
 
-        var snapshot = backup.BackupType == BackupType.Incremental
-            ? await metadata.RefreshAsync(backup.SourceCluster!, cancellationToken)
-            : await metadata.GetAsync(backup.SourceCluster!, cancellationToken);
+        var snapshot = await metadata.GetAsync(backup.SourceCluster!, cancellationToken);
         var topology = snapshot.Topology;
         var placements = await ReadClusterTablePlacementsAsync(backup, snapshot, selector, cancellationToken);
         _logger.Information("Backup {BackupId} inventory contains {PlacementCount} table placement(s).", backup.Id, placements.Count);
