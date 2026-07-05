@@ -30,7 +30,15 @@ If the user asks to prepare a release but not publish it, stop after local valid
 
 2. Confirm the version is SemVer-like and has no leading `v` when passed to scripts or workflow inputs. Use a leading `v` only for Git tags.
 
-3. Confirm compatibility versions only if the release includes contract changes:
+3. Run the release version policy check before publishing:
+
+   ```powershell
+   .\scripts\Test-ReleaseVersionPolicy.ps1 -Version <version>
+   ```
+
+   Review the schema advisory every time. If it reports likely or ambiguous SQLite schema changes, notify the release owner before continuing. Do not publish until any required `ChoboApi.SchemaVersion` and release minor `Y` changes are resolved.
+
+4. Confirm compatibility versions only if the release includes contract changes:
 
    - `ApiVersion`
    - `ExportVersion`
@@ -38,7 +46,7 @@ If the user asks to prepare a release but not publish it, stop after local valid
 
    These live in `Chobo.Contracts/ChoboApi.cs` and are not normal release-version numbers.
 
-4. Confirm Docker Hub secrets exist before publishing through Actions:
+5. Confirm Docker Hub secrets exist before publishing through Actions:
 
    - `DOCKERHUB_USERNAME`
    - `DOCKERHUB_TOKEN`
@@ -52,16 +60,21 @@ dotnet restore Chobo.sln
 dotnet build Chobo.sln -c Release --no-restore
 dotnet test Chobo.Tests\Chobo.Tests.csproj -c Release --no-build -v minimal --blame-hang --blame-hang-timeout 30s
 .\TestingSuite\TestManager.ps1 -TestId release-smoke-<version> -TestName SmokeCreateTables,ChoboCrudSmoke -GlobalTimeoutSeconds 1800 -TestTimeoutSeconds 300
-.\TestingSuite\TestManager.ps1 -TestId release-large-ontime-<version> -TestName LargeOnTimeBackupGc -GlobalTimeoutSeconds 10800 -TestTimeoutSeconds 9000
-$envInfo = .\.codex\skills\chobo-ui-tests\scripts\start-ui-env.ps1 -Scenario large-table -TestId release-ui-large-table-<version>
-node .\.codex\skills\chobo-ui-tests\scripts\run-ui-scenario.mjs --env $envInfo.EnvFile --scenario large-table
-.\.codex\skills\chobo-ui-tests\scripts\stop-ui-env.ps1 -EnvFile $envInfo.EnvFile
+.\TestingSuite\TestManager.ps1 -TestId release-import-export-<version> -TestName ImportExportRoundTrip -GlobalTimeoutSeconds 600 -TestTimeoutSeconds 300
+.\scripts\Test-ReleaseVersionPolicy.ps1 -Version <version>
+.\scripts\Test-UpgradeSamples.ps1 -Version <version>
+.\scripts\Invoke-ReleaseDryRunRehearsal.ps1 -Version <same-schema-candidate> -SkipUpgradeSamples
+.\scripts\Invoke-ReleaseDryRunRehearsal.ps1 -Version <schema-change-candidate> -SchemaChange -SkipUpgradeSamples
+.\scripts\New-ReleaseDbSample.ps1 -Version <version>
+.\scripts\Test-UpgradeSamples.ps1 -Version <version>
 .\scripts\Build-Artifacts.ps1 -Configuration Release -Version <version>
 ```
 
-Use the `chobo-system-tests` skill for system-test failures, log inspection, or full-suite debugging. Use the `chobo-ui-tests` skill for the large-table browser scenario. Docker-heavy system and UI tests should run sequentially.
+Use the `chobo-system-tests` skill for system-test failures, log inspection, or full-suite debugging. Docker-heavy system tests should run sequentially.
 
-Do not continue to publishing or release artifact build until both local large-table checks have passed on the release candidate. `LargeOnTimeBackupGc` is the storage correctness gate: it downloads and processes the public OnTime dataset slice, validates full and no-op incremental backup sizes, restores the incremental chain, and verifies explicit S3 garbage collection by listing MinIO/S3 objects. The `large-table` UI scenario is the operator-experience gate: it drives backup, restore, delete confirmation, and GC from Chrome and records screenshots/reports, but it intentionally leaves raw S3 object deletion proof to the system test.
+Do not continue to publishing or release artifact build until the release policy, upgrade sample validation, import/export round trip, and dry-run rehearsal checks have passed. The dry-run rehearsal commands are intended for subagents: one checks a same-schema patch release path, and one checks a schema-change minor release path. They must not push tags, dispatch GitHub Actions, edit GitHub Releases, or push Docker images.
+
+After `New-ReleaseDbSample.ps1` creates `.release/db-samples/<version>`, include that fixture in the release-ready commit before tagging. CI validates committed samples but does not generate or commit them.
 
 Check the artifact output:
 

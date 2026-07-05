@@ -62,6 +62,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
@@ -76,6 +78,14 @@ jobs:
 
       - name: Unit tests
         run: dotnet test Chobo.Tests/Chobo.Tests.csproj -c Release --no-build -v minimal --blame-hang --blame-hang-timeout 30s
+
+      - name: Release version policy
+        shell: pwsh
+        run: ./scripts/Test-ReleaseVersionPolicy.ps1 -Version '${{ needs.prepare.outputs.version }}'
+
+      - name: Upgrade sample validation
+        shell: pwsh
+        run: ./scripts/Test-UpgradeSamples.ps1 -Version '${{ needs.prepare.outputs.version }}'
 
       - name: Full system tests
         shell: pwsh
