@@ -1742,7 +1742,10 @@ public sealed class ChoboFoundationTests
     [Fact]
     public async Task Data_retention_background_service_hard_deletes_old_successfully_deleted_backup_and_restore_records()
     {
-        await using var factory = CreateFactory();
+        await using var factory = CreateFactory(extraConfiguration: new Dictionary<string, string?>
+        {
+            ["Chobo:DataRetention:DeletedBackupRestoreRecordRetention"] = "00:00:00"
+        });
         _ = AuthenticatedClient(factory);
         var now = DateTimeOffset.Parse("2026-05-15T10:00:00+00:00");
         var oldDeletedAt = now.AddDays(-91);

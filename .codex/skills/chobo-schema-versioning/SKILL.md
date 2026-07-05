@@ -6,6 +6,7 @@ description: Use when changing Chobo SQLite schema, EF migrations, ChoboApi.Sche
 # Chobo Schema Versioning
 
 Chobo treats schema versions as release-level contracts, not PR-level or chat-level counters.
+Release versions use `X.Y.Z`: `X` is the owner-selected major line, `Y` is the SQLite schema-change counter within that major line, and `Z` is the same-schema feature/patch counter. `ChoboApi.SchemaVersion` remains the internal monotonic SQLite compatibility integer.
 
 ## Current Baseline
 
@@ -31,12 +32,16 @@ Chobo treats schema versions as release-level contracts, not PR-level or chat-le
    - add a new migration file named for the target schema version, not the PR date;
    - add a custom upgrade step in `SchemaUpgradeService`;
    - add upgrade tests from the last published schema to the new schema.
-5. Keep `ExportVersion` separate. Only change it for serialized export envelope compatibility changes, not every SQLite schema change.
+5. Before release, run `.\scripts\Test-ReleaseVersionPolicy.ps1 -Version <version>` and review its schema advisory. It checks schema-sensitive git diffs since the previous release tag and warns when a missed schema bump is likely or ambiguous.
+6. Keep `ExportVersion` separate. Only change it for serialized export envelope compatibility changes, not every SQLite schema change.
 
 ## Rules Of Thumb
 
 - Do not add migration files just because a PR changes an entity during the same unreleased schema cycle.
 - Do not bump `SchemaVersion` until we intentionally start compatibility work for a release after the last published schema.
+- When `ChoboApi.SchemaVersion` increases on the same major line, release minor `Y` must increase by one and patch `Z` resets to zero.
+- When `ChoboApi.SchemaVersion` does not increase on the same major line, release minor `Y` must stay the same and patch `Z` increases.
+- When release major `X` increases, release minor `Y` resets to zero.
 - When collapsing or resetting pre-release schema history, keep exactly one baseline migration matching the current `DbContext`.
 - If unsure whether a schema is published, stop and verify instead of guessing.
 
