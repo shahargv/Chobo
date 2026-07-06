@@ -1395,6 +1395,61 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Incremental_backup_uses_selected_full_table_shards_instead_of_older_exact_replica_matches()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var policy = await fixture.SeedPolicyAsync();
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "ReplicatedMergeTree"));
+        fixture.ClickHouse.Topology.Clear();
+        fixture.ClickHouse.Topology.AddRange([
+            new ClickHouseShardReplicaInfo(1, "shard-1", 1, "source-r1", 9000, false, 0),
+            new ClickHouseShardReplicaInfo(1, "shard-1", 2, "source-r2", 9000, false, 0)
+        ]);
+
+        var olderFull = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, DateTimeOffset.UtcNow.AddDays(-3), backupType: BackupType.Full, tableName: "orders");
+        var olderFullShard = Assert.Single(Assert.Single(olderFull.Tables).Shards);
+        olderFullShard.SourceShardName = "shard-1";
+        olderFullShard.ReplicaNumber = 1;
+        olderFullShard.Host = "source-r1";
+        var newerFull = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, DateTimeOffset.UtcNow.AddDays(-1), backupType: BackupType.Full, tableName: "orders");
+        var newerFullShard = Assert.Single(Assert.Single(newerFull.Tables).Shards);
+        newerFullShard.SourceShardName = "shard-1";
+        newerFullShard.ReplicaNumber = 2;
+        newerFullShard.Host = "source-r2";
+        await fixture.Db.SaveChangesAsync();
+
+        fixture.Db.ChangeTracker.Clear();
+        var incremental = new BackupEntity
+        {
+            TriggerType = BackupTriggerType.Manual,
+            Status = BackupRunStatus.Queued,
+            BackupType = BackupType.Incremental,
+            SourceClusterId = fixture.SourceClusterId,
+            TargetId = fixture.TargetId,
+            PolicyId = policy.Id
+        };
+        fixture.Db.Backups.Add(incremental);
+        await fixture.Db.SaveChangesAsync();
+        await fixture.RunBackupAsync(incremental.Id);
+
+        fixture.Db.ChangeTracker.Clear();
+        var incrementalTable = await fixture.Db.BackupTables
+            .Include(x => x.Shards)
+            .SingleAsync(x => x.BackupId == incremental.Id);
+        var shard = Assert.Single(incrementalTable.Shards);
+
+        Assert.Equal(BackupType.Incremental, incrementalTable.EffectiveBackupType);
+        Assert.Equal(newerFull.Id, incrementalTable.ParentFullBackupId);
+        Assert.Equal(BackupType.Incremental, shard.EffectiveBackupType);
+        Assert.Equal(newerFull.Id, shard.ParentFullBackupId);
+        Assert.Equal(newerFullShard.Id, shard.ParentFullBackupTableShardId);
+        Assert.DoesNotContain(olderFull.Id, incrementalTable.Shards.Select(x => x.ParentFullBackupId));
+
+        var detail = await fixture.Services.GetRequiredService<BackupApplicationService>().GetAsync(incremental.Id, includeTables: true);
+        Assert.Equal([newerFull.Id], detail!.RelatedFullBackupIds);
+    }
+
+    [Fact]
     public async Task Incremental_backup_uses_succeeded_rows_from_partially_succeeded_parent()
     {
         await using var fixture = await TestFixture.CreateAsync();
