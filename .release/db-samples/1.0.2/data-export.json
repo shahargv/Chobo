@@ -1,0 +1,278 @@
+{
+  "exportVersion": 1,
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-06T16:03:25.390493+00:00",
+  "productVersion": "1.0.2+release-sample",
+  "data": {
+    "users": [],
+    "accessTokens": [],
+    "clusters": [
+      {
+        "id": "0e7a5b11-4d5e-47f6-87d4-6fee691ed6bc",
+        "name": "system-export-cluster",
+        "mode": "Cluster",
+        "clickHouseClusterName": "system_export_cluster_name",
+        "accessNodes": [
+          {
+            "id": "2850bfb4-4b57-4055-9003-364846af21c9",
+            "host": "source-cluster",
+            "port": 9000,
+            "useTls": false
+          }
+        ],
+        "encryptedUserName": "encrypted-user-from-source",
+        "encryptedUserNameKeyId": "53dbf4ec-a71e-4b05-8ac7-8a00f63bffb3",
+        "encryptedPassword": "encrypted-password-from-source",
+        "encryptedPasswordKeyId": "94f90f86-e4e3-4ad4-bcab-8c81f0cd3af3",
+        "backupRestoreMaxDop": 2,
+        "nodeMaxDopDefault": 1,
+        "nodeMaxDopOverrides": [],
+        "shardMaxDopDefault": 1,
+        "shardMaxDopOverrides": [],
+        "clickHouseBackupSettings": {},
+        "clickHouseRestoreSettings": {},
+        "isDeleted": false,
+        "createdAt": "2026-07-06T16:03:24.523+00:00",
+        "updatedAt": null,
+        "deletedAt": null
+      }
+    ],
+    "backupTargets": [
+      {
+        "id": "e9ec5e56-2886-491b-a857-0e74b388f274",
+        "name": "system-export-target",
+        "type": "s3",
+        "settings": {
+          "Endpoint": "http://backup-s3:9000",
+          "Region": "us-east-1",
+          "Bucket": "backups",
+          "PathPrefix": "system-export",
+          "ForcePathStyle": true
+        },
+        "secrets": {},
+        "isDeleted": false,
+        "createdAt": "2026-07-06T16:03:24.523+00:00",
+        "updatedAt": null,
+        "deletedAt": null
+      }
+    ],
+    "backupPolicies": [
+      {
+        "id": "9bd7db06-65f7-4614-b511-078b7a97523d",
+        "name": "system-export-policy",
+        "sourceClusterId": "0e7a5b11-4d5e-47f6-87d4-6fee691ed6bc",
+        "targetId": "e9ec5e56-2886-491b-a857-0e74b388f274",
+        "contentMode": "SchemaAndData",
+        "selectorJsonVersion": 1,
+        "selector": {
+          "version": 1,
+          "rules": [
+            {
+              "action": "Include",
+              "database": {
+                "kind": "All",
+                "value": "*"
+              },
+              "table": {
+                "kind": "All",
+                "value": "*"
+              }
+            }
+          ]
+        },
+        "retention": {
+          "fullRetentionMinutes": 60,
+          "incrementalRetentionMinutes": 30,
+          "minBackupsToKeep": 1,
+          "minFullBackupsToKeep": 1
+        },
+        "failedBackupRetentionMode": "KeepAndExcludeFromMinBackupsToKeep",
+        "clickHouseBackupSettings": {},
+        "clickHouseRestoreSettings": {},
+        "isSystemDefault": false,
+        "isDeleted": false,
+        "createdAt": "2026-07-06T16:03:24.523+00:00",
+        "updatedAt": null,
+        "deletedAt": null,
+        "maxAgeHoursForBaseBackup": null
+      }
+    ],
+    "backupSchedules": [
+      {
+        "id": "1085d97d-113f-4807-a46f-e81a17f42659",
+        "name": "system-export-schedule",
+        "policyId": "9bd7db06-65f7-4614-b511-078b7a97523d",
+        "backupType": "Full",
+        "cronExpression": "0 0 2 * * ?",
+        "timeZoneId": "UTC",
+        "isEnabled": true,
+        "missedRunGracePeriod": null,
+        "description": null,
+        "isSystemDefault": false,
+        "isDeleted": false,
+        "createdAt": "2026-07-06T16:03:24.523+00:00",
+        "updatedAt": null,
+        "deletedAt": null
+      }
+    ],
+    "schemaDefinitions": [
+      {
+        "id": "aae428bf-9a30-408b-a74a-952591a7abab",
+        "schemaHash": "system-export-schema",
+        "database": "system_export_db",
+        "table": "system_export_table",
+        "engine": "MergeTree",
+        "createTableSql": "CREATE TABLE system_export_db.system_export_table (id UInt64) ENGINE = MergeTree ORDER BY id",
+        "columnsJson": "[{\"name\":\"id\",\"type\":\"UInt64\"}]",
+        "createdAt": "2026-07-06T16:03:24.523+00:00"
+      }
+    ],
+    "backups": [
+      {
+        "id": "0f47254e-85ab-40a6-bfc3-a5a890e1f50c",
+        "triggerType": "Scheduled",
+        "status": "Succeeded",
+        "backupType": "Full",
+        "contentMode": "SchemaAndData",
+        "sourceClusterId": "0e7a5b11-4d5e-47f6-87d4-6fee691ed6bc",
+        "targetId": "e9ec5e56-2886-491b-a857-0e74b388f274",
+        "policyId": "9bd7db06-65f7-4614-b511-078b7a97523d",
+        "scheduleId": "1085d97d-113f-4807-a46f-e81a17f42659",
+        "manualRequestJson": null,
+        "storageRootPath": null,
+        "requestedByUserId": "62113c86-b087-4ba6-9af7-78a8e21de943",
+        "requestedByName": "admin",
+        "createdAt": "2026-07-06T16:03:24.523+00:00",
+        "queuedAt": "2026-07-06T16:03:24.523+00:00",
+        "startedAt": "2026-07-06T16:03:25.523+00:00",
+        "completedAt": "2026-07-06T16:03:26.523+00:00",
+        "error": null,
+        "failureReason": null,
+        "isPinned": false,
+        "pinnedAt": null,
+        "pinnedByUserId": null,
+        "pinnedByName": null,
+        "deletionReason": null,
+        "deletionRequestedAt": null,
+        "deletionStartedAt": null,
+        "deletedAt": null,
+        "deletionError": null,
+        "deletionAttemptCount": 0,
+        "clickHouseBackupSettings": {}
+      }
+    ],
+    "backupTables": [
+      {
+        "id": "bf0b89da-9cae-4bd4-b0b4-7161b88e85df",
+        "backupId": "0f47254e-85ab-40a6-bfc3-a5a890e1f50c",
+        "effectiveBackupType": "Full",
+        "parentFullBackupId": null,
+        "parentFullBackupTableId": null,
+        "database": "system_export_db",
+        "table": "system_export_table",
+        "engine": "MergeTree",
+        "dataBackedUp": true,
+        "schemaDefinitionId": "aae428bf-9a30-408b-a74a-952591a7abab",
+        "storagePath": "s3://backups/system-export/system_export_table",
+        "backupSizeBytes": null,
+        "status": "Succeeded",
+        "clickHouseOperationId": null,
+        "clickHouseStatus": null,
+        "startedAt": "2026-07-06T16:03:25.523+00:00",
+        "completedAt": "2026-07-06T16:03:26.523+00:00",
+        "error": null
+      }
+    ],
+    "backupTableShards": [
+      {
+        "id": "d953d750-9c83-4276-ad2a-988c3fa89341",
+        "backupTableId": "bf0b89da-9cae-4bd4-b0b4-7161b88e85df",
+        "effectiveBackupType": "Full",
+        "parentFullBackupId": null,
+        "parentFullBackupTableShardId": null,
+        "sourceShardNumber": 1,
+        "sourceShardName": "shard1",
+        "replicaNumber": 1,
+        "host": "source-cluster",
+        "port": 9000,
+        "useTls": false,
+        "storagePath": "s3://backups/system-export/system_export_table/shard1",
+        "backupSizeBytes": null,
+        "status": "Succeeded",
+        "clickHouseOperationId": null,
+        "clickHouseStatus": null,
+        "startedAt": "2026-07-06T16:03:25.523+00:00",
+        "completedAt": "2026-07-06T16:03:26.523+00:00",
+        "error": null
+      }
+    ],
+    "restores": [
+      {
+        "id": "a1bd764c-06f5-49c1-b776-512652e81497",
+        "backupId": "0f47254e-85ab-40a6-bfc3-a5a890e1f50c",
+        "targetClusterId": "0e7a5b11-4d5e-47f6-87d4-6fee691ed6bc",
+        "status": "Succeeded",
+        "append": false,
+        "allowSchemaMismatch": false,
+        "layout": "Preserve",
+        "sourceShard": null,
+        "targetShard": null,
+        "requestJson": "{\"mode\":\"system-test\"}",
+        "requestedByUserId": "62113c86-b087-4ba6-9af7-78a8e21de943",
+        "requestedByName": "admin",
+        "createdAt": "2026-07-06T16:03:24.523+00:00",
+        "queuedAt": "2026-07-06T16:03:24.523+00:00",
+        "startedAt": "2026-07-06T16:03:27.523+00:00",
+        "completedAt": "2026-07-06T16:03:28.523+00:00",
+        "error": null,
+        "failureReason": null,
+        "clickHouseRestoreSettings": {}
+      }
+    ],
+    "restoreTables": [
+      {
+        "id": "8baecefa-4017-4378-8228-b06f805229da",
+        "restoreId": "a1bd764c-06f5-49c1-b776-512652e81497",
+        "backupTableId": "bf0b89da-9cae-4bd4-b0b4-7161b88e85df",
+        "sourceDatabase": "system_export_db",
+        "sourceTable": "system_export_table",
+        "targetDatabase": "system_export_db_restored",
+        "targetTable": "system_export_table_restored",
+        "append": false,
+        "allowSchemaMismatch": false,
+        "schemaOnly": false,
+        "status": "Succeeded",
+        "clickHouseOperationId": null,
+        "clickHouseStatus": null,
+        "warning": null,
+        "startedAt": "2026-07-06T16:03:27.523+00:00",
+        "completedAt": "2026-07-06T16:03:28.523+00:00",
+        "error": null
+      }
+    ],
+    "restoreTableShards": [
+      {
+        "id": "eadf8d4b-05fb-4027-bc4d-d049b2c280bf",
+        "restoreTableId": "8baecefa-4017-4378-8228-b06f805229da",
+        "backupTableShardId": "d953d750-9c83-4276-ad2a-988c3fa89341",
+        "sourceShardNumber": 1,
+        "targetShardNumber": 1,
+        "targetShardName": "shard1",
+        "targetReplicaNumber": 1,
+        "targetHost": "source-cluster",
+        "targetPort": 9000,
+        "targetUseTls": false,
+        "layoutRole": "primary",
+        "restoreDatabase": "system_export_db_restored",
+        "restoreTableName": "system_export_table_restored",
+        "status": "Succeeded",
+        "clickHouseOperationId": null,
+        "clickHouseStatus": null,
+        "warning": null,
+        "startedAt": "2026-07-06T16:03:27.523+00:00",
+        "completedAt": "2026-07-06T16:03:28.523+00:00",
+        "error": null
+      }
+    ]
+  }
+}

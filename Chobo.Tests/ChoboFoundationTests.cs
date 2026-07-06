@@ -664,6 +664,7 @@ public sealed class ChoboFoundationTests
                 new BackupTableShardEntity { Id = shard1, BackupTableId = tableId, EffectiveBackupType = BackupType.Full, SourceShardNumber = 1, SourceShardName = "s1", ReplicaNumber = 1, Host = "node1", Port = 9000, StoragePath = "s3://bucket/db/tbl/1", Status = BackupTableStatus.Queued },
                 new BackupTableShardEntity { Id = shard2, BackupTableId = tableId, EffectiveBackupType = BackupType.Full, SourceShardNumber = 2, SourceShardName = "s2", ReplicaNumber = 1, Host = "node2", Port = 9000, StoragePath = "s3://bucket/db/tbl/2", Status = BackupTableStatus.Queued });
             await db.SaveChangesAsync();
+            db.ChangeTracker.Clear();
             var queue = scope.ServiceProvider.GetRequiredService<BackupRestoreQueueApplicationService>();
             await queue.EnsureBackupQueueItemsAsync(backupId);
         }
