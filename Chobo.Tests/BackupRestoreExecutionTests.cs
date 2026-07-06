@@ -82,6 +82,36 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Background_cluster_metadata_refresh_forces_refresh_even_when_cache_is_fresh()
+    {
+        await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+
+        var targetCluster = await fixture.Db.ClickHouseClusters.SingleAsync(x => x.Id == fixture.TargetClusterId);
+        targetCluster.IsDeleted = true;
+        await fixture.Db.SaveChangesAsync();
+        var cluster = await fixture.Db.ClickHouseClusters
+            .Include(x => x.AccessNodes)
+            .SingleAsync(x => x.Id == fixture.SourceClusterId);
+        var metadata = fixture.Services.GetRequiredService<IClickHouseClusterMetadataService>();
+        await metadata.GetAsync(cluster);
+
+        fixture.ClickHouse.Inventory.Add(Table("sales", "products", "MergeTree"));
+        var backgroundRefresh = new ClickHouseClusterMetadataRefreshBackgroundService(
+            fixture.Services,
+            fixture.Services.GetRequiredService<IOptionsMonitor<ChoboClusterMetadataOptions>>(),
+            Serilog.Core.Logger.None);
+
+        await backgroundRefresh.RefreshOnceAsync();
+        var refreshed = await metadata.GetAsync(cluster);
+
+        Assert.Equal(2, fixture.ClickHouse.ClusterNamesCallCount);
+        Assert.Equal(2, fixture.ClickHouse.TopologyCallCount);
+        Assert.Equal(2, fixture.ClickHouse.GetTablesEndpoints.Count(x => x.Host == "source"));
+        Assert.Equal(["orders", "products"], refreshed.Placements.Select(x => x.Table.Table).OrderBy(x => x, StringComparer.Ordinal).ToList());
+    }
+
+    [Fact]
     public async Task Incremental_backup_preparation_uses_fresh_cached_cluster_metadata()
     {
         await using var fixture = await TestFixture.CreateAsync(options: new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1) });
