@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 import type { BackupDto, BackupPolicyDto, BackupTableDto, BackupTableShardDto } from "../api/generated";
 import { ApiContext } from "../api-context";
-import { Backups, BackupTablesTable, calculateBackupShardCompletion, calculateBackupSizeBytes, calculateTableSizeBytes, summarizeBackupShards } from "./BackupsPage";
+import { Backups, BackupShardDetailsTable, BackupTablesTable, calculateBackupShardCompletion, calculateBackupSizeBytes, calculateTableSizeBytes, summarizeBackupShards } from "./BackupsPage";
 
 const baseShard = (overrides: Partial<BackupTableShardDto>): BackupTableShardDto => ({
   id: overrides.id ?? crypto.randomUUID(),
@@ -142,6 +142,42 @@ describe("BackupTablesTable", () => {
 
     expect(host.textContent).toContain("sales.failed_orders Shard 1, replica 1");
     expect(host.textContent).toContain("Timeout while connecting to source-s1:9000");
+
+    await act(async () => root.unmount());
+    host.remove();
+  });
+  it("renders shard dependency details in the dedicated shard grid", async () => {
+    const table = baseTable({
+      table: "incremental_orders",
+      shards: [
+        baseShard({ id: "shard-1", effectiveBackupType: "Incremental", parentFullBackupId: "full-backup-fb", sourceShardNumber: 1, backupSizeBytes: 1024, clickHouseOperationId: "backup-op-1", status: "Succeeded" }),
+        baseShard({ id: "shard-2", effectiveBackupType: "Full", parentFullBackupId: null, sourceShardNumber: 2, storagePath: "s3://backup/table/shard-2/full", status: "Succeeded" })
+      ]
+    });
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+
+    const openBackup = vi.fn();
+    await act(async () => {
+      root.render(<BackupShardDetailsTable tableRows={[table]} isLoading={false} onOpenBackup={openBackup} />);
+    });
+
+    expect(host.textContent).toContain("sales.incremental_orders");
+    expect(host.textContent).toContain("Shard 1, replica 1");
+    expect(host.textContent).toContain("Incremental");
+    expect(host.textContent).toContain("full-backup-fb");
+    expect(host.textContent).toContain("backup-op-1");
+    expect(host.textContent).toContain("s3://backup/table/shard-2/full");
+    expect(host.querySelectorAll("tbody tr")).toHaveLength(2);
+    const dependencyLink = host.querySelector("button.link-button") as HTMLButtonElement | null;
+    expect(dependencyLink?.textContent).toBe("full-backup-fb");
+
+    await act(async () => {
+      dependencyLink!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(openBackup).toHaveBeenCalledWith("full-backup-fb");
 
     await act(async () => root.unmount());
     host.remove();

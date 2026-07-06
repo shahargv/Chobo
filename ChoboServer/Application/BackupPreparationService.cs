@@ -171,13 +171,16 @@ public sealed class BackupPreparationService(
             var parentTable = backup.BackupType == BackupType.Incremental && dataBackedUp
                 ? parentTablesByIdentity.GetValueOrDefault(tableIdentity)
                 : null;
-            var tableParentShards = dataBackedUp
+            var allTableParentShards = dataBackedUp
                 ? parentShardsByIdentity
                     .Where(x => x.BackupTable is not null && ClickHouseBackupIdentity.Table(x.BackupTable.Database, x.BackupTable.Table) == tableIdentity)
                     .ToList()
                 : [];
-            var effectiveTableType = parentTable is null && tableParentShards.Count == 0 ? BackupType.Full : BackupType.Incremental;
-            var tableParentBackupId = parentTable?.BackupId ?? tableParentShards.Select(x => x.BackupTable?.BackupId).FirstOrDefault(x => x.HasValue);
+            var selectedTableParentShards = parentTable is null
+                ? allTableParentShards
+                : allTableParentShards.Where(x => x.BackupTableId == parentTable.Id).ToList();
+            var effectiveTableType = parentTable is null && allTableParentShards.Count == 0 ? BackupType.Full : BackupType.Incremental;
+            var tableParentBackupId = parentTable?.BackupId ?? allTableParentShards.Select(x => x.BackupTable?.BackupId).FirstOrDefault(x => x.HasValue);
             var backupTable = new BackupTableEntity
             {
                 BackupId = backup.Id,
@@ -191,7 +194,7 @@ public sealed class BackupPreparationService(
                 SchemaDefinitionId = schema.Id,
                 StoragePath = BuildStoragePath(backup, table.Database, table.Table, effectiveTableType, tableParentBackupId)
             };
-            if (backup.BackupType == BackupType.Incremental && dataBackedUp && parentTable is null && tableParentShards.Count == 0)
+            if (backup.BackupType == BackupType.Incremental && dataBackedUp && parentTable is null && allTableParentShards.Count == 0)
             {
                 await audit.RecordAsync("incremental-table-fallback-to-full", AuditEntityType.Backup, backup.Id.ToString(), new { table.Database, table.Table, reason = "missing-parent-full-table" });
             }
@@ -203,12 +206,16 @@ public sealed class BackupPreparationService(
                     .Where(x => x.Count() > 1)
                     .Select(x => x.Key)
                     .ToHashSet();
-                var hasAnyShardParent = tableParentShards.Count > 0;
+                var hasAnyShardParent = allTableParentShards.Count > 0;
                 foreach (var placement in plannedPlacements)
                 {
                     var representative = placement.Node;
                     var requiresExactParentPlacement = !ClickHouseSql.IsReplicatedMergeTreeEngine(table.Engine) || duplicateSourceShards.Contains(representative.ShardNumber);
-                    var parentShard = FindParentShard(tableParentShards, representative, requiresExactParentPlacement);
+                    var parentShard = FindParentShard(selectedTableParentShards, representative, requiresExactParentPlacement);
+                    if (parentShard is null && !selectedTableParentShards.Any(x => x.SourceShardNumber == representative.ShardNumber))
+                    {
+                        parentShard = FindParentShard(allTableParentShards, representative, requiresExactParentPlacement);
+                    }
                     var effectiveShardType = parentShard is null ? BackupType.Full : BackupType.Incremental;
                     if (backup.BackupType == BackupType.Incremental && (parentTable is not null || hasAnyShardParent) && parentShard is null)
                     {

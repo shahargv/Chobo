@@ -187,6 +187,10 @@ export function BackupDrawer({ backupId, onClose, onOpenBackup }: { backupId: st
           <h3>Tables and shards</h3>
           {current.contentMode === "SchemaOnly" ? <Empty text={`Schema-only backup captured ${current.tableCount} table schema${current.tableCount === 1 ? "" : "s"}; data backup execution was skipped.`} /> : <BackupTablesTable tableRows={tableRows} isLoading={tableDetail.isLoading} />}
         </section>
+        {current.contentMode !== "SchemaOnly" && <section className="detail-section detail-section-shards">
+          <h3>Shard details</h3>
+          <BackupShardDetailsTable tableRows={tableRows} isLoading={tableDetail.isLoading} onOpenBackup={onOpenBackup} />
+        </section>}
         <section className="detail-section detail-section-audit">
           <h3>Related audit</h3>
           <DataTable headers={["Time", "Action", "Entity", "Details"]} isLoading={relatedAudits.isLoading}>
@@ -259,6 +263,31 @@ export function BackupTablesTable({ tableRows, isLoading }: { tableRows: BackupT
   </DataTable>
   {errorDetail && <ErrorDetailDialog title={errorDetail.title} error={errorDetail.error} onClose={() => setErrorDetail(null)} />}
   </>;
+}
+
+export function BackupShardDetailsTable({ tableRows, isLoading, onOpenBackup }: { tableRows: BackupTableDto[]; isLoading: boolean; onOpenBackup?: (backupId: string) => void }) {
+  const shardRows = tableRows
+    .flatMap((table) => table.shards.map((shard) => ({ table, shard })))
+    .sort((left, right) =>
+      `${left.table.database}.${left.table.table}`.localeCompare(`${right.table.database}.${right.table.table}`) ||
+      left.shard.sourceShardNumber - right.shard.sourceShardNumber ||
+      left.shard.replicaNumber - right.shard.replicaNumber);
+
+  return <DataTable headers={["Table", "Shard", "Backup type", "Depends on", "Source node", "Size", "Storage path", "Operation", "Status"]} isLoading={isLoading}>
+    {shardRows.map(({ table, shard }) => (
+      <tr key={shard.id}>
+        <td>{table.database}.{table.table}</td>
+        <td>{formatShardLabel(shard)}</td>
+        <td>{shard.effectiveBackupType}</td>
+        <td>{shard.parentFullBackupId ? <RelatedBackupLinks backupIds={[shard.parentFullBackupId]} onOpenBackup={onOpenBackup} /> : "-"}</td>
+        <td>{formatShardEndpoint(shard)}</td>
+        <td data-sort-value={shard.backupSizeBytes}>{formatBytes(shard.backupSizeBytes)}</td>
+        <td className="mono wide-cell">{shard.storagePath}</td>
+        <td className="mono">{shard.clickHouseOperationId ?? "-"}</td>
+        <td><Status value={shard.status} /></td>
+      </tr>
+    ))}
+  </DataTable>;
 }
 
 function ErrorDetailButton({ label, error, onOpen }: { label: string; error: string; onOpen: (detail: { title: string; error: string }) => void }) {
