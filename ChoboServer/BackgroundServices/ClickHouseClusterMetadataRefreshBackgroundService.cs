@@ -52,7 +52,7 @@ public sealed class ClickHouseClusterMetadataRefreshBackgroundService(
         {
             try
             {
-                await metadata.GetAsync(cluster, cancellationToken);
+                await metadata.RefreshAsync(cluster, cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
