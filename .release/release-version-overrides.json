@@ -1,0 +1,13 @@
+{
+  "approvedSchemaAdvisories": [
+    {
+      "version": "1.0.3",
+      "baseTag": "v1.0.2",
+      "baseSchemaVersion": 1,
+      "currentSchemaVersion": 1,
+      "reason": "Release owner approved publishing 1.0.3 without a ChoboApi.SchemaVersion bump after reviewing the application log storage move from the main Chobo database.",
+      "approvedBy": "release owner",
+      "approvedAt": "2026-07-08"
+    }
+  ]
+}

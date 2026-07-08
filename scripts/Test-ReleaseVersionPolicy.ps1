@@ -120,6 +120,30 @@ function Test-DiffLooksSchemaAffecting([string]$Tag, [string]$Path) {
     return [pscustomobject]@{ Impact = 'None'; Reason = 'No relevant diff lines.' }
 }
 
+function Get-ApprovedSchemaAdvisoryOverride(
+    [string]$Version,
+    [string]$BaseTag,
+    [int]$BaseSchemaVersion,
+    [int]$CurrentSchemaVersion
+) {
+    $path = [System.IO.Path]::Combine($PSScriptRoot, '..', '.release', 'release-version-overrides.json')
+    if (-not (Test-Path -LiteralPath $path)) {
+        return $null
+    }
+
+    $json = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+    foreach ($override in @($json.approvedSchemaAdvisories)) {
+        if ($override.version -eq $Version -and
+            $override.baseTag -eq $BaseTag -and
+            [int]$override.baseSchemaVersion -eq $BaseSchemaVersion -and
+            [int]$override.currentSchemaVersion -eq $CurrentSchemaVersion) {
+            return $override
+        }
+    }
+
+    return $null
+}
+
 Set-Location (Resolve-Path ([System.IO.Path]::Combine($PSScriptRoot, '..')))
 
 $versionParts = Get-ReleaseVersionParts $Version
@@ -200,8 +224,20 @@ else {
     }
 }
 
+$schemaAdvisoryFailure = "Likely SQLite schema changes were detected, but ChoboApi.SchemaVersion did not increase."
 if ($likelySchemaChange -and -not $schemaVersionChanged) {
-    $failures.Add("Likely SQLite schema changes were detected, but ChoboApi.SchemaVersion did not increase.")
+    $failures.Add($schemaAdvisoryFailure)
+}
+
+$approvedOverride = Get-ApprovedSchemaAdvisoryOverride `
+    -Version $versionParts.Text `
+    -BaseTag $BaseTag `
+    -BaseSchemaVersion $baseSchemaVersion `
+    -CurrentSchemaVersion $currentSchemaVersion
+
+if ($approvedOverride -and $failures.Contains($schemaAdvisoryFailure)) {
+    [void]$failures.Remove($schemaAdvisoryFailure)
+    Write-Warning "Release schema advisory override approved for $($versionParts.Text): $($approvedOverride.reason)"
 }
 
 if ($schemaVersionChanged -and -not $likelySchemaChange -and -not $AllowLegacyFirstRelease) {
