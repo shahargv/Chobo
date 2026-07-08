@@ -21,6 +21,7 @@ public sealed class TestHooksController(
     IOptions<ChoboTestHooksOptions> options,
     IOptions<ChoboStorageOptions> storageOptions,
     ITestHookCoordinator testHooks,
+    Serilog.ILogger logger,
     IWebHostEnvironment environment) : ControllerBase
 {
     [HttpPost("seed-missing-backup-operation")]
@@ -329,9 +330,9 @@ public sealed class TestHooksController(
             CompletedAt = now.AddSeconds(4)
         });
         db.AuditEntries.Add(new AuditEntryEntity { Timestamp = now, ActorName = "system", Action = "source-export-audit-marker", EntityType = "test", EntityId = backupId.ToString(), Details = "{}" });
-        db.ApplicationLogEntries.Add(new ApplicationLogEntryEntity { Timestamp = now, Level = "Information", RenderedMessage = "source export log marker", Properties = "{}" });
 
         await db.SaveChangesAsync(cancellationToken);
+        logger.Information("source export log marker");
         return Ok(new { clusterId, targetId, policyId, scheduleId, schemaDefinitionId, backupId, backupTableId, backupTableShardId, restoreId, restoreTableId, restoreTableShardId });
     }
 
@@ -749,15 +750,9 @@ public sealed class TestHooksController(
                 EntityId = sampleBackupId.ToString(),
                 Details = JsonSerializer.Serialize(new { backupCount, tablesPerBackup, shardsPerTable, restoreCount, completedQueueRows, backupTableCount = backupTables.Count, backupShardCount = backupShards.Count, restoreTableCount = restoreTables.Count, restoreShardCount = restoreShards.Count })
             });
-            db.ApplicationLogEntries.Add(new ApplicationLogEntryEntity
-            {
-                Timestamp = now,
-                Level = "Information",
-                RenderedMessage = $"Seeded large metadata graph with {backupCount} backups, {backupTables.Count} backup tables, {backupShards.Count} backup shards, {restores.Count} restores.",
-                Properties = "{}"
-            });
 
             await db.SaveChangesAsync(cancellationToken);
+            logger.Information("Seeded large metadata graph with {BackupCount} backups, {BackupTableCount} backup tables, {BackupShardCount} backup shards, {RestoreCount} restores.", backupCount, backupTables.Count, backupShards.Count, restores.Count);
             db.ChangeTracker.Clear();
             return Ok(new
             {

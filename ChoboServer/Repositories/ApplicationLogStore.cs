@@ -2,9 +2,10 @@ using System.Text;
 using System.Text.Json;
 using Chobo.Contracts;
 using ChoboServer.Data;
+using ChoboServer.Options;
 using ChoboServer.Services;
 using Microsoft.Data.Sqlite;
-using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace ChoboServer.Repositories;
 
@@ -14,16 +15,17 @@ public interface IApplicationLogStore
     Task<int> DeleteBeforeAsync(DateTimeOffset before, CancellationToken cancellationToken = default);
 }
 
-public sealed class ApplicationLogStore(ChoboDbContext db) : IApplicationLogStore
+public sealed class ApplicationLogStore(IOptions<ChoboStorageOptions> storageOptions, IOptions<ChoboSqliteOptions> sqliteOptions) : IApplicationLogStore
 {
+    private readonly string _dataDirectory = ChoboPaths.GetDataDirectory(storageOptions.Value.DataDirectory);
+
     public async Task<PagedResultDto<ApplicationLogEntryDto>> QueryAsync(DateTimeOffset? startTime, DateTimeOffset? endTime, int? last, int? offset = null, int? limit = null, string? operationId = null, string? severity = null)
     {
         var filter = BuildFilter(startTime, endTime, operationId, severity);
         var pageOffset = Math.Max(offset ?? 0, 0);
         var pageLimit = Math.Clamp(limit ?? last ?? 200, 1, 10_000);
         var results = new List<ApplicationLogEntryDto>();
-        var connection = (SqliteConnection)db.Database.GetDbConnection();
-        await using var _ = await OpenIfNeededAsync(connection);
+        await using var connection = await OpenLogConnectionAsync();
         var totalCount = await CountAsync(connection, filter);
 
         await using var command = connection.CreateCommand();
@@ -55,8 +57,7 @@ public sealed class ApplicationLogStore(ChoboDbContext db) : IApplicationLogStor
 
     public async Task<int> DeleteBeforeAsync(DateTimeOffset before, CancellationToken cancellationToken = default)
     {
-        var connection = (SqliteConnection)db.Database.GetDbConnection();
-        await using var _ = await OpenIfNeededAsync(connection, cancellationToken);
+        await using var connection = await OpenLogConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = "DELETE FROM ApplicationLogEntries WHERE Timestamp < $before;";
         command.Parameters.AddWithValue("$before", ToSqlValue(before));
@@ -169,32 +170,26 @@ public sealed class ApplicationLogStore(ChoboDbContext db) : IApplicationLogStor
         }
     }
 
-    private static async Task<IAsyncDisposable> OpenIfNeededAsync(SqliteConnection connection, CancellationToken cancellationToken = default)
+    private async Task<SqliteConnection> OpenLogConnectionAsync(CancellationToken cancellationToken = default)
     {
-        if (connection.State == System.Data.ConnectionState.Open)
+        Directory.CreateDirectory(_dataDirectory);
+        var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
-            return new NoopAsyncDisposable();
-        }
-
+            DataSource = ApplicationLogDatabase.PathForDataDirectory(_dataDirectory),
+            DefaultTimeout = SqliteDefaultTimeoutSeconds(sqliteOptions.Value),
+            Pooling = false
+        }.ToString());
         await connection.OpenAsync(cancellationToken);
-        return new ConnectionCloseScope(connection);
+        await ApplicationLogDatabase.EnsureAsync(connection, sqliteOptions.Value, cancellationToken);
+        return connection;
     }
 
     private sealed record QueryFilter(string WhereSql, IReadOnlyList<(string Name, object Value)> Parameters);
 
-    private sealed class ConnectionCloseScope(SqliteConnection connection) : IAsyncDisposable
-    {
-        public ValueTask DisposeAsync()
-        {
-            connection.Close();
-            return ValueTask.CompletedTask;
-        }
-    }
-
-    private sealed class NoopAsyncDisposable : IAsyncDisposable
-    {
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-    }
+    private static int SqliteDefaultTimeoutSeconds(ChoboSqliteOptions options) =>
+        options.BusyTimeout.TotalSeconds >= int.MaxValue
+            ? int.MaxValue
+            : Math.Max(1, (int)Math.Ceiling(options.BusyTimeout.TotalSeconds));
 }
 
 

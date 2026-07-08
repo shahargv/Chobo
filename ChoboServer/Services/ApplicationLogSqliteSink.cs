@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -11,21 +12,33 @@ namespace ChoboServer.Services;
 
 public sealed class ApplicationLogSqliteSink(string dataDirectory, ChoboSqliteOptions? sqliteOptions = null) : ILogEventSink
 {
-    private readonly string _dbPath = Path.Combine(dataDirectory, "chobo.db");
+    private static readonly ConcurrentDictionary<string, byte> EnsuredDatabases = new(StringComparer.OrdinalIgnoreCase);
+    private readonly string _dbPath = ApplicationLogDatabase.PathForDataDirectory(dataDirectory);
     private readonly ChoboSqliteOptions _sqliteOptions = sqliteOptions ?? new ChoboSqliteOptions();
 
     public void Emit(LogEvent logEvent)
     {
         try
         {
+            if (!File.Exists(_dbPath))
+            {
+                EnsuredDatabases.TryRemove(_dbPath, out _);
+            }
+
             using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
             {
                 DataSource = _dbPath,
-                DefaultTimeout = 60
+                DefaultTimeout = SqliteDefaultTimeoutSeconds(_sqliteOptions)
             }.ToString());
             connection.Open();
-            using (var pragma = connection.CreateCommand())
+
+            if (ShouldEnsureDatabase(connection))
             {
+                ApplicationLogDatabase.Ensure(connection, _sqliteOptions);
+            }
+            else
+            {
+                using var pragma = connection.CreateCommand();
                 pragma.CommandText = SqlitePragmaConnectionInterceptor.BuildConnectionPragmaSql(_sqliteOptions);
                 pragma.ExecuteNonQuery();
             }
@@ -89,4 +102,26 @@ public sealed class ApplicationLogSqliteSink(string dataDirectory, ChoboSqliteOp
             DictionaryValue dictionary => dictionary.Elements.ToDictionary(x => x.Key.Value?.ToString() ?? "", x => ToJsonValue(x.Value)),
             _ => value.ToString()
         };
+
+    private static int SqliteDefaultTimeoutSeconds(ChoboSqliteOptions options) =>
+        options.BusyTimeout.TotalSeconds >= int.MaxValue
+            ? int.MaxValue
+            : Math.Max(1, (int)Math.Ceiling(options.BusyTimeout.TotalSeconds));
+
+    private bool ShouldEnsureDatabase(SqliteConnection connection)
+    {
+        if (EnsuredDatabases.TryAdd(_dbPath, 0))
+        {
+            return true;
+        }
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+                              SELECT 1
+                              FROM sqlite_master
+                              WHERE type = 'table' AND name = 'ApplicationLogEntries'
+                              LIMIT 1;
+                              """;
+        return command.ExecuteScalar() is null;
+    }
 }
