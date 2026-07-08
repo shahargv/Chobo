@@ -14,9 +14,6 @@ public static class DatabasePerformanceMaintenance
         await db.Database.ExecuteSqlRawAsync(SqlitePragmaConnectionInterceptor.BuildDatabasePragmaSql(sqliteOptions));
 
         await db.Database.ExecuteSqlRawAsync("""
-            CREATE INDEX IF NOT EXISTS IX_ApplicationLogEntries_Timestamp ON ApplicationLogEntries (Timestamp);
-            CREATE INDEX IF NOT EXISTS IX_ApplicationLogEntries_Level_Timestamp ON ApplicationLogEntries (Level, Timestamp);
-            CREATE INDEX IF NOT EXISTS IX_ApplicationLogEntries_OperationId_Timestamp ON ApplicationLogEntries (OperationId, Timestamp);
             CREATE INDEX IF NOT EXISTS IX_AuditEntries_Timestamp ON AuditEntries (Timestamp);
             CREATE INDEX IF NOT EXISTS IX_AuditEntries_ActorUserId_Timestamp ON AuditEntries (ActorUserId, Timestamp);
             CREATE INDEX IF NOT EXISTS IX_AuditEntries_EntityType_Timestamp ON AuditEntries (EntityType, Timestamp);

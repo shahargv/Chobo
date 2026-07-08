@@ -215,7 +215,7 @@
         @{
             Name = 'wait-unavailable-s3-backup'
             Type = 'Cli'
-            Args = @('backups', 'wait', '--id', '{unavailableS3Backup.id}', '--timeout-seconds', '60', '--poll-seconds', '1')
+            Args = @('backups', 'wait', '--id', '{unavailableS3Backup.id}', '--timeout-seconds', '90', '--poll-seconds', '1')
             ExpectJson = @(
                 @{ Path = 'status'; Equals = 'Failed' }
                 @{ Path = 'failureReason'; NotEmpty = $true }

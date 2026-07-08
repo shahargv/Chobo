@@ -1,4 +1,5 @@
 using Chobo.Contracts;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
@@ -6,11 +7,13 @@ namespace ChoboServer.Data;
 
 public sealed class ChoboDbContext(DbContextOptions<ChoboDbContext> options) : DbContext(options)
 {
+    private const int SqliteBusyRetryCount = 3;
+    private static readonly TimeSpan SqliteBusyRetryDelay = TimeSpan.FromSeconds(1);
+
     public DbSet<SchemaStateEntity> SchemaStates => Set<SchemaStateEntity>();
     public DbSet<UserEntity> Users => Set<UserEntity>();
     public DbSet<AccessTokenEntity> AccessTokens => Set<AccessTokenEntity>();
     public DbSet<AuditEntryEntity> AuditEntries => Set<AuditEntryEntity>();
-    public DbSet<ApplicationLogEntryEntity> ApplicationLogEntries => Set<ApplicationLogEntryEntity>();
     public DbSet<ClickHouseClusterEntity> ClickHouseClusters => Set<ClickHouseClusterEntity>();
     public DbSet<ClickHouseAccessNodeEntity> ClickHouseAccessNodes => Set<ClickHouseAccessNodeEntity>();
     public DbSet<BackupTargetEntity> BackupTargets => Set<BackupTargetEntity>();
@@ -25,6 +28,54 @@ public sealed class ChoboDbContext(DbContextOptions<ChoboDbContext> options) : D
     public DbSet<RestoreTableShardEntity> RestoreTableShards => Set<RestoreTableShardEntity>();
     public DbSet<BackupRestoreQueueItemEntity> BackupRestoreQueueItems => Set<BackupRestoreQueueItemEntity>();
     public DbSet<SqliteSelfBackupStateEntity> SqliteSelfBackupStates => Set<SqliteSelfBackupStateEntity>();
+
+    public override int SaveChanges()
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                return base.SaveChanges();
+            }
+            catch (SqliteException ex) when (IsTransientSqliteLock(ex) && attempt < SqliteBusyRetryCount)
+            {
+                Thread.Sleep(SqliteBusyRetryDelay);
+            }
+        }
+    }
+
+    public override int SaveChanges(bool acceptAllChangesOnSuccess)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                return base.SaveChanges(acceptAllChangesOnSuccess);
+            }
+            catch (SqliteException ex) when (IsTransientSqliteLock(ex) && attempt < SqliteBusyRetryCount)
+            {
+                Thread.Sleep(SqliteBusyRetryDelay);
+            }
+        }
+    }
+
+    public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default) =>
+        await SaveChangesAsync(true, cancellationToken);
+
+    public override async Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                return await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+            }
+            catch (SqliteException ex) when (IsTransientSqliteLock(ex) && attempt < SqliteBusyRetryCount)
+            {
+                await Task.Delay(SqliteBusyRetryDelay, cancellationToken);
+            }
+        }
+    }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -43,11 +94,6 @@ public sealed class ChoboDbContext(DbContextOptions<ChoboDbContext> options) : D
         modelBuilder.Entity<AuditEntryEntity>().HasIndex(x => new { x.OperationId, x.Timestamp });
         modelBuilder.Entity<AuditEntryEntity>().HasIndex(x => new { x.Timestamp, x.Id });
         modelBuilder.Entity<AuditEntryEntity>().HasIndex(x => new { x.OperationId, x.Timestamp, x.Id });
-        modelBuilder.Entity<ApplicationLogEntryEntity>().HasIndex(x => x.Timestamp);
-        modelBuilder.Entity<ApplicationLogEntryEntity>().HasIndex(x => new { x.Level, x.Timestamp });
-        modelBuilder.Entity<ApplicationLogEntryEntity>().HasIndex(x => new { x.OperationId, x.Timestamp });
-        modelBuilder.Entity<ApplicationLogEntryEntity>().HasIndex(x => new { x.Timestamp, x.Id });
-        modelBuilder.Entity<ApplicationLogEntryEntity>().HasIndex(x => new { x.OperationId, x.Timestamp, x.Id });
         modelBuilder.Entity<ClickHouseClusterEntity>().HasIndex(x => new { x.IsDeleted, x.Name });
         modelBuilder.Entity<ClickHouseAccessNodeEntity>().HasIndex(x => x.ClusterId);
         modelBuilder.Entity<BackupTargetEntity>().HasIndex(x => new { x.IsDeleted, x.Name });
@@ -157,6 +203,9 @@ public sealed class ChoboDbContext(DbContextOptions<ChoboDbContext> options) : D
             }
         }
     }
+
+    private static bool IsTransientSqliteLock(SqliteException exception) =>
+        exception.SqliteErrorCode is 5 or 6;
 }
 
 

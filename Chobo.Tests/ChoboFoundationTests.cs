@@ -1040,7 +1040,7 @@ public sealed class ChoboFoundationTests
             var db = seedScope.ServiceProvider.GetRequiredService<ChoboDbContext>();
             var timestamp = ToUnixMilliseconds(DateTimeOffset.Parse("2026-05-15T10:11:12+00:00"));
             await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO AuditEntries (Timestamp, ActorName, Action, EntityType, Details) VALUES ({timestamp}, 'system', 'existing-config-import-audit', 'test', '{{}}');");
-            await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO ApplicationLogEntries (Timestamp, Level, Exception, RenderedMessage, Properties) VALUES ({timestamp}, 'Information', NULL, 'existing config import log', '{{}}');");
+            await InsertApplicationLogAsync(factory, timestamp, "existing config import log");
         }
 
         var response = await client.PostAsJsonAsync("/api/v1/config/import", export, JsonOptions);
@@ -1049,7 +1049,7 @@ public sealed class ChoboFoundationTests
         using var scope = factory.Services.CreateScope();
         var dbAfter = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
         Assert.True(await dbAfter.AuditEntries.AnyAsync(x => x.Action == "existing-config-import-audit"));
-        Assert.True(await dbAfter.ApplicationLogEntries.AnyAsync(x => x.RenderedMessage == "existing config import log"));
+        Assert.True(await ApplicationLogExistsAsync(factory, "existing config import log"));
         var importAudit = await dbAfter.AuditEntries.SingleAsync(x => x.Action == "import" && x.EntityType == "config");
         Assert.Contains("\"schemaVersion\"", importAudit.Details);
     }
@@ -1173,7 +1173,7 @@ public sealed class ChoboFoundationTests
             var db = sourceScope.ServiceProvider.GetRequiredService<ChoboDbContext>();
             var timestamp = ToUnixMilliseconds(DateTimeOffset.Parse("2026-05-15T10:11:12+00:00"));
             await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO AuditEntries (Timestamp, ActorName, Action, EntityType, Details) VALUES ({timestamp}, 'system', 'source-export-audit', 'test', '{{}}');");
-            await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO ApplicationLogEntries (Timestamp, Level, Exception, RenderedMessage, Properties) VALUES ({timestamp}, 'Information', NULL, 'source export log', '{{}}');");
+            await InsertApplicationLogAsync(sourceFactory, timestamp, "source export log");
         }
 
         var export = await sourceClient.GetFromJsonAsync<ExportEnvelope>("/api/v1/data/export", JsonOptions);
@@ -1206,7 +1206,7 @@ public sealed class ChoboFoundationTests
             var db = targetScope.ServiceProvider.GetRequiredService<ChoboDbContext>();
             var timestamp = ToUnixMilliseconds(DateTimeOffset.Parse("2026-05-15T10:12:12+00:00"));
             await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO AuditEntries (Timestamp, ActorName, Action, EntityType, Details) VALUES ({timestamp}, 'system', 'target-local-audit', 'test', '{{}}');");
-            await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO ApplicationLogEntries (Timestamp, Level, Exception, RenderedMessage, Properties) VALUES ({timestamp}, 'Information', NULL, 'target local log', '{{}}');");
+            await InsertApplicationLogAsync(targetFactory, timestamp, "target local log");
         }
 
         var response = await targetClient.PostAsJsonAsync("/api/v1/data/import", export, JsonOptions);
@@ -1237,9 +1237,9 @@ public sealed class ChoboFoundationTests
         Assert.True(await imported.RestoreTables.AnyAsync(x => x.Id == ids.RestoreTableId));
         Assert.True(await imported.RestoreTableShards.AnyAsync(x => x.Id == ids.RestoreTableShardId));
         Assert.True(await imported.AuditEntries.AnyAsync(x => x.Action == "target-local-audit"));
-        Assert.True(await imported.ApplicationLogEntries.AnyAsync(x => x.RenderedMessage == "target local log"));
+        Assert.True(await ApplicationLogExistsAsync(targetFactory, "target local log"));
         Assert.False(await imported.AuditEntries.AnyAsync(x => x.Action == "source-export-audit"));
-        Assert.False(await imported.ApplicationLogEntries.AnyAsync(x => x.RenderedMessage == "source export log"));
+        Assert.False(await ApplicationLogExistsAsync(targetFactory, "source export log"));
         var importAudit = await imported.AuditEntries.SingleAsync(x => x.Action == "import" && x.EntityType == "data");
         Assert.Contains("\"credentialsImportedAsEmpty\":true", importAudit.Details);
         Assert.Contains("\"importedBackups\":1", importAudit.Details);
@@ -1677,7 +1677,44 @@ public sealed class ChoboFoundationTests
         var db = verifyScope.ServiceProvider.GetRequiredService<ChoboDbContext>();
         Assert.True(await db.Users.AnyAsync(x => x.UserName == "admin" && x.IsActive));
         Assert.True(await db.AccessTokens.AnyAsync(x => x.IsActive));
-        Assert.True(await db.ApplicationLogEntries.AnyAsync(x => x.RenderedMessage.Contains("Regression log entry")));
+        Assert.False(await MainApplicationLogExistsAsync(factory, "Regression log entry"));
+        Assert.True(await ApplicationLogExistsAsync(factory, "Regression log entry"));
+    }
+
+    [Fact]
+    public async Task Startup_without_application_log_sqlite_recreates_log_database()
+    {
+        var dataDir = NewTestDataDirectory();
+        var logDbPath = ApplicationLogDatabase.PathForDataDirectory(ChoboPaths.GetDataDirectory(dataDir));
+
+        await using (var firstFactory = CreateFactory(dataDir))
+        {
+            _ = AuthenticatedClient(firstFactory);
+
+            using var scope = firstFactory.Services.CreateScope();
+            var logger = scope.ServiceProvider.GetRequiredService<Serilog.ILogger>().ForContext<ChoboFoundationTests>();
+            logger.Information("Initial log entry before deleting the logs SQLite.");
+
+            Assert.True(await ApplicationLogExistsAsync(firstFactory, "Initial log entry"));
+        }
+
+        File.Delete(logDbPath);
+        Assert.False(File.Exists(logDbPath));
+
+        await using var secondFactory = CreateFactory(dataDir);
+        var client = AuthenticatedClient(secondFactory);
+
+        using (var scope = secondFactory.Services.CreateScope())
+        {
+            var logger = scope.ServiceProvider.GetRequiredService<Serilog.ILogger>().ForContext<ChoboFoundationTests>();
+            logger.Information("Log entry after recreating the missing logs SQLite.");
+        }
+
+        var logs = await client.GetFromJsonAsync<PagedResultDto<ApplicationLogEntryDto>>("/api/v1/logs?last=20", JsonOptions);
+
+        Assert.True(File.Exists(logDbPath));
+        Assert.NotNull(logs);
+        Assert.Contains(logs!.Items, x => x.Message.Contains("Log entry after recreating", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -1714,8 +1751,8 @@ public sealed class ChoboFoundationTests
 
         using var seedScope = factory.Services.CreateScope();
         var db = seedScope.ServiceProvider.GetRequiredService<ChoboDbContext>();
-        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO ApplicationLogEntries (Timestamp, Level, Exception, RenderedMessage, Properties) VALUES ({ToUnixMilliseconds(cutoff.AddMinutes(-10))}, 'Information', NULL, 'old log', '{{}}');");
-        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO ApplicationLogEntries (Timestamp, Level, Exception, RenderedMessage, Properties) VALUES ({ToUnixMilliseconds(cutoff.AddMinutes(10))}, 'Information', NULL, 'new log', '{{}}');");
+        await InsertApplicationLogAsync(factory, ToUnixMilliseconds(cutoff.AddMinutes(-10)), "old log");
+        await InsertApplicationLogAsync(factory, ToUnixMilliseconds(cutoff.AddMinutes(10)), "new log");
         await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO AuditEntries (Timestamp, ActorName, Action, EntityType, Details) VALUES ({ToUnixMilliseconds(cutoff.AddMinutes(-10))}, 'system', 'old', 'test', '{{}}');");
         await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO AuditEntries (Timestamp, ActorName, Action, EntityType, Details) VALUES ({ToUnixMilliseconds(cutoff.AddMinutes(10))}, 'system', 'new', 'test', '{{}}');");
 
@@ -1733,8 +1770,8 @@ public sealed class ChoboFoundationTests
 
         Assert.True(deleted.LogsDeleted >= 1);
         Assert.True(deleted.AuditsDeleted >= 1);
-        Assert.False(await db.ApplicationLogEntries.AnyAsync(x => x.RenderedMessage == "old log"));
-        Assert.True(await db.ApplicationLogEntries.AnyAsync(x => x.RenderedMessage == "new log"));
+        Assert.False(await ApplicationLogExistsAsync(factory, "old log"));
+        Assert.True(await ApplicationLogExistsAsync(factory, "new log"));
         Assert.False(await db.AuditEntries.AnyAsync(x => x.Action == "old"));
         Assert.True(await db.AuditEntries.AnyAsync(x => x.Action == "new"));
         Assert.True(await db.AuditEntries.AnyAsync(x => x.Action == "retention-purge" && x.EntityType == "data-retention"));
@@ -1986,7 +2023,7 @@ public sealed class ChoboFoundationTests
         using var verifyScope = factory.Services.CreateScope();
         var db = verifyScope.ServiceProvider.GetRequiredService<ChoboDbContext>();
         Assert.Equal("INTEGER", await GetColumnTypeAsync(db, "AuditEntries", "Timestamp"));
-        Assert.Equal("INTEGER", await GetColumnTypeAsync(db, "ApplicationLogEntries", "Timestamp"));
+        Assert.Equal("INTEGER", await GetApplicationLogColumnTypeAsync(factory, "Timestamp"));
         Assert.Equal("INTEGER", await GetColumnTypeAsync(db, "Users", "CreatedAt"));
         Assert.Equal("INTEGER", await GetColumnTypeAsync(db, "BackupSchedules", "CreatedAt"));
 
@@ -2010,7 +2047,7 @@ public sealed class ChoboFoundationTests
         Assert.Contains(list!.Items, x => x.Key == "Chobo:BackupRestore:PollInterval" && x.ValueType == RuntimeSettingValueType.TimeSpan && x.ApplyMode == RuntimeSettingApplyMode.Live);
         Assert.Contains(list.Items, x => x.Key == "Chobo:DatabaseLogging:SlowQueryThreshold" && x.EffectiveValue == "00:00:02" && x.ValueType == RuntimeSettingValueType.TimeSpan && x.ApplyMode == RuntimeSettingApplyMode.Live);
         Assert.Contains(list.Items, x => x.Key == "Chobo:Sqlite:JournalMode" && x.EffectiveValue == "WAL" && x.ValueType == RuntimeSettingValueType.String && x.ApplyMode == RuntimeSettingApplyMode.Live);
-        Assert.Contains(list.Items, x => x.Key == "Chobo:Sqlite:BusyTimeout" && x.EffectiveValue == "00:00:05" && x.ValueType == RuntimeSettingValueType.TimeSpan && x.ApplyMode == RuntimeSettingApplyMode.Live);
+        Assert.Contains(list.Items, x => x.Key == "Chobo:Sqlite:BusyTimeout" && x.EffectiveValue == "00:00:15" && x.ValueType == RuntimeSettingValueType.TimeSpan && x.ApplyMode == RuntimeSettingApplyMode.Live);
         Assert.Contains(list.Items, x => x.Key == "Chobo:Sqlite:WalAutoCheckpoint" && x.EffectiveValue == "1000" && x.ValueType == RuntimeSettingValueType.Integer && x.ApplyMode == RuntimeSettingApplyMode.Live);
         Assert.Contains(list.Items, x => x.Key == "Chobo:ClusterMetadata:CacheDuration" && x.EffectiveValue == "01:00:00" && x.ValueType == RuntimeSettingValueType.TimeSpan && x.ApplyMode == RuntimeSettingApplyMode.Live);
         Assert.Contains(list.Items, x => x.Key == "Chobo:ClusterMetadata:RefreshInterval" && x.EffectiveValue == "00:30:00" && x.ValueType == RuntimeSettingValueType.TimeSpan && x.ApplyMode == RuntimeSettingApplyMode.Live);
@@ -2115,13 +2152,14 @@ public sealed class ChoboFoundationTests
         using var verifyScope = factory.Services.CreateScope();
         var db = verifyScope.ServiceProvider.GetRequiredService<ChoboDbContext>();
         var auditEntry = await db.AuditEntries.SingleAsync(x => x.Action == "enum-regression");
-        var logEntry = await db.ApplicationLogEntries.SingleAsync(x => x.RenderedMessage.Contains("Enum property regression log"));
+        var logProperties = await GetApplicationLogPropertiesAsync(factory, "Enum property regression log");
 
         Assert.Contains("\"deletionStatus\":\"ManualDeleted\"", auditEntry.Details);
         Assert.Contains("\"FailedBackupDeletedByGarbageCollector\"", auditEntry.Details);
         Assert.DoesNotContain("\"deletionStatus\":7", auditEntry.Details);
-        Assert.Contains("\"DeletionStatus\":\"ManualDeleteRequested\"", logEntry.Properties);
-        Assert.DoesNotContain("\"DeletionStatus\":6", logEntry.Properties);
+        Assert.NotNull(logProperties);
+        Assert.Contains("\"DeletionStatus\":\"ManualDeleteRequested\"", logProperties);
+        Assert.DoesNotContain("\"DeletionStatus\":6", logProperties);
     }
 
     [Fact]
@@ -2133,9 +2171,9 @@ public sealed class ChoboFoundationTests
         var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
         var timestamp = ToUnixMilliseconds(DateTimeOffset.Parse("2026-05-15T10:11:12+00:00"));
 
-        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO ApplicationLogEntries (Timestamp, Level, Exception, RenderedMessage, OperationId, Properties) VALUES ({timestamp}, 'Information', NULL, 'matching log', 'backup-a', '{{\"OperationId\":\"backup-a\"}}');");
-        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO ApplicationLogEntries (Timestamp, Level, Exception, RenderedMessage, OperationId, Properties) VALUES ({timestamp + 1000}, 'Information', NULL, 'newer matching log', 'backup-a', '{{\"OperationId\":\"backup-a\"}}');");
-        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO ApplicationLogEntries (Timestamp, Level, Exception, RenderedMessage, OperationId, Properties) VALUES ({timestamp}, 'Information', NULL, 'other log', 'backup-b', '{{\"OperationId\":\"backup-b\"}}');");
+        await InsertApplicationLogAsync(factory, timestamp, "matching log", "backup-a", "{\"OperationId\":\"backup-a\"}");
+        await InsertApplicationLogAsync(factory, timestamp + 1000, "newer matching log", "backup-a", "{\"OperationId\":\"backup-a\"}");
+        await InsertApplicationLogAsync(factory, timestamp, "other log", "backup-b", "{\"OperationId\":\"backup-b\"}");
         await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO AuditEntries (Timestamp, ActorName, Action, EntityType, OperationId, Details) VALUES ({timestamp}, 'system', 'matching-audit', 'backup', 'backup-a', '{{\"operationId\":\"backup-a\"}}');");
         await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO AuditEntries (Timestamp, ActorName, Action, EntityType, OperationId, Details) VALUES ({timestamp + 1000}, 'system', 'newer-matching-audit', 'backup', 'backup-a', '{{\"operationId\":\"backup-a\"}}');");
         await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO AuditEntries (Timestamp, ActorName, Action, EntityType, OperationId, Details) VALUES ({timestamp}, 'system', 'other-audit', 'backup', 'backup-b', '{{\"operationId\":\"backup-b\"}}');");
@@ -2167,8 +2205,8 @@ public sealed class ChoboFoundationTests
         var startTime = now.AddHours(-1);
         var endTime = now.AddMinutes(1);
 
-        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO ApplicationLogEntries (Timestamp, Level, Exception, RenderedMessage, OperationId, Properties) VALUES ({old}, 'Information', NULL, 'old time-window log', NULL, '{{}}');");
-        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO ApplicationLogEntries (Timestamp, Level, Exception, RenderedMessage, OperationId, Properties) VALUES ({recent}, 'Information', NULL, 'recent time-window log', NULL, '{{}}');");
+        await InsertApplicationLogAsync(factory, old, "old time-window log");
+        await InsertApplicationLogAsync(factory, recent, "recent time-window log");
         await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO AuditEntries (Timestamp, ActorName, Action, EntityType, OperationId, Details) VALUES ({old}, 'system', 'old-time-window-audit', 'test', NULL, '{{}}');");
         await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO AuditEntries (Timestamp, ActorName, Action, EntityType, OperationId, Details) VALUES ({recent}, 'system', 'recent-time-window-audit', 'test', NULL, '{{}}');");
 
@@ -2505,6 +2543,101 @@ public sealed class ChoboFoundationTests
 
     private static long ToUnixMilliseconds(DateTimeOffset value) =>
         value.ToUniversalTime().ToUnixTimeMilliseconds();
+
+    private static async Task<bool> ApplicationLogExistsAsync(WebApplicationFactory<Program> factory, string messageContains) =>
+        await GetApplicationLogPropertiesAsync(factory, messageContains) is not null;
+
+    private static async Task<bool> MainApplicationLogExistsAsync(WebApplicationFactory<Program> factory, string messageContains)
+    {
+        var dbPath = Path.Combine(GetFactoryDataDirectory(factory), "chobo.db");
+        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadOnly
+        }.ToString());
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+                              SELECT 1
+                              FROM ApplicationLogEntries
+                              WHERE RenderedMessage LIKE $message
+                              LIMIT 1;
+                              """;
+        command.Parameters.AddWithValue("$message", $"%{messageContains}%");
+        return await command.ExecuteScalarAsync() is not null;
+    }
+
+    private static async Task InsertApplicationLogAsync(WebApplicationFactory<Program> factory, long timestamp, string message, string? operationId = null, string properties = "{}")
+    {
+        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = ApplicationLogDatabase.PathForDataDirectory(GetFactoryDataDirectory(factory))
+        }.ToString());
+        await connection.OpenAsync();
+        await ApplicationLogDatabase.EnsureAsync(connection, factory.Services.GetRequiredService<IOptions<ChoboSqliteOptions>>().Value);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+                              INSERT INTO ApplicationLogEntries (Timestamp, Level, Exception, RenderedMessage, OperationId, Properties)
+                              VALUES ($timestamp, 'Information', NULL, $message, $operationId, $properties);
+                              """;
+        command.Parameters.AddWithValue("$timestamp", timestamp);
+        command.Parameters.AddWithValue("$message", message);
+        command.Parameters.AddWithValue("$operationId", (object?)operationId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$properties", properties);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task<string?> GetApplicationLogPropertiesAsync(WebApplicationFactory<Program> factory, string messageContains)
+    {
+        var dbPath = ApplicationLogDatabase.PathForDataDirectory(GetFactoryDataDirectory(factory));
+        if (!File.Exists(dbPath))
+        {
+            return null;
+        }
+
+        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadOnly
+        }.ToString());
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+                              SELECT Properties
+                              FROM ApplicationLogEntries
+                              WHERE RenderedMessage LIKE $message
+                              ORDER BY Timestamp DESC, Id DESC
+                              LIMIT 1;
+                              """;
+        command.Parameters.AddWithValue("$message", $"%{messageContains}%");
+        return await command.ExecuteScalarAsync() as string;
+    }
+
+    private static async Task<string> GetApplicationLogColumnTypeAsync(WebApplicationFactory<Program> factory, string columnName)
+    {
+        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = ApplicationLogDatabase.PathForDataDirectory(GetFactoryDataDirectory(factory)),
+            Mode = SqliteOpenMode.ReadOnly
+        }.ToString());
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA table_info(ApplicationLogEntries);";
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
+            {
+                return reader.GetString(2).ToUpperInvariant();
+            }
+        }
+
+        throw new InvalidOperationException($"Column ApplicationLogEntries.{columnName} was not found.");
+    }
+
+    private static string GetFactoryDataDirectory(WebApplicationFactory<Program> factory) =>
+        ChoboPaths.GetDataDirectory(factory.Services.GetRequiredService<IOptions<ChoboStorageOptions>>().Value.DataDirectory);
 
     private static async Task<string> GetColumnTypeAsync(ChoboDbContext db, string tableName, string columnName)
     {
