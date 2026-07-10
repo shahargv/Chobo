@@ -184,7 +184,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $sampleDirectory 'chobo.db') -Destination (Join-Path $upgradeData 'chobo.db')
     Invoke-WithServer $repoRoot $upgradeData $Port {
         param($serverUrl)
-        $versionInfo = Invoke-RestMethod -Uri "$serverUrl/api/v1/server/version" -Headers @{ Authorization = 'Bearer release-upgrade-token' } -TimeoutSec 10
+        $versionInfo = Invoke-RestMethod -Uri "$serverUrl/api/v1/server/version" -Headers @{ Authorization = 'Bearer release-sample-token' } -TimeoutSec 10
         if ($versionInfo.databaseSchemaVersion -ne $versionInfo.schemaVersion) {
             throw "Database schema version $($versionInfo.databaseSchemaVersion) did not upgrade to server schema $($versionInfo.schemaVersion)."
         }
