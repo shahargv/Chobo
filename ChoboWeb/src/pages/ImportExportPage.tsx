@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download, RefreshCw, Upload } from "lucide-react";
 import { useApi } from "../api-context";
 import { Input, Page, Select } from "../components/ui";
+import type { BackupMetadataRecoveryResult, ImportResultDto } from "../api/generated";
 
 export function ImportExport() {
   const { api, showToast } = useApi();
@@ -13,6 +14,8 @@ export function ImportExport() {
   const [recoveryMode, setRecoveryMode] = useState<"scan" | "path">("scan");
   const [recoveryPath, setRecoveryPath] = useState("");
   const [recoveryTargetId, setRecoveryTargetId] = useState("");
+  const [lastImportResult, setLastImportResult] = useState<ImportResultDto | null>(null);
+  const [lastRecoveryResult, setLastRecoveryResult] = useState<BackupMetadataRecoveryResult | null>(null);
   const targets = useQuery({ queryKey: ["targets"], queryFn: () => api.targets() });
 
   const download = useMutation({
@@ -35,13 +38,13 @@ export function ImportExport() {
     mutationFn: async (kind: "data" | "config") => {
       if (!importFile) throw new Error("Choose a Chobo JSON export file first.");
       const envelope = JSON.parse(await importFile.text());
-      if (kind === "data") await api.importData(envelope);
-      else await api.importConfig(envelope);
-      return kind;
+      const result = kind === "data" ? await api.importData(envelope) : await api.importConfig(envelope);
+      return { kind, result };
     },
-    onSuccess: (kind) => {
+    onSuccess: ({ kind, result }) => {
       queryClient.clear();
-      showToast({ kind: "success", text: `${kind} imported. Re-enter imported credentials before running backups.` });
+      setLastImportResult(result);
+      showToast({ kind: result.warning ? "error" : "success", text: result.warning ?? `${kind} imported. Re-enter imported credentials before running backups.` });
       setImportFile(null);
       setImportFileInputKey((key) => key + 1);
     },
@@ -54,7 +57,8 @@ export function ImportExport() {
       : api.recoverBackupFromPath({ targetId: recoveryTargetId, backupPath: recoveryPath || null }),
     onSuccess: (result) => {
       ["backups", "restores", "audit", "logs", "dashboard", "metrics", "backup-garbage-collector-status"].forEach((key) => queryClient.invalidateQueries({ queryKey: [key] }));
-      showToast({ kind: "success", text: `Recovery finished: ${result.importedBackupCount} imported, ${result.updatedBackupCount} updated, ${result.skippedManifestCount} skipped.` });
+      showToast({ kind: result.warning ? "error" : "success", text: result.warning ?? `Recovery finished: ${result.importedBackupCount} imported, ${result.updatedBackupCount} updated, ${result.skippedManifestCount} skipped.` });
+      setLastRecoveryResult(result);
       setRecoveryOpen(false);
     }
   });
@@ -69,6 +73,8 @@ export function ImportExport() {
         <button className="secondary" disabled={download.isPending} onClick={() => setRecoveryOpen(true)}><RefreshCw size={16} /> Recover backup states</button>
         {exportingKind && <span className="hint">Preparing {exportingKind} export...</span>}
       </section>
+      {lastImportResult?.warning && <section className="panel warning-panel" role="alert"><h2>Import completed with unavailable AES keys</h2><p>{lastImportResult.warning}</p><p className="mono">{lastImportResult.missingOrInvalidAesKeyIds.join(", ")}</p><p>{lastImportResult.affectedBackupShardCount} protected backup shard(s) and {lastImportResult.affectedPolicyCount} policy password(s) are affected. Restore the matching files under <code>secrets/aes-keys</code>, then refresh.</p><p><a href="https://github.com/shahargv/Chobo/blob/main/docs/user/Upgrading.md" target="_blank" rel="noreferrer">Open AES-key recovery and upgrade guidance</a></p></section>}
+      {lastRecoveryResult?.warning && <section className="panel warning-panel" role="alert"><h2>Recovery completed with unavailable AES keys</h2><p>{lastRecoveryResult.warning}</p><p className="mono">{(lastRecoveryResult.missingOrInvalidAesKeyIds ?? []).join(", ")}</p><p>Restore the matching files under <code>secrets/aes-keys</code>, then refresh. <a href="https://github.com/shahargv/Chobo/blob/main/docs/user/Upgrading.md" target="_blank" rel="noreferrer">Open AES-key recovery and upgrade guidance</a></p></section>}
       <section className="panel">
         <h2>Import file</h2>
         <label className="import-file-field">

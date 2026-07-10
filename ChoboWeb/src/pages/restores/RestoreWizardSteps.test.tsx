@@ -39,6 +39,9 @@ const backup: BackupDto = {
   backupSizeBytes: 0,
   relatedFullBackupIds: [],
   childBackupIds: [],
+  encryptionState: "Unencrypted",
+  compressionMethod: null,
+  compressionLevel: null,
   tables: [{
     id: "table-orders",
     backupId: "backup-anchor",
@@ -78,7 +81,10 @@ const backup: BackupDto = {
         clickHouseStatus: null,
         startedAt: null,
         completedAt: "2026-06-22T00:02:00Z",
-        error: null
+        error: null,
+        isPasswordProtected: false,
+        passwordKeyId: null,
+        passwordKeyAvailable: null
       },
       {
         id: "anchor-shard-2",
@@ -99,7 +105,10 @@ const backup: BackupDto = {
         clickHouseStatus: null,
         startedAt: null,
         completedAt: "2026-06-22T00:02:00Z",
-        error: null
+        error: null,
+        isPasswordProtected: false,
+        passwordKeyId: null,
+        passwordKeyAvailable: null
       }
     ]
   }]

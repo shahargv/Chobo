@@ -1,5 +1,7 @@
 # Restores
 
+For a password-protected backup, Chobo decrypts the selected table-shard password only when submitting the ClickHouse restore. If a selected shard's AES key is missing or invalid, restore is rejected with the affected shard and key IDs. You can still restore a table/shard selection whose required keys are all available even when an unrelated shard in the same backup is unavailable.
+
 Restore operations are created from an existing backup and a target ClickHouse cluster. Chobo queues the restore, runs ClickHouse async restore operations, and records run, table, and shard-level status.
 
 Restores usually happen under pressure. Chobo is designed to make the choices explicit: which backup, which target cluster, which tables, whether to append or create, and how source shards map to target shards.

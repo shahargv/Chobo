@@ -185,6 +185,9 @@ function baseBackup(overrides: Partial<BackupDto> = {}): BackupDto {
     backupSizeBytes: overrides.backupSizeBytes ?? 0,
     relatedFullBackupIds: overrides.relatedFullBackupIds ?? [],
     childBackupIds: overrides.childBackupIds ?? [],
-    tables: overrides.tables ?? []
+    tables: overrides.tables ?? [],
+    encryptionState: overrides.encryptionState ?? "Unencrypted",
+    compressionMethod: overrides.compressionMethod ?? null,
+    compressionLevel: overrides.compressionLevel ?? null
   };
 }

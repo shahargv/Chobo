@@ -124,6 +124,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IDatabaseBootstrap, DatabaseBootstrap>();
         services.AddSingleton<IAesKeyRepository, FileAesKeyRepository>();
         services.AddScoped<ICredentialProtector, CredentialProtector>();
+        services.AddSingleton<IBackupPasswordGenerator, BackupPasswordGenerator>();
         services.AddScoped<IExportImportService, ExportImportService>();
         services.AddSingleton<IEndpointRewriteService, EndpointRewriteService>();
         services.AddScoped<ClickHouseAdapter>();

@@ -15,8 +15,8 @@ public static class ClickHouseAdvancedSettings
 {
     private static readonly Regex SettingNamePattern = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.Compiled);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
-    private static readonly HashSet<string> BackupReserved = new(StringComparer.OrdinalIgnoreCase) { "base_backup" };
-    private static readonly HashSet<string> RestoreReserved = new(StringComparer.OrdinalIgnoreCase) { "allow_non_empty_tables", "allow_different_table_def" };
+    private static readonly HashSet<string> BackupReserved = new(StringComparer.OrdinalIgnoreCase) { "base_backup", "password", "use_same_password_for_base_backup" };
+    private static readonly HashSet<string> RestoreReserved = new(StringComparer.OrdinalIgnoreCase) { "allow_non_empty_tables", "allow_different_table_def", "password", "use_same_password_for_base_backup" };
 
     public static IReadOnlyDictionary<string, JsonElement> Empty { get; } = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
 
@@ -85,6 +85,44 @@ public static class ClickHouseAdvancedSettings
             ordered,
             ordered.Select(x => new ClickHouseSettingSourceDto(x.Key, x.Value, sources[x.Key])).ToList());
     }
+
+    public static IReadOnlyDictionary<string, JsonElement> WithPolicyCompression(
+        IReadOnlyDictionary<string, JsonElement>? settings,
+        BackupCompressionMethod? method,
+        int? level)
+    {
+        var result = new Dictionary<string, JsonElement>(Normalize(settings, ClickHouseAdvancedSettingsKind.Backup), StringComparer.OrdinalIgnoreCase);
+        if (method is null)
+        {
+            return result;
+        }
+
+        result["compression_method"] = JsonSerializer.SerializeToElement(method.Value.ToString().ToLowerInvariant());
+        if (level is not null)
+        {
+            result["compression_level"] = JsonSerializer.SerializeToElement(level.Value);
+        }
+        else
+        {
+            result.Remove("compression_level");
+        }
+        return result;
+    }
+
+    public static BackupCompressionMethod? CompressionMethod(IReadOnlyDictionary<string, JsonElement>? settings)
+    {
+        if (settings is null || !settings.TryGetValue("compression_method", out var value) || value.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+        return Enum.TryParse<BackupCompressionMethod>(value.GetString(), true, out var method) ? method : null;
+    }
+
+    public static int? CompressionLevel(IReadOnlyDictionary<string, JsonElement>? settings) =>
+        settings is not null && settings.TryGetValue("compression_level", out var value) && value.TryGetInt32(out var level) ? level : null;
+
+    public static bool RequiresZipArchive(IReadOnlyDictionary<string, JsonElement>? settings) =>
+        settings is not null && (settings.ContainsKey("compression_method") || settings.ContainsKey("compression_level"));
 
     public static string ToSettingsClause(IReadOnlyDictionary<string, JsonElement>? userSettings, params (string Name, string SqlValue)[] choboSettings)
     {

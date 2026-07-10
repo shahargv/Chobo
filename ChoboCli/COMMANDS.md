@@ -75,12 +75,17 @@ ChoboCli policies list
 ChoboCli policies add --name all --source-cluster-id <cluster-id> --target-id <target-id>
 ChoboCli policies add --name filtered --source-cluster-id <cluster-id> --target-id <target-id> --selector-file .\policy-selector.json
 ChoboCli policies add --name daily-schema --source-cluster-id <cluster-id> --schema-only
+ChoboCli policies add --name protected --source-cluster-id <cluster-id> --target-id <target-id> --password-mode constant --backup-password <password>
+ChoboCli policies add --name generated --source-cluster-id <cluster-id> --target-id <target-id> --password-mode generated-per-table-shard
+ChoboCli policies add --name compressed --source-cluster-id <cluster-id> --target-id <target-id> --compression-method lzma --compression-level 3
 ChoboCli policies update --id <policy-id> --name filtered --source-cluster-id <cluster-id> --target-id <target-id> --selector-file .\policy-selector.json --full-retention-minutes 43200 --incremental-retention-minutes 10080 --min-backups-to-keep 7 --min-full-backups-to-keep 2 --max-age-hours-for-base-backup 168
 ChoboCli policies evaluate --id <policy-id> --inventory-file .\inventory.json
 ChoboCli policies remove --id <policy-id>
 ```
 
 The source cluster is configured on the policy itself. Selector files only decide which database tables in that source cluster should be backed up. Use `--schema-only` for policies that store only captured DDL; schema-only policies do not take `--target-id` and do not support incremental backups.
+
+Password protection and compression are optional and independent. Password modes are `none`, `constant`, and `generated-per-table-shard`. A constant password is write-only: omit `--backup-password` while updating an existing constant policy to preserve it. Supported compression methods are `store`, `deflate`, `bzip2`, `lzma`, `zstd`, and `xz`; `--compression-level` requires a method and cannot be used with `store`. Either feature creates `.zip` backup objects.
 
 Use --max-age-hours-for-base-backup <hours> to override how old a full backup can be before incremental table-shard selection ignores it. Omit the option to inherit the live application default. Operators can change that default with ChoboCli settings set --key Chobo:BackupRestore:DefaultMaxAgeHoursForBaseBackup --value 168.
 Policy-level settings override matching cluster defaults and apply to every scheduled or manual run from that policy. Policy restore settings are used as the current default when starting a restore from a backup created by the policy:

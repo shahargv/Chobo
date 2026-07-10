@@ -61,7 +61,15 @@ public sealed class PolicyCommands : CliSubject
                 : FailedBackupRetentionMode.KeepAndExcludeFromMinBackupsToKeep,
             CommandHelpers.ClickHouseSettingsFromOptions(options, "backup"),
             CommandHelpers.ClickHouseSettingsFromOptions(options, "restore"),
-            options.Optional("--max-age-hours-for-base-backup") is { } maxAgeHours ? int.Parse(maxAgeHours) : null);
+            options.Optional("--max-age-hours-for-base-backup") is { } maxAgeHours ? int.Parse(maxAgeHours) : null,
+            options.Optional("--password-mode") is { } passwordMode
+                ? Enum.Parse<BackupPasswordMode>(passwordMode.Replace("-", "", StringComparison.Ordinal), ignoreCase: true)
+                : BackupPasswordMode.None,
+            options.Optional("--backup-password"),
+            options.Optional("--compression-method") is { } compressionMethod
+                ? Enum.Parse<BackupCompressionMethod>(compressionMethod, ignoreCase: true)
+                : null,
+            options.Optional("--compression-level") is { } compressionLevel ? int.Parse(compressionLevel) : null);
     }
 
     private static BackupRetentionDto? Retention(OptionBag options)

@@ -6,7 +6,7 @@ namespace ChoboServer.Application;
 
 internal static class BackupRestoreMapping
 {
-    public static BackupDto ToDto(BackupEntity x, int? tableCount = null, long? backupSizeBytes = null, IReadOnlyList<Guid>? relatedFullBackupIds = null, IReadOnlyList<Guid>? childBackupIds = null, bool includeTables = true) =>
+    public static BackupDto ToDto(BackupEntity x, int? tableCount = null, long? backupSizeBytes = null, IReadOnlyList<Guid>? relatedFullBackupIds = null, IReadOnlyList<Guid>? childBackupIds = null, bool includeTables = true, IReadOnlyDictionary<Guid, ChoboServer.Repositories.AesKeyAvailability>? keyAvailability = null) =>
         new(
             x.Id,
             x.TriggerType,
@@ -41,7 +41,10 @@ internal static class BackupRestoreMapping
             ClickHouseAdvancedSettings.Deserialize(x.ClickHouseBackupSettingsJson, ClickHouseAdvancedSettingsKind.Backup),
             relatedFullBackupIds ?? CalculateRelatedFullBackupIds(x.Tables),
             childBackupIds ?? [],
-            includeTables ? x.Tables.OrderBy(t => t.Database).ThenBy(t => t.Table).Select(ToDto).ToList() : []);
+            includeTables ? x.Tables.OrderBy(t => t.Database).ThenBy(t => t.Table).Select(t => ToDto(t, keyAvailability)).ToList() : [],
+            EncryptionState(x.Tables.SelectMany(t => t.Shards), keyAvailability),
+            ClickHouseAdvancedSettings.CompressionMethod(ClickHouseAdvancedSettings.Deserialize(x.ClickHouseBackupSettingsJson, ClickHouseAdvancedSettingsKind.Backup)),
+            ClickHouseAdvancedSettings.CompressionLevel(ClickHouseAdvancedSettings.Deserialize(x.ClickHouseBackupSettingsJson, ClickHouseAdvancedSettingsKind.Backup)));
 
 
     public static BackupDto ToSummaryDto(
@@ -77,7 +80,8 @@ internal static class BackupRestoreMapping
         long? backupSizeBytes,
         IReadOnlyList<Guid> relatedFullBackupIds,
         IReadOnlyList<Guid> childBackupIds,
-        string? clickHouseBackupSettingsJson = null) =>
+        string? clickHouseBackupSettingsJson = null,
+        BackupEncryptionState encryptionState = BackupEncryptionState.Unencrypted) =>
         new(
             id,
             triggerType,
@@ -112,7 +116,10 @@ internal static class BackupRestoreMapping
             ClickHouseAdvancedSettings.Deserialize(clickHouseBackupSettingsJson, ClickHouseAdvancedSettingsKind.Backup),
             relatedFullBackupIds,
             childBackupIds,
-            []);
+            [],
+            encryptionState,
+            ClickHouseAdvancedSettings.CompressionMethod(ClickHouseAdvancedSettings.Deserialize(clickHouseBackupSettingsJson, ClickHouseAdvancedSettingsKind.Backup)),
+            ClickHouseAdvancedSettings.CompressionLevel(ClickHouseAdvancedSettings.Deserialize(clickHouseBackupSettingsJson, ClickHouseAdvancedSettingsKind.Backup)));
     private static IReadOnlyList<Guid> CalculateRelatedFullBackupIds(IEnumerable<BackupTableEntity> tables) =>
         tables.Select(x => x.ParentFullBackupId)
             .Concat(tables.SelectMany(x => x.Shards).Select(x => x.ParentFullBackupId))
@@ -127,7 +134,7 @@ internal static class BackupRestoreMapping
         return sizes.Count == 0 ? null : sizes.Sum(x => x!.Value);
     }
 
-    public static BackupTableDto ToDto(BackupTableEntity x) =>
+    public static BackupTableDto ToDto(BackupTableEntity x, IReadOnlyDictionary<Guid, ChoboServer.Repositories.AesKeyAvailability>? keyAvailability = null) =>
         new(
             x.Id,
             x.BackupId,
@@ -147,9 +154,9 @@ internal static class BackupRestoreMapping
             x.StartedAt,
             x.CompletedAt,
             x.Error,
-            x.Shards.OrderBy(s => s.SourceShardNumber).ThenBy(s => s.ReplicaNumber).Select(ToDto).ToList());
+            x.Shards.OrderBy(s => s.SourceShardNumber).ThenBy(s => s.ReplicaNumber).Select(s => ToDto(s, keyAvailability)).ToList());
 
-    public static BackupTableShardDto ToDto(BackupTableShardEntity x) =>
+    public static BackupTableShardDto ToDto(BackupTableShardEntity x, IReadOnlyDictionary<Guid, ChoboServer.Repositories.AesKeyAvailability>? keyAvailability = null) =>
         new(
             x.Id,
             x.BackupTableId,
@@ -169,7 +176,22 @@ internal static class BackupRestoreMapping
             x.ClickHouseStatus,
             x.StartedAt,
             x.CompletedAt,
-            x.Error);
+            x.Error,
+            x.EncryptedBackupPassword is not null,
+            x.EncryptedBackupPasswordKeyId,
+            x.EncryptedBackupPassword is null ? null : x.EncryptedBackupPasswordKeyId is { } keyId && keyAvailability?.GetValueOrDefault(keyId) == ChoboServer.Repositories.AesKeyAvailability.Available);
+
+    private static BackupEncryptionState EncryptionState(IEnumerable<BackupTableShardEntity> shards, IReadOnlyDictionary<Guid, ChoboServer.Repositories.AesKeyAvailability>? availability)
+    {
+        var protectedShards = shards.Where(x => x.EncryptedBackupPassword is not null).ToList();
+        if (protectedShards.Count == 0)
+        {
+            return BackupEncryptionState.Unencrypted;
+        }
+        return protectedShards.All(x => x.EncryptedBackupPasswordKeyId is { } keyId && availability?.GetValueOrDefault(keyId) == ChoboServer.Repositories.AesKeyAvailability.Available)
+            ? BackupEncryptionState.EncryptedKeyAvailable
+            : BackupEncryptionState.EncryptedMissingKey;
+    }
 
     public static RestoreDto ToDto(RestoreEntity x) =>
         new(

@@ -102,6 +102,8 @@ public sealed class ChoboDbContext(DbContextOptions<ChoboDbContext> options) : D
         modelBuilder.Entity<BackupPolicyEntity>().HasIndex(x => x.TargetId);
         modelBuilder.Entity<BackupPolicyEntity>().Property(x => x.FailedBackupRetentionMode).HasConversion<int>();
         modelBuilder.Entity<BackupPolicyEntity>().Property(x => x.ContentMode).HasConversion<int>();
+        modelBuilder.Entity<BackupPolicyEntity>().Property(x => x.PasswordMode).HasConversion<int>();
+        modelBuilder.Entity<BackupPolicyEntity>().Property(x => x.CompressionMethod).HasConversion<int?>();
         modelBuilder.Entity<BackupScheduleEntity>().HasIndex(x => new { x.IsDeleted, x.Name });
         modelBuilder.Entity<BackupScheduleEntity>().HasIndex(x => new { x.IsEnabled, x.IsDeleted });
         modelBuilder.Entity<BackupScheduleEntity>().HasIndex(x => new { x.PolicyId, x.IsDeleted });

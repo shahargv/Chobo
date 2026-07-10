@@ -6,6 +6,16 @@ Policies describe what Chobo should back up. Schedules describe when Chobo shoul
 
 A backup policy contains the source ClickHouse cluster, the S3-compatible backup target for schema+data backups, include and exclude rules, content mode, retention settings, and failed-backup cleanup behavior.
 
+Password protection and compression are independent, optional policy features. Leaving both disabled keeps the normal unencrypted directory-style backup format. Constant mode encrypts a write-only policy password and copies it into each new full table-shard record; generated mode creates a distinct 20-character password for every full table-shard. Incremental shards inherit their selected full parent's password so an existing chain remains restorable after policy changes. Schema-only policies cannot use password protection.
+
+Compression creates a ZIP archive and can be enabled without encryption. Supported methods are `Store`, `Deflate`, `Bzip2`, `Lzma`, `Zstd`, and `Xz`; the level is optional and codec-specific. `Store` does not accept a level. ClickHouse already compresses table data internally, so measure the extra CPU and runtime against actual space savings.
+
+```powershell
+ChoboCli policies add --name protected --source-cluster-id <cluster-id> --target-id <target-id> --password-mode constant --backup-password <password>
+ChoboCli policies add --name compressed --source-cluster-id <cluster-id> --target-id <target-id> --compression-method lzma --compression-level 3
+ChoboCli policies add --name generated-compressed --source-cluster-id <cluster-id> --target-id <target-id> --password-mode generated-per-table-shard --compression-method zstd
+```
+
 In the web GUI, open **Policies** and choose **Add policy**. The form keeps the important choices on one screen: name, source cluster, backup mode, backup storage, failed-backup behavior, selector rules, preview, and retention.
 
 ![Policy form showing include and exclude selector rules](assets/policies/policy-include-exclude-rules.png)

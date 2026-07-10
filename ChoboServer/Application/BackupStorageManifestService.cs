@@ -1,9 +1,11 @@
 using System.Text;
+using System.Security.Cryptography;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Chobo.Contracts;
 using ChoboServer.Data;
+using ChoboServer.Repositories;
 using ChoboServer.Services;
 using Microsoft.EntityFrameworkCore;
 
@@ -20,6 +22,8 @@ public sealed class BackupStorageManifestService(
     ChoboDbContext db,
     IBackupStorageOperations storage,
     IClickHouseClusterMetadataService metadata,
+    IAesKeyRepository aesKeys,
+    ICredentialProtector protector,
     IAuditService audit,
     Serilog.ILogger logger) : IBackupStorageManifestService
 {
@@ -119,6 +123,45 @@ public sealed class BackupStorageManifestService(
             .ThenBy(x => x.Manifest.Backup.BackupType == BackupType.Full ? 0 : 1)
             .ThenBy(x => x.Manifest.Backup.Id)
             .ToList();
+        var protectedManifestShards = orderedManifests
+            .SelectMany(x => x.Manifest.Tables)
+            .SelectMany(x => x.Shards)
+            .Where(x => x.EncryptedBackupPassword is not null)
+            .ToList();
+        var keyAvailability = await aesKeys.GetAvailabilitiesAsync(
+            protectedManifestShards.Select(x => x.EncryptedBackupPasswordKeyId).OfType<Guid>(),
+            cancellationToken);
+        var invalidCipherKeyIds = new HashSet<Guid>();
+        foreach (var shard in protectedManifestShards.Where(x => x.EncryptedBackupPasswordKeyId is { } keyId && keyAvailability.GetValueOrDefault(keyId) == AesKeyAvailability.Available))
+        {
+            try
+            {
+                var password = await protector.DecryptAsync(shard.EncryptedBackupPassword, shard.EncryptedBackupPasswordKeyId, cancellationToken);
+                if (string.IsNullOrEmpty(password))
+                {
+                    invalidCipherKeyIds.Add(shard.EncryptedBackupPasswordKeyId!.Value);
+                }
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or FormatException or CryptographicException)
+            {
+                invalidCipherKeyIds.Add(shard.EncryptedBackupPasswordKeyId!.Value);
+            }
+        }
+        var missingOrInvalidKeyIds = protectedManifestShards
+            .Select(x => x.EncryptedBackupPasswordKeyId)
+            .OfType<Guid>()
+            .Where(keyId => keyAvailability.GetValueOrDefault(keyId) != AesKeyAvailability.Available)
+            .Concat(invalidCipherKeyIds)
+            .Distinct()
+            .OrderBy(x => x)
+            .ToList();
+        var affectedBackupShardCount = protectedManifestShards.Count(x =>
+            x.EncryptedBackupPasswordKeyId is not { } keyId ||
+            keyAvailability.GetValueOrDefault(keyId) != AesKeyAvailability.Available ||
+            invalidCipherKeyIds.Contains(keyId));
+        var keyWarning = affectedBackupShardCount == 0
+            ? null
+            : $"Recovered {affectedBackupShardCount} protected backup shard(s) with missing or invalid AES keys. Restore the listed key files before using those backups.";
         var validations = new Dictionary<Guid, RecoveryStorageValidation>();
         foreach (var (source, manifest) in orderedManifests)
         {
@@ -180,10 +223,12 @@ public sealed class BackupStorageManifestService(
             importedBackupCount = imported,
             updatedBackupCount = updated,
             skippedManifestCount = skipped,
+            missingOrInvalidAesKeyIds = missingOrInvalidKeyIds,
+            affectedBackupShardCount,
             errors
         });
 
-        return new BackupMetadataRecoveryResult(candidates.Count, imported, updated, skipped, items, errors);
+        return new BackupMetadataRecoveryResult(candidates.Count, imported, updated, skipped, items, errors, missingOrInvalidKeyIds, affectedBackupShardCount, keyWarning);
     }
 
     private async Task<RecoveryStorageValidation> ValidateRequiredStoragePathsAsync(BackupTargetEntity scanTarget, BackupStorageManifestV1 manifest, CancellationToken cancellationToken)
@@ -285,6 +330,11 @@ public sealed class BackupStorageManifestService(
                 policy.MinFullBackupsToKeep = policyManifest.Retention?.MinFullBackupsToKeep ?? 0;
                 policy.FailedBackupRetentionMode = policyManifest.FailedBackupRetentionMode;
                 policy.MaxAgeHoursForBaseBackup = policyManifest.MaxAgeHoursForBaseBackup;
+                policy.PasswordMode = policyManifest.PasswordMode;
+                policy.EncryptedBackupPassword = policyManifest.EncryptedBackupPassword;
+                policy.EncryptedBackupPasswordKeyId = policyManifest.EncryptedBackupPasswordKeyId;
+                policy.CompressionMethod = policyManifest.CompressionMethod;
+                policy.CompressionLevel = policyManifest.CompressionLevel;
                 policy.IsDeleted = policyManifest.IsDeleted;
                 policy.CreatedAt = policyManifest.CreatedAt;
                 policy.UpdatedAt = policyManifest.UpdatedAt;
@@ -426,6 +476,8 @@ public sealed class BackupStorageManifestService(
                 shard.StartedAt = shardManifest.StartedAt;
                 shard.CompletedAt = shardManifest.CompletedAt;
                 shard.Error = shardPathMissing ? $"Required storage data path was missing during metadata recovery: {shardStoragePath}" : shardManifest.Error;
+                shard.EncryptedBackupPassword = shardManifest.EncryptedBackupPassword;
+                shard.EncryptedBackupPasswordKeyId = shardManifest.EncryptedBackupPasswordKeyId;
             }
 
             if (tableManifest.Shards.Count > 0 && table.Shards.Any(x => x.Status == BackupTableStatus.Failed))
@@ -616,7 +668,12 @@ public sealed class BackupStorageManifestService(
             policy.CreatedAt,
             policy.UpdatedAt,
             policy.DeletedAt,
-            policy.MaxAgeHoursForBaseBackup);
+            policy.MaxAgeHoursForBaseBackup,
+            policy.PasswordMode,
+            policy.EncryptedBackupPassword,
+            policy.EncryptedBackupPasswordKeyId,
+            policy.CompressionMethod,
+            policy.CompressionLevel);
 
     private static BackupStorageManifestScheduleV1 ToManifestSchedule(BackupScheduleEntity schedule) =>
         new(schedule.Id, schedule.Name, schedule.PolicyId, schedule.BackupType, schedule.CronExpression, schedule.TimeZoneId, schedule.IsEnabled, schedule.MissedRunGracePeriod, schedule.Description, schedule.IsSystemDefault, schedule.IsDeleted, schedule.CreatedAt, schedule.UpdatedAt, schedule.DeletedAt);
@@ -663,7 +720,11 @@ public sealed class BackupStorageManifestService(
             shard.ClickHouseStatus,
             shard.StartedAt,
             shard.CompletedAt,
-            shard.Error);
+            shard.Error)
+        {
+            EncryptedBackupPassword = shard.EncryptedBackupPassword,
+            EncryptedBackupPasswordKeyId = shard.EncryptedBackupPasswordKeyId
+        };
 
 
     private static string ManifestStoragePath(BackupStorageManifestTableV1 table) =>

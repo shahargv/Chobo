@@ -21,6 +21,11 @@ public sealed class BackupPolicyEntity
     public FailedBackupRetentionMode FailedBackupRetentionMode { get; set; } = FailedBackupRetentionMode.KeepAndExcludeFromMinBackupsToKeep;
     public string ClickHouseBackupSettingsJson { get; set; } = "{}";
     public string ClickHouseRestoreSettingsJson { get; set; } = "{}";
+    public BackupPasswordMode PasswordMode { get; set; } = BackupPasswordMode.None;
+    public string? EncryptedBackupPassword { get; set; }
+    public Guid? EncryptedBackupPasswordKeyId { get; set; }
+    public BackupCompressionMethod? CompressionMethod { get; set; }
+    public int? CompressionLevel { get; set; }
     public bool IsSystemDefault { get; set; }
     public bool IsDeleted { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;

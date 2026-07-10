@@ -19,16 +19,29 @@ public sealed class PolicyApplicationService(
     IUnitOfWork unitOfWork,
     IAuditService audit,
     PolicySelectorEvaluationService selectorEvaluation,
-    IOptionsMonitor<ChoboBackupRestoreOptions> backupRestoreOptions)
+    IOptionsMonitor<ChoboBackupRestoreOptions> backupRestoreOptions,
+    ICredentialProtector protector,
+    IAesKeyRepository aesKeys)
 {
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
-    public async Task<IReadOnlyList<BackupPolicyDto>> ListAsync(bool includeDeleted = false) =>
-        (await policies.ListAsync(includeDeleted)).Select(ToDto).ToList();
+    public async Task<IReadOnlyList<BackupPolicyDto>> ListAsync(bool includeDeleted = false)
+    {
+        var rows = await policies.ListAsync(includeDeleted);
+        var availability = await aesKeys.GetAvailabilitiesAsync(rows.Select(x => x.EncryptedBackupPasswordKeyId).OfType<Guid>());
+        return rows.Select(x => ToDto(x, availability)).ToList();
+    }
 
     public async Task<BackupPolicyDto> AddAsync(UpsertPolicyRequest request)
     {
         await ValidateAsync(request);
+        if (request.PasswordMode == BackupPasswordMode.Constant && request.BackupPassword is null)
+        {
+            throw new ArgumentException("Backup password is required for constant password mode.");
+        }
+        var protectedPassword = request.PasswordMode == BackupPasswordMode.Constant
+            ? await protector.EncryptAsync(request.BackupPassword)
+            : null;
         var policy = new BackupPolicyEntity
         {
             Name = request.Name.Trim(),
@@ -44,13 +57,20 @@ public sealed class PolicyApplicationService(
             FailedBackupRetentionMode = request.FailedBackupRetentionMode,
             MaxAgeHoursForBaseBackup = request.MaxAgeHoursForBaseBackup,
             ClickHouseBackupSettingsJson = ClickHouseAdvancedSettings.Serialize(request.ClickHouseBackupSettings, ClickHouseAdvancedSettingsKind.Backup),
-            ClickHouseRestoreSettingsJson = ClickHouseAdvancedSettings.Serialize(request.ClickHouseRestoreSettings, ClickHouseAdvancedSettingsKind.Restore)
+            ClickHouseRestoreSettingsJson = ClickHouseAdvancedSettings.Serialize(request.ClickHouseRestoreSettings, ClickHouseAdvancedSettingsKind.Restore),
+            PasswordMode = request.PasswordMode,
+            EncryptedBackupPassword = protectedPassword?.Ciphertext,
+            EncryptedBackupPasswordKeyId = protectedPassword?.KeyId,
+            CompressionMethod = request.CompressionMethod,
+            CompressionLevel = request.CompressionLevel
         };
 
         await policies.AddAsync(policy);
         await unitOfWork.SaveChangesAsync();
 
-        var current = ToDto(policy);
+        var currentAvailability = await aesKeys.GetAvailabilitiesAsync(
+            protectedPassword is null ? [] : [protectedPassword.KeyId]);
+        var current = ToDto(policy, currentAvailability);
         await audit.RecordAsync("create", AuditEntityType.BackupPolicy, policy.Id.ToString(), AuditDetails.Change(null, current));
         return current;
     }
@@ -64,6 +84,10 @@ public sealed class PolicyApplicationService(
         }
 
         await ValidateAsync(request);
+        if (request.PasswordMode == BackupPasswordMode.Constant && request.BackupPassword is null && string.IsNullOrEmpty(policy.EncryptedBackupPassword))
+        {
+            throw new ArgumentException("Backup password is required when switching to constant password mode.");
+        }
         var previous = ToDto(policy);
         policy.Name = request.Name.Trim();
         policy.SourceClusterId = request.SourceClusterId;
@@ -77,6 +101,20 @@ public sealed class PolicyApplicationService(
         policy.MinFullBackupsToKeep = request.Retention?.MinFullBackupsToKeep ?? 0;
         policy.FailedBackupRetentionMode = request.FailedBackupRetentionMode;
         policy.MaxAgeHoursForBaseBackup = request.MaxAgeHoursForBaseBackup;
+        policy.PasswordMode = request.PasswordMode;
+        if (request.PasswordMode == BackupPasswordMode.Constant && request.BackupPassword is not null)
+        {
+            var protectedPassword = await protector.EncryptAsync(request.BackupPassword);
+            policy.EncryptedBackupPassword = protectedPassword?.Ciphertext;
+            policy.EncryptedBackupPasswordKeyId = protectedPassword?.KeyId;
+        }
+        else if (request.PasswordMode != BackupPasswordMode.Constant)
+        {
+            policy.EncryptedBackupPassword = null;
+            policy.EncryptedBackupPasswordKeyId = null;
+        }
+        policy.CompressionMethod = request.CompressionMethod;
+        policy.CompressionLevel = request.CompressionLevel;
         if (request.ClickHouseBackupSettings is not null)
         {
             policy.ClickHouseBackupSettingsJson = ClickHouseAdvancedSettings.Serialize(request.ClickHouseBackupSettings, ClickHouseAdvancedSettingsKind.Backup);
@@ -88,7 +126,9 @@ public sealed class PolicyApplicationService(
         policy.UpdatedAt = DateTimeOffset.UtcNow;
         await unitOfWork.SaveChangesAsync();
 
-        var current = ToDto(policy);
+        var currentAvailability = await aesKeys.GetAvailabilitiesAsync(
+            policy.EncryptedBackupPasswordKeyId is { } keyId ? [keyId] : []);
+        var current = ToDto(policy, currentAvailability);
         await audit.RecordAsync("update", AuditEntityType.BackupPolicy, id.ToString(), AuditDetails.Change(previous, current));
         return current;
     }
@@ -219,6 +259,46 @@ public sealed class PolicyApplicationService(
         {
             throw new ArgumentException("Max age hours for base backup must be greater than zero.");
         }
+        if (!Enum.IsDefined(request.PasswordMode))
+        {
+            throw new ArgumentException("Password mode is invalid.");
+        }
+        if (request.ContentMode == BackupContentMode.SchemaOnly && request.PasswordMode != BackupPasswordMode.None)
+        {
+            throw new ArgumentException("Schema-only policies cannot enable password protection.");
+        }
+        if (request.PasswordMode == BackupPasswordMode.Constant && request.BackupPassword is not null && request.BackupPassword.Length == 0)
+        {
+            throw new ArgumentException("Backup password cannot be empty.");
+        }
+        if (request.BackupPassword is { Length: > 4096 })
+        {
+            throw new ArgumentException("Backup password cannot exceed 4096 characters.");
+        }
+        if (request.PasswordMode != BackupPasswordMode.Constant && request.BackupPassword is not null)
+        {
+            throw new ArgumentException("Backup password can only be supplied for constant password mode.");
+        }
+        if (request.CompressionLevel is not null && request.CompressionMethod is null)
+        {
+            throw new ArgumentException("Compression method is required when compression level is supplied.");
+        }
+        if (request.CompressionMethod is { } compressionMethod && !Enum.IsDefined(compressionMethod))
+        {
+            throw new ArgumentException("Compression method is invalid.");
+        }
+        if (request.CompressionLevel is < 0)
+        {
+            throw new ArgumentException("Compression level cannot be negative.");
+        }
+        if (request.CompressionMethod == BackupCompressionMethod.Store && request.CompressionLevel is not null)
+        {
+            throw new ArgumentException("Compression level is not supported with Store compression.");
+        }
+        if (request.CompressionMethod is not null && request.ClickHouseBackupSettings?.Keys.Any(x => x.Equals("compression_method", StringComparison.OrdinalIgnoreCase) || x.Equals("compression_level", StringComparison.OrdinalIgnoreCase)) == true)
+        {
+            throw new ArgumentException("Use the first-class compression fields instead of policy advanced settings for compression.");
+        }
         if (backupRestoreOptions.CurrentValue.DefaultMaxAgeHoursForBaseBackup <= 0)
         {
             throw new ArgumentException("Default max age hours for base backup must be greater than zero.");
@@ -272,7 +352,7 @@ public sealed class PolicyApplicationService(
     private static PolicySelector Deserialize(string json) =>
         JsonSerializer.Deserialize<PolicySelector>(json, JsonOptions) ?? PolicySelector.Empty;
 
-    private BackupPolicyDto ToDto(BackupPolicyEntity x) =>
+    private BackupPolicyDto ToDto(BackupPolicyEntity x, IReadOnlyDictionary<Guid, AesKeyAvailability>? availability = null) =>
         new(
             x.Id,
             x.Name,
@@ -292,7 +372,14 @@ public sealed class PolicyApplicationService(
             x.CreatedAt,
             x.UpdatedAt,
             x.MaxAgeHoursForBaseBackup,
-            x.MaxAgeHoursForBaseBackup ?? backupRestoreOptions.CurrentValue.DefaultMaxAgeHoursForBaseBackup);
+            x.MaxAgeHoursForBaseBackup ?? backupRestoreOptions.CurrentValue.DefaultMaxAgeHoursForBaseBackup,
+            x.PasswordMode,
+            !string.IsNullOrEmpty(x.EncryptedBackupPassword),
+            x.PasswordMode == BackupPasswordMode.Constant && x.EncryptedBackupPasswordKeyId is { } keyId
+                ? availability is null || !availability.TryGetValue(keyId, out var state) ? null : state == AesKeyAvailability.Available
+                : null,
+            x.CompressionMethod,
+            x.CompressionLevel);
 
     private static void ValidatePattern(SelectorPattern pattern, string name)
     {

@@ -93,7 +93,23 @@ const nullableProperties = new Set([
 ]);
 
 const nullablePropertyPaths = new Set([
-  "BackupSettingsPreviewRequest.clusterId"
+  "BackupSettingsPreviewRequest.clusterId",
+  "BackupDto.compressionMethod",
+  "BackupDto.compressionLevel",
+  "BackupPolicyDto.passwordKeyAvailable",
+  "BackupPolicyDto.compressionMethod",
+  "BackupPolicyDto.compressionLevel",
+  "BackupPolicyExport.encryptedBackupPassword",
+  "BackupPolicyExport.encryptedBackupPasswordKeyId",
+  "BackupPolicyExport.compressionMethod",
+  "BackupPolicyExport.compressionLevel",
+  "BackupTableShardDto.passwordKeyId",
+  "BackupTableShardDto.passwordKeyAvailable",
+  "BackupTableShardExport.encryptedBackupPassword",
+  "BackupTableShardExport.encryptedBackupPasswordKeyId",
+  "UpsertPolicyRequest.backupPassword",
+  "UpsertPolicyRequest.compressionMethod",
+  "UpsertPolicyRequest.compressionLevel"
 ]);
 
 const optionalProperties = new Set([
@@ -163,11 +179,11 @@ function renderInterface(name, schema) {
 }
 
 function isOptionalProperty(schemaName, propertyName, schema) {
-  return optionalProperties.has(`${schemaName}.${propertyName}`) || (schema?.nullable === true && (nullableProperties.has(propertyName) || nullablePropertyPaths.has(`${schemaName}.${propertyName}`)));
+  return optionalProperties.has(`${schemaName}.${propertyName}`) || (schema?.nullable === true && nullableProperties.has(propertyName)) || nullablePropertyPaths.has(`${schemaName}.${propertyName}`);
 }
 
 function propertyTypeName(schemaName, propertyName, schema) {
-  const nullable = schema?.nullable === true && (nullableProperties.has(propertyName) || nullablePropertyPaths.has(`${schemaName}.${propertyName}`));
+  const nullable = (schema?.nullable === true && nullableProperties.has(propertyName)) || nullablePropertyPaths.has(`${schemaName}.${propertyName}`);
   if (scalarSettingProperties.has(`${schemaName}.${propertyName}`)) return withNullable("ClickHouseSettingValue", nullable);
   if (scalarSettingsProperties.has(propertyName) && schema?.additionalProperties) return withNullable("Record<string, ClickHouseSettingValue>", nullable);
   return typeName(schema, nullable);
@@ -175,7 +191,7 @@ function propertyTypeName(schemaName, propertyName, schema) {
 
 function typeName(schema, nullable = false) {
   if (!schema) return "unknown";
-  if (schema.$ref) return schema.$ref.split("/").pop();
+  if (schema.$ref) return withNullable(schema.$ref.split("/").pop(), nullable);
 
   const union = schema.oneOf ?? schema.anyOf;
   if (Array.isArray(union)) {

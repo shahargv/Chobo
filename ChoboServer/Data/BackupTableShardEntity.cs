@@ -25,4 +25,6 @@ public sealed class BackupTableShardEntity
     public DateTimeOffset? StartedAt { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }
     public string? Error { get; set; }
+    public string? EncryptedBackupPassword { get; set; }
+    public Guid? EncryptedBackupPasswordKeyId { get; set; }
 }

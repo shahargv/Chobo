@@ -177,7 +177,10 @@ public sealed class BackupSchedulerDispatcherBackgroundService(
             }
             var settings = ClickHouseAdvancedSettings.MergeWithSources(
                 ("cluster", ClickHouseAdvancedSettings.Deserialize(cluster.ClickHouseBackupSettingsJson, ClickHouseAdvancedSettingsKind.Backup)),
-                ("policy", ClickHouseAdvancedSettings.Deserialize(schedule.Policy.ClickHouseBackupSettingsJson, ClickHouseAdvancedSettingsKind.Backup)));
+                ("policy", ClickHouseAdvancedSettings.WithPolicyCompression(
+                    ClickHouseAdvancedSettings.Deserialize(schedule.Policy.ClickHouseBackupSettingsJson, ClickHouseAdvancedSettingsKind.Backup),
+                    schedule.Policy.CompressionMethod,
+                    schedule.Policy.CompressionLevel)));
 
             var backup = new BackupEntity
             {

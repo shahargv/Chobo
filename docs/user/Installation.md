@@ -328,35 +328,4 @@ ChoboCli dashboard --next-hours 24
 Then test credentials and run a small manual backup before trusting schedules again.
 ## Upgrade Notes
 
-Chobo tracks separate API, export, product/server, and SQLite schema versions. The current API path is `/api/v1`.
-
-On startup, ChoboServer checks the SQLite schema version. It rejects databases newer than the server-supported schema and applies registered schema upgrade steps for older supported databases.
-
-Before upgrading production:
-
-- Back up the Chobo data directory, including `chobo.db`.
-- Keep the same `CHOBO_ENCRYPTION_KEY_BASE64`; changing it makes stored credentials unreadable.
-- Pull the matching server and CLI images.
-- Verify the new server can reach ClickHouse and S3.
-- Check `/health`, the dashboard, and `audit show` after startup.
-
-
-
-
-## Rollback Notes
-
-Prefer pinned image tags for production changes instead of `latest`. Keep the previous server and CLI image tags in your rollback plan.
-
-Before rollback, check whether the newer server upgraded the SQLite schema. Chobo rejects databases newer than the server-supported schema, so downgrading after a schema upgrade may require restoring the previous `chobo.db` backup.
-
-Post-upgrade smoke test:
-
-```powershell
-ChoboCli dashboard --next-hours 24
-ChoboCli clusters test-connection --id <cluster-id>
-ChoboCli targets test-connection --id <target-id>
-ChoboCli backup manual --policy-id <small-policy-id> --backup-type Full
-ChoboCli backups wait --id <backup-id> --timeout-seconds 900 --poll-seconds 5
-```
-
-If the CLI reports compatibility errors, use the CLI image built for the server release.
+Use the dedicated [upgrading runbook](Upgrading.md). Before every production upgrade, export configuration and data, copy the stopped SQLite/data directory, and separately back up the complete `secrets/aes-keys` directory. Keep matching server and CLI versions and pinned rollback images or binaries.

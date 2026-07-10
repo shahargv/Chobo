@@ -21,7 +21,7 @@ const summaryBackup = (overrides: Partial<BackupDto> = {}): BackupDto => ({
   requestedByName: "system",
   manualRequestJson: null,
   storageRootPath: null,
-  createdAt: "2026-07-01T00:00:00Z",
+  createdAt: "2026-07-10T00:00:00Z",
   startedAt: "2026-07-01T00:01:00Z",
   endedAt: "2026-07-01T00:02:00Z",
   error: null,
@@ -41,7 +41,10 @@ const summaryBackup = (overrides: Partial<BackupDto> = {}): BackupDto => ({
   clickHouseBackupSettings: {},
   relatedFullBackupIds: [],
   childBackupIds: [],
-  tables: overrides.tables ?? []
+  tables: overrides.tables ?? [],
+  encryptionState: overrides.encryptionState ?? "Unencrypted",
+  compressionMethod: overrides.compressionMethod ?? null,
+  compressionLevel: overrides.compressionLevel ?? null
 });
 
 const detailedBackup = summaryBackup({
@@ -83,7 +86,10 @@ const detailedBackup = summaryBackup({
       clickHouseStatus: null,
       startedAt: "2026-07-01T00:01:00Z",
       completedAt: "2026-07-01T00:02:00Z",
-      error: null
+      error: null,
+      isPasswordProtected: false,
+      passwordKeyId: null,
+      passwordKeyAvailable: null
     }]
   }]
 });

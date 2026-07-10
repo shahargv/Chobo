@@ -24,7 +24,9 @@ public sealed class RestoreApplicationService(
     BackupRestoreOperationGate operationGate,
     IAuditService audit,
     ActorContext actor,
-    Serilog.ILogger logger)
+    Serilog.ILogger logger,
+    ICredentialProtector protector,
+    ChoboServer.Repositories.IAesKeyRepository aesKeys)
 {
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
     private readonly Serilog.ILogger _logger = logger.ForContext<RestoreApplicationService>();
@@ -149,6 +151,7 @@ public sealed class RestoreApplicationService(
         foreach (var (table, mapping) in selected)
         {
             var backupShards = await ResolveRestoreSourceShardsAsync(table, mapping, request, cancellationToken);
+            await EnsurePasswordKeysAvailableAsync(backupShards, cancellationToken);
 
             var restoreTable = new RestoreTableEntity
             {
@@ -225,6 +228,35 @@ public sealed class RestoreApplicationService(
         _logger.Information("Restore {RestoreId} queued.", restore.Id);
         await audit.RecordAsync("queued", AuditEntityType.Restore, restore.Id.ToString(), new { operationId = restore.Id, reason = "user" });
         return BackupRestoreMapping.ToDto(await LoadAsync(restore.Id, cancellationToken) ?? restore);
+    }
+
+    private async Task EnsurePasswordKeysAvailableAsync(IReadOnlyList<BackupTableShardEntity> shards, CancellationToken cancellationToken)
+    {
+        var protectedShards = shards.Where(x => x.EncryptedBackupPassword is not null).ToList();
+        var availability = await aesKeys.GetAvailabilitiesAsync(protectedShards.Select(x => x.EncryptedBackupPasswordKeyId).OfType<Guid>(), cancellationToken);
+        var unavailable = protectedShards
+            .Where(x => string.IsNullOrWhiteSpace(x.EncryptedBackupPassword) || x.EncryptedBackupPasswordKeyId is not { } keyId || availability.GetValueOrDefault(keyId) != ChoboServer.Repositories.AesKeyAvailability.Available)
+            .Select(x => $"shard {x.SourceShardNumber} ({x.Id}): key {x.EncryptedBackupPasswordKeyId?.ToString() ?? "(missing id)"}")
+            .ToList();
+        foreach (var shard in protectedShards.Where(x => x.EncryptedBackupPasswordKeyId is { } keyId && availability.GetValueOrDefault(keyId) == ChoboServer.Repositories.AesKeyAvailability.Available))
+        {
+            try
+            {
+                var password = await protector.DecryptAsync(shard.EncryptedBackupPassword, shard.EncryptedBackupPasswordKeyId, cancellationToken);
+                if (string.IsNullOrEmpty(password))
+                {
+                    unavailable.Add($"shard {shard.SourceShardNumber} ({shard.Id}): encrypted password is empty");
+                }
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or FormatException or CryptographicException)
+            {
+                unavailable.Add($"shard {shard.SourceShardNumber} ({shard.Id}): encrypted password is invalid ({ex.Message})");
+            }
+        }
+        if (unavailable.Count > 0)
+        {
+            throw new ArgumentException($"The selected backup shards cannot be restored because their AES password keys are unavailable: {string.Join("; ", unavailable)}.");
+        }
     }
 
     public async Task<IReadOnlyList<RestoreDto>> ListAsync(CancellationToken cancellationToken = default) =>
@@ -507,6 +539,8 @@ public sealed class RestoreApplicationService(
 
         var targetCluster = await db.ClickHouseClusters.Include(x => x.AccessNodes).FirstOrDefaultAsync(x => x.Id == request.TargetClusterId && !x.IsDeleted, cancellationToken)
             ?? throw new ArgumentException("Target cluster was not found.");
+        var previewSettings = request.ClickHouseRestoreSettings
+            ?? (await PreviewSettingsAsync(new RestoreSettingsPreviewRequest(anchor.Id, request.TargetClusterId), cancellationToken)).Settings;
         var initiateRequest = ToInitiateRequest(request, anchor.Id);
         ValidateCreateTableSqlOverrides(initiateRequest);
         var selected = SelectTables(anchor.Tables, initiateRequest);
@@ -572,7 +606,7 @@ public sealed class RestoreApplicationService(
                         plan.Endpoint.Host,
                         plan.Endpoint.Port,
                         plan.LayoutRole,
-                        await BuildRestoreStatementPreviewAsync(plan.BackupShard.BackupTable!, restoreTable, plan.BackupShard, request.ClickHouseRestoreSettings ?? new Dictionary<string, JsonElement>(), cancellationToken)));
+                        await BuildRestoreStatementPreviewAsync(plan.BackupShard.BackupTable!, restoreTable, plan.BackupShard, previewSettings, cancellationToken)));
                 }
             }
 

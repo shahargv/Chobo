@@ -833,12 +833,14 @@ public sealed class BackupRunnerService(
     private static async Task AssignNewShardAttemptStoragePathAsync(ChoboDbContext scopedDb, IAuditService scopedAudit, BackupTableEntity table, BackupTableShardEntity shard, CancellationToken cancellationToken)
     {
         var previousStoragePath = shard.StoragePath;
-        shard.StoragePath = BuildShardAttemptStoragePath(table.StoragePath, shard.StoragePath, shard.SourceShardNumber);
+            var settings = ClickHouseAdvancedSettings.Deserialize(table.Backup!.ClickHouseBackupSettingsJson, ClickHouseAdvancedSettingsKind.Backup);
+            var useZip = shard.EncryptedBackupPassword is not null || ClickHouseAdvancedSettings.RequiresZipArchive(settings);
+            shard.StoragePath = BuildShardAttemptStoragePath(table.StoragePath, shard.StoragePath, shard.SourceShardNumber, useZip);
         await scopedDb.SaveChangesAsync(cancellationToken);
         await scopedAudit.RecordAsync("shard-attempt-path-assigned", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { table.Database, table.Table, sourceShard = shard.SourceShardNumber, previousStoragePath, storagePath = shard.StoragePath });
     }
 
-    private static string BuildShardAttemptStoragePath(string tableStoragePath, string shardStoragePath, int shardNumber)
+    private static string BuildShardAttemptStoragePath(string tableStoragePath, string shardStoragePath, int shardNumber, bool useZip)
     {
         var attemptIndex = shardStoragePath.IndexOf("/attempt-", StringComparison.Ordinal);
         var shardBasePath = attemptIndex >= 0 ? shardStoragePath[..attemptIndex] : shardStoragePath.TrimEnd('/');
@@ -848,7 +850,7 @@ public sealed class BackupRunnerService(
             shardBasePath = string.IsNullOrWhiteSpace(tablePath) ? $"shards/shard-{shardNumber:0000}" : $"{tablePath}/shards/shard-{shardNumber:0000}";
         }
 
-        return $"{shardBasePath}/attempt-{Guid.NewGuid():N}";
+        return $"{shardBasePath}/attempt-{Guid.NewGuid():N}{(useZip ? ".zip" : "")}";
     }
 
     private async Task<BackupShardRunResult?> TryRecoverUnknownSubmittedBackupShardAsync(

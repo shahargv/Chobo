@@ -11,7 +11,9 @@ public static class ClickHouseRestoreSqlBuilder
         ClickHouseStorageDestination destination,
         bool allowNonEmptyTables,
         bool allowDifferentTableDefinition,
-        IReadOnlyDictionary<string, JsonElement> settings)
+        IReadOnlyDictionary<string, JsonElement> settings,
+        string? password = null,
+        bool useSamePasswordForBaseBackup = false)
     {
         var from = ClickHouseSql.Qualified(backupTable.Database, backupTable.Table);
         var to = ClickHouseSql.Qualified(restoreShard.RestoreDatabase, restoreShard.RestoreTableName);
@@ -23,6 +25,14 @@ public static class ClickHouseRestoreSqlBuilder
         if (allowDifferentTableDefinition)
         {
             choboSettings.Add(("allow_different_table_def", "1"));
+        }
+        if (password is not null)
+        {
+            choboSettings.Add(("password", ClickHouseSql.Literal(password)));
+            if (useSamePasswordForBaseBackup)
+            {
+                choboSettings.Add(("use_same_password_for_base_backup", "1"));
+            }
         }
         var settingsClause = ClickHouseAdvancedSettings.ToSettingsClause(settings, choboSettings.Concat(destination.Settings).ToArray());
         return $"RESTORE TABLE {from} AS {to} FROM {destination.Expression}{settingsClause} ASYNC";

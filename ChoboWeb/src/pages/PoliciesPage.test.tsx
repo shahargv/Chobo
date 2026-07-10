@@ -1,7 +1,55 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
-import { backupTypeForPolicyRun, copyRule, excludeTableRule, formatPolicyRetentionSummary, SelectedTablesPreview } from "./PoliciesPage";
+import { ApiContext } from "../api-context";
+import { backupTypeForPolicyRun, copyRule, excludeTableRule, formatPolicyRetentionSummary, Policies, SelectedTablesPreview } from "./PoliciesPage";
+
+describe("optional policy protection", () => {
+  it("defaults password protection and compression to disabled and reveals each independently", async () => {
+    const api = { policies: vi.fn(async () => []), clusters: vi.fn(async () => []), targets: vi.fn(async () => []) };
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+
+    await act(async () => root.render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={["/policies"]}>
+          <Routes><Route path="/policies" element={<ApiContext.Provider value={{ api: api as never, showToast: vi.fn() }}><Policies /></ApiContext.Provider>} /></Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
+    ));
+    await act(async () => { await Promise.resolve(); });
+    const add = Array.from(host.querySelectorAll("button")).find(button => button.textContent?.includes("Add policy"));
+    await act(async () => add!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+
+    expect(host.textContent).toContain("Password protection (optional)");
+    expect(host.textContent).toContain("Compression (optional)");
+    expect(host.textContent).toContain("Leave disabled for normal unencrypted backups");
+    expect(host.textContent).toContain("Leave disabled to preserve the normal backup format");
+    const selects = Array.from(host.querySelectorAll("select"));
+    const password = selects.find(select => select.parentElement?.textContent?.includes("Password protection (optional)"));
+    const compression = selects.find(select => select.parentElement?.textContent?.includes("Compression (optional)"));
+    expect(password?.value).toBe("None");
+    expect(compression?.value).toBe("");
+    expect(host.querySelector('input[type="password"]')).toBeNull();
+
+    await act(async () => {
+      password!.value = "Constant";
+      password!.dispatchEvent(new Event("change", { bubbles: true }));
+      compression!.value = "Lzma";
+      compression!.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(host.querySelector('input[type="password"]')).not.toBeNull();
+    expect(host.textContent).toContain("Compression level (optional)");
+
+    await act(async () => root.unmount());
+    queryClient.clear();
+    host.remove();
+  });
+});
 
 describe("SelectedTablesPreview", () => {
   it("caps 1,000 selected table chips by default and can show all", async () => {

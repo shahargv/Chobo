@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -17,7 +18,10 @@ public sealed class BackupPreparationService(
     BackupRestoreQueueApplicationService queue,
     IAuditService audit,
     Serilog.ILogger logger,
-    IOptionsMonitor<ChoboBackupRestoreOptions> backupRestoreOptions)
+    IOptionsMonitor<ChoboBackupRestoreOptions> backupRestoreOptions,
+    ICredentialProtector protector,
+    IBackupPasswordGenerator passwordGenerator,
+    ChoboServer.Repositories.IAesKeyRepository aesKeys)
 {
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
     private readonly Serilog.ILogger _logger = logger.ForContext<BackupPreparationService>();
@@ -141,10 +145,10 @@ public sealed class BackupPreparationService(
             ? backup.CreatedAt.Subtract(TimeSpan.FromHours(ResolveMaxAgeHoursForBaseBackup(backup.Policy)))
             : (DateTimeOffset?)null;
         var parentTablesByIdentity = backup.BackupType == BackupType.Incremental && backup.PolicyId is not null
-            ? await FindParentFullTablesAsync(backup.PolicyId.Value, selectedTables, baseBackupCutoff, cancellationToken)
+            ? await FindParentFullTablesAsync(backup, selectedTables, baseBackupCutoff, cancellationToken)
             : [];
         var parentShardsByIdentity = backup.BackupType == BackupType.Incremental && backup.PolicyId is not null
-            ? await FindParentFullShardsAsync(backup.PolicyId.Value, selectedTables, baseBackupCutoff, cancellationToken)
+            ? await FindParentFullShardsAsync(backup, selectedTables, baseBackupCutoff, cancellationToken)
             : [];
 
         foreach (var table in selectedTables)
@@ -226,7 +230,7 @@ public sealed class BackupPreparationService(
                         BuildStoragePath(backup, table.Database, table.Table, effectiveShardType, shardParentBackupId),
                         representative,
                         duplicateSourceShards.Contains(representative.ShardNumber));
-                    backupTable.Shards.Add(new BackupTableShardEntity
+                    var backupShard = new BackupTableShardEntity
                     {
                         EffectiveBackupType = effectiveShardType,
                         ParentFullBackupId = shardParentBackupId,
@@ -238,7 +242,9 @@ public sealed class BackupPreparationService(
                         Port = representative.Port,
                         UseTls = representative.UseTls,
                         StoragePath = shardPath
-                    });
+                    };
+                    await ApplyBackupPasswordAsync(backup, parentShard, backupShard, cancellationToken);
+                    backupTable.Shards.Add(backupShard);
                 }
             }
             db.BackupTables.Add(backupTable);
@@ -301,7 +307,7 @@ public sealed class BackupPreparationService(
         string.Equals(database, "information_schema", StringComparison.Ordinal) ||
         string.Equals(database, "INFORMATION_SCHEMA", StringComparison.Ordinal);
 
-    private async Task<Dictionary<string, BackupTableEntity>> FindParentFullTablesAsync(Guid policyId, IReadOnlyList<ClickHouseTableInfo> selectedTables, DateTimeOffset? baseBackupCutoff, CancellationToken cancellationToken)
+    private async Task<Dictionary<string, BackupTableEntity>> FindParentFullTablesAsync(BackupEntity backup, IReadOnlyList<ClickHouseTableInfo> selectedTables, DateTimeOffset? baseBackupCutoff, CancellationToken cancellationToken)
     {
         var selectedIdentities = selectedTables
             .Select(x => ClickHouseBackupIdentity.Table(x.Database, x.Table))
@@ -319,7 +325,7 @@ public sealed class BackupPreparationService(
             .Include(x => x.Shards)
             .AsSplitQuery()
             .Where(x => x.Backup != null &&
-                        x.Backup.PolicyId == policyId &&
+                        x.Backup.PolicyId == backup.PolicyId &&
                         (x.Backup.Status == BackupRunStatus.Succeeded ||
                          x.Backup.Status == BackupRunStatus.PartiallySucceeded) &&
                         x.Status == BackupTableStatus.Succeeded &&
@@ -330,13 +336,30 @@ public sealed class BackupPreparationService(
             .OrderByDescending(x => x.Backup!.CompletedAt ?? x.Backup.CreatedAt)
             .ToListAsync(cancellationToken);
 
-        return candidates
-            .Where(x => selectedIdentities.Contains(ClickHouseBackupIdentity.Table(x.Database, x.Table)))
-            .GroupBy(x => ClickHouseBackupIdentity.Table(x.Database, x.Table), StringComparer.Ordinal)
-            .ToDictionary(x => x.Key, x => x.First(), StringComparer.Ordinal);
+        var relevant = candidates.Where(x => selectedIdentities.Contains(ClickHouseBackupIdentity.Table(x.Database, x.Table))).ToList();
+        var availability = await aesKeys.GetAvailabilitiesAsync(relevant.SelectMany(x => x.Shards).Select(x => x.EncryptedBackupPasswordKeyId).OfType<Guid>(), cancellationToken);
+        var usable = new Dictionary<string, BackupTableEntity>(StringComparer.Ordinal);
+        foreach (var group in relevant.GroupBy(x => ClickHouseBackupIdentity.Table(x.Database, x.Table), StringComparer.Ordinal))
+        {
+            var candidate = group.First();
+            var candidateUsable = true;
+            foreach (var shard in candidate.Shards)
+            {
+                if (!await IsPasswordUsableAsync(shard, availability, cancellationToken))
+                {
+                    candidateUsable = false;
+                    break;
+                }
+            }
+            if (candidateUsable)
+            {
+                usable[group.Key] = candidate;
+            }
+        }
+        return usable;
     }
 
-    private async Task<IReadOnlyList<BackupTableShardEntity>> FindParentFullShardsAsync(Guid policyId, IReadOnlyList<ClickHouseTableInfo> selectedTables, DateTimeOffset? baseBackupCutoff, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<BackupTableShardEntity>> FindParentFullShardsAsync(BackupEntity backup, IReadOnlyList<ClickHouseTableInfo> selectedTables, DateTimeOffset? baseBackupCutoff, CancellationToken cancellationToken)
     {
         var selectedIdentities = selectedTables
             .Select(x => ClickHouseBackupIdentity.Table(x.Database, x.Table))
@@ -354,7 +377,7 @@ public sealed class BackupPreparationService(
             .AsSplitQuery()
             .Where(x => x.BackupTable != null &&
                         x.BackupTable.Backup != null &&
-                        x.BackupTable.Backup.PolicyId == policyId &&
+                        x.BackupTable.Backup.PolicyId == backup.PolicyId &&
                         (x.BackupTable.Backup.Status == BackupRunStatus.Succeeded ||
                          x.BackupTable.Backup.Status == BackupRunStatus.PartiallySucceeded) &&
                         x.Status == BackupTableStatus.Succeeded &&
@@ -365,9 +388,92 @@ public sealed class BackupPreparationService(
             .OrderByDescending(x => x.BackupTable!.Backup!.CompletedAt ?? x.BackupTable.Backup.CreatedAt)
             .ToListAsync(cancellationToken);
 
-        return candidates
+        var relevant = candidates
             .Where(x => x.BackupTable is not null && selectedIdentities.Contains(ClickHouseBackupIdentity.Table(x.BackupTable.Database, x.BackupTable.Table)))
             .ToList();
+        var availability = await aesKeys.GetAvailabilitiesAsync(relevant.Select(x => x.EncryptedBackupPasswordKeyId).OfType<Guid>(), cancellationToken);
+        var usableCandidates = new List<BackupTableShardEntity>();
+        foreach (var group in relevant.GroupBy(ParentCandidateIdentity, StringComparer.Ordinal))
+        {
+            var candidate = group.First();
+            if (await IsPasswordUsableAsync(candidate, availability, cancellationToken))
+            {
+                usableCandidates.Add(candidate);
+            }
+            else
+            {
+                await audit.RecordAsync("incremental-shard-fallback-to-full", AuditEntityType.Backup, backup.Id.ToString(), new
+                {
+                    candidate.BackupTable!.Database,
+                    candidate.BackupTable.Table,
+                    sourceShard = candidate.SourceShardNumber,
+                    sourceNode = $"{candidate.Host}:{candidate.Port}",
+                    reason = "parent-password-key-unavailable",
+                    passwordKeyId = candidate.EncryptedBackupPasswordKeyId
+                });
+            }
+        }
+        return usableCandidates;
+    }
+
+    private async Task ApplyBackupPasswordAsync(BackupEntity backup, BackupTableShardEntity? parent, BackupTableShardEntity shard, CancellationToken cancellationToken)
+    {
+        string? password = null;
+        if (parent?.EncryptedBackupPassword is not null)
+        {
+            password = await protector.DecryptAsync(parent.EncryptedBackupPassword, parent.EncryptedBackupPasswordKeyId, cancellationToken);
+        }
+        else if (parent is null && backup.Policy?.PasswordMode == BackupPasswordMode.Constant)
+        {
+            password = await protector.DecryptAsync(backup.Policy.EncryptedBackupPassword, backup.Policy.EncryptedBackupPasswordKeyId, cancellationToken)
+                ?? throw new InvalidOperationException("The policy backup password is unavailable.");
+        }
+        else if (parent is null && backup.Policy?.PasswordMode == BackupPasswordMode.GeneratedPerTableShard)
+        {
+            password = passwordGenerator.Generate();
+        }
+
+        var protectedPassword = await protector.EncryptAsync(password, cancellationToken);
+        shard.EncryptedBackupPassword = protectedPassword?.Ciphertext;
+        shard.EncryptedBackupPasswordKeyId = protectedPassword?.KeyId;
+    }
+
+    private static string ParentCandidateIdentity(BackupTableShardEntity shard)
+    {
+        var table = shard.BackupTable!;
+        var placement = ClickHouseSql.IsReplicatedMergeTreeEngine(table.Engine)
+            ? $"shard:{shard.SourceShardNumber}"
+            : $"node:{shard.SourceShardNumber}:{shard.ReplicaNumber}:{shard.Host}:{shard.Port}";
+        return $"{ClickHouseBackupIdentity.Table(table.Database, table.Table)}:{placement}";
+    }
+
+    private static bool IsPasswordUsable(BackupTableShardEntity shard, IReadOnlyDictionary<Guid, ChoboServer.Repositories.AesKeyAvailability> availability) =>
+        shard.EncryptedBackupPassword is null ||
+        shard.EncryptedBackupPasswordKeyId is { } keyId && availability.GetValueOrDefault(keyId) == ChoboServer.Repositories.AesKeyAvailability.Available;
+
+    private async Task<bool> IsPasswordUsableAsync(BackupTableShardEntity shard, IReadOnlyDictionary<Guid, ChoboServer.Repositories.AesKeyAvailability> availability, CancellationToken cancellationToken)
+    {
+        if (shard.EncryptedBackupPassword is not null && string.IsNullOrWhiteSpace(shard.EncryptedBackupPassword))
+        {
+            return false;
+        }
+        if (!IsPasswordUsable(shard, availability))
+        {
+            return false;
+        }
+        if (shard.EncryptedBackupPassword is null)
+        {
+            return true;
+        }
+        try
+        {
+            var password = await protector.DecryptAsync(shard.EncryptedBackupPassword, shard.EncryptedBackupPasswordKeyId, cancellationToken);
+            return !string.IsNullOrEmpty(password);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or FormatException or CryptographicException)
+        {
+            return false;
+        }
     }
 
     private int ResolveMaxAgeHoursForBaseBackup(BackupPolicyEntity policy)

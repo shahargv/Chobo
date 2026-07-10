@@ -3,6 +3,10 @@ using ChoboServer.Data;
 using ChoboServer.Services;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Migrations.Operations;
+using System.Reflection;
 
 namespace Chobo.Tests;
 
@@ -55,7 +59,7 @@ public sealed class SchemaUpgradeServiceTests
     }
 
     [Fact]
-    public async Task Older_database_schema_is_rejected_when_no_upgrade_path_is_registered()
+    public async Task Version_one_database_schema_is_upgraded_to_version_two()
     {
         await using var fixture = await SchemaFixture.CreateAsync();
         var schema = new SchemaStateEntity
@@ -68,13 +72,31 @@ public sealed class SchemaUpgradeServiceTests
         fixture.Db.SchemaStates.Add(schema);
         await fixture.Db.SaveChangesAsync();
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => new SchemaUpgradeService(fixture.Db).UpgradeAsync(schema));
+        await new SchemaUpgradeService(fixture.Db).UpgradeAsync(schema);
 
-        Assert.Contains("No upgrade path is registered", ex.Message);
         fixture.Db.ChangeTracker.Clear();
         var stored = await fixture.Db.SchemaStates.SingleAsync();
-        Assert.Equal(ChoboApi.SchemaVersion - 1, stored.SchemaVersion);
-        Assert.Equal("legacy-product", stored.ProductVersion);
+        Assert.Equal(ChoboApi.SchemaVersion, stored.SchemaVersion);
+        Assert.Equal("000000000002_PasswordProtectedBackups", stored.AppliedMigrationId);
+        Assert.Equal(ChoboApi.ProductVersion, stored.ProductVersion);
+    }
+
+    [Fact]
+    public void Ef_schema_v2_migration_is_additive_and_defaults_existing_policies_to_unprotected()
+    {
+        var migration = new ChoboServer.Data.Migrations.PasswordProtectedBackups();
+        var builder = new MigrationBuilder("Microsoft.EntityFrameworkCore.Sqlite");
+        typeof(ChoboServer.Data.Migrations.PasswordProtectedBackups)
+            .GetMethod("Up", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(migration, [builder]);
+
+        var columns = builder.Operations.OfType<AddColumnOperation>().ToList();
+        Assert.Equal(7, columns.Count);
+        var passwordMode = Assert.Single(columns, x => x.Table == "BackupPolicies" && x.Name == "PasswordMode");
+        Assert.False(passwordMode.IsNullable);
+        Assert.Equal(0, passwordMode.DefaultValue);
+        Assert.All(columns.Where(x => x.Name != "PasswordMode"), column => Assert.True(column.IsNullable));
+        Assert.DoesNotContain(builder.Operations, operation => operation is DropColumnOperation or DropTableOperation);
     }
 
     private sealed class SchemaFixture : IAsyncDisposable

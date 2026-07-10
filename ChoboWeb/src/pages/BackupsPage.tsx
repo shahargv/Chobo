@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ArrowUpToLine, Ban, ExternalLink, Info, Pin, PinOff, Play, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
+import { Archive, ArrowUpToLine, Ban, CheckCircle2, ExternalLink, Info, LockKeyhole, Pin, PinOff, Play, RefreshCw, RotateCcw, Trash2, TriangleAlert, XCircle } from "lucide-react";
 import type { BackupDto, BackupPolicyDto, BackupRunStatus, BackupTableDto, BackupTableShardDto, BackupType } from "../api/generated";
 import { useApi } from "../api-context";
 import { ConfirmDialog, DataTable, Detail, Drawer, Empty, ErrorDetailDialog, ExpandableErrorText, Input, Page, Select, Status } from "../components/ui";
@@ -76,7 +76,7 @@ export function Backups() {
           <button className="ghost" disabled={selectedBackups.length === 0} onClick={() => setSelectedBackupIds([])}>Clear</button>
           <button className="danger" disabled={selectedBackups.length === 0} onClick={() => setDeleteTargets(selectedBackups)}><Trash2 size={16} /> Delete selected</button>
         </div>
-        <DataTable headers={["Select", "Backup ID", "Status", "Completion Time", "Type", "Initiated by", "Created", "Policy", "Tables", "Size", "Pinned", "Actions"]} isLoading={backups.isLoading}>
+        <DataTable headers={["Select", "Backup ID", "Status", "Completion Time", "Type", "Initiated by", "Created", "Policy", "Tables", "Size", "Attributes", "Actions"]} isLoading={backups.isLoading}>
           {backupRows.map((backup) => (
             <tr key={backup.id}>
               <td><input className="row-checkbox" aria-label={`Select backup ${backup.id}`} type="checkbox" checked={selectedBackupIds.includes(backup.id)} disabled={isBackupDeleted(backup)} onChange={(event) => setSelectedBackupIds((ids) => event.target.checked ? [...new Set([...ids, backup.id])] : ids.filter((id) => id !== backup.id))} /></td>
@@ -89,7 +89,7 @@ export function Backups() {
               <td>{backupPolicyLink(backup.policyId, policyById)}</td>
               <td>{backup.tableCount}</td>
               <td data-sort-value={backup.backupSizeBytes}>{formatBytes(backup.backupSizeBytes)}</td>
-              <td>{backup.isPinned ? "yes" : "no"}</td>
+              <td><BackupAttributes backup={backup} /></td>
               <td className="actions backup-history-actions">
                 <button className="ghost icon-button" title="Open backup details" aria-label={`Open backup details for ${backup.id}`} onClick={() => {
                   setSelectedBackupId(backup.id);
@@ -107,6 +107,25 @@ export function Backups() {
       {selectedBackupId && <BackupDrawer backupId={selectedBackupId} onClose={() => { setSelectedBackupId(null); navigate("/backups"); }} onOpenBackup={(id) => { setSelectedBackupId(id); navigate(`/backups/${id}`); }} />}
     </Page>
   );
+}
+
+export function BackupEncryptionIndicator({ state, showText = false }: { state: BackupDto["encryptionState"]; showText?: boolean }) {
+  if (state === "Unencrypted") return <span className="hint">none</span>;
+  if (state === "EncryptedMissingKey") {
+    return <span className="backup-encryption-indicator encryption-missing" title="Encrypted backup has a missing or invalid AES key"><LockKeyhole size={16} aria-label="Encrypted backup key unavailable" /><TriangleAlert size={13} />{showText && " encrypted; key unavailable"}</span>;
+  }
+  return <span className="backup-encryption-indicator encryption-available" title="Encrypted backup AES keys are available"><LockKeyhole size={16} aria-label="Encrypted backup key available" /><CheckCircle2 size={13} />{showText && " encrypted; key available"}</span>;
+}
+
+export function BackupAttributes({ backup }: { backup: BackupDto }) {
+  const compression = backup.compressionMethod
+    ? `${backup.compressionMethod}${backup.compressionLevel != null ? `, level ${backup.compressionLevel}` : ""}`
+    : "none";
+  return <span className="backup-attributes" aria-label={`Backup attributes: ${backup.encryptionState}; compression ${compression}; ${backup.isPinned ? "pinned" : "not pinned"}`}>
+    <span className="backup-attribute" title={backup.encryptionState === "Unencrypted" ? "Protection: unencrypted" : backup.encryptionState === "EncryptedMissingKey" ? "Protection: encrypted; AES key unavailable" : "Protection: encrypted; AES key available"}><BackupEncryptionIndicator state={backup.encryptionState} /></span>
+    <span className="backup-attribute" title={`Compression: ${compression}`}><Archive size={16} aria-label={`Compression: ${compression}`} /></span>
+    <span className={`backup-attribute${backup.isPinned ? " pinned" : ""}`} title={backup.isPinned ? "Pinned: yes" : "Pinned: no"}><Pin size={16} aria-label={backup.isPinned ? "Pinned: yes" : "Pinned: no"} /></span>
+  </span>;
 }
 
 export function BackupDrawer({ backupId, onClose, onOpenBackup }: { backupId: string; onClose: () => void; onOpenBackup?: (backupId: string) => void }) {
@@ -175,6 +194,8 @@ export function BackupDrawer({ backupId, onClose, onOpenBackup }: { backupId: st
         <div className="detail-list">
           <Detail label="Backup id" value={current.id} />
           <Detail label="Status" value={<Status value={current.status} />} />
+          <Detail label="Password protection" value={<BackupEncryptionIndicator state={current.encryptionState} showText />} />
+          <Detail label="Compression" value={current.compressionMethod ? `${current.compressionMethod}${current.compressionLevel != null ? `, level ${current.compressionLevel}` : ""}` : "none"} />
           <Detail label="Completion Time" value={formatCompletionTime(current.endedAt ?? current.deletedAt, current.startedAt, current.createdAt)} />
           <Detail label="Initiated by" value={backupInitiator(current, scheduleById)} />
           <Detail label="Backup size" value={formatBytes(detailBackupSizeBytes)} />
@@ -227,7 +248,7 @@ export function BackupDrawer({ backupId, onClose, onOpenBackup }: { backupId: st
 export function BackupTablesTable({ tableRows, isLoading }: { tableRows: BackupTableDto[]; isLoading: boolean }) {
   const [errorDetail, setErrorDetail] = useState<{ title: string; error: string } | null>(null);
   return <>
-  <DataTable headers={["Table", "Engine", "Shard", "Status", "Source node", "Size", "Storage path", "Details"]} isLoading={isLoading}>
+  <DataTable headers={["Table", "Engine", "Shard", "Status", "Password key", "Source node", "Size", "Storage path", "Details"]} isLoading={isLoading}>
     {tableRows.flatMap((table) => {
       if (table.shards.length === 0) {
         return [
@@ -236,6 +257,7 @@ export function BackupTablesTable({ tableRows, isLoading }: { tableRows: BackupT
             <td>{table.engine}</td>
             <td>table</td>
             <td><Status value={table.status} /></td>
+            <td>none</td>
             <td>none</td>
             <td data-sort-value={calculateTableSizeBytes(table)}>{formatBytes(calculateTableSizeBytes(table))}</td>
             <td className="mono wide-cell">{table.storagePath}</td>
@@ -253,6 +275,7 @@ export function BackupTablesTable({ tableRows, isLoading }: { tableRows: BackupT
             <td>{table.engine}</td>
             <td>{formatShardLabel(shard)}</td>
             <td><Status value={shard.status} /></td>
+            <td>{shard.isPasswordProtected ? <span className="encryption-key-status mono" title={shard.passwordKeyAvailable ? "AES key available" : "AES key missing or invalid"}>{shard.passwordKeyAvailable ? <CheckCircle2 size={15} aria-label="AES key available" /> : <XCircle size={15} aria-label="AES key missing or invalid" />} {shard.passwordKeyId ?? "missing id"}</span> : "none"}</td>
             <td>{formatShardEndpoint(shard)}</td>
             <td data-sort-value={shard.backupSizeBytes}>{formatBytes(shard.backupSizeBytes)}</td>
             <td className="mono wide-cell">{shard.storagePath}</td>

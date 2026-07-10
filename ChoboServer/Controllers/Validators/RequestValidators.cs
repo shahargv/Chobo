@@ -140,6 +140,10 @@ public sealed class UpsertPolicyRequestValidator : AbstractValidator<UpsertPolic
         RuleFor(x => x.ContentMode).IsInEnum();
         RuleFor(x => x.FailedBackupRetentionMode).IsInEnum();
         RuleFor(x => x.MaxAgeHoursForBaseBackup).GreaterThan(0).When(x => x.MaxAgeHoursForBaseBackup is not null);
+        RuleFor(x => x.PasswordMode).IsInEnum();
+        RuleFor(x => x.BackupPassword).MaximumLength(4096).When(x => x.BackupPassword is not null);
+        RuleFor(x => x.CompressionMethod).IsInEnum().When(x => x.CompressionMethod is not null);
+        RuleFor(x => x.CompressionLevel).NotNull().When(x => x.CompressionMethod is not null && x.CompressionLevel is not null);
     }
 }
 
@@ -565,6 +569,10 @@ public sealed class BackupPolicyExportValidator : AbstractValidator<BackupPolicy
         RuleFor(x => x.Retention).SetValidator(new BackupRetentionDtoValidator()!).When(x => x.Retention is not null);
         RuleFor(x => x.ContentMode).IsInEnum();
         RuleFor(x => x.FailedBackupRetentionMode).IsInEnum();
+        RuleFor(x => x.PasswordMode).IsInEnum();
+        RuleFor(x => x.EncryptedBackupPassword).MaximumLength(200000).When(x => x.EncryptedBackupPassword is not null);
+        RuleFor(x => x.EncryptedBackupPasswordKeyId).NotEmpty().When(x => x.EncryptedBackupPassword is not null);
+        RuleFor(x => x.CompressionMethod).IsInEnum().When(x => x.CompressionMethod is not null);
         RuleFor(x => x.MaxAgeHoursForBaseBackup).GreaterThan(0).When(x => x.MaxAgeHoursForBaseBackup is not null);
         RuleFor(x => x.CreatedAt).NotEqual(default(DateTimeOffset));
     }

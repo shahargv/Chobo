@@ -43,8 +43,11 @@ Persist `Chobo:DataDirectory`. It contains:
 - initialization state;
 - local application log storage;
 - SQLite self-backups if enabled and stored under the data directory.
+- `secrets/aes-keys`, whose ID-named files decrypt password-protected backup metadata.
 
 Protect this directory with filesystem permissions and normal server backups.
+
+Back up `secrets/aes-keys` separately before upgrades, migrations, and disaster recovery. Password plaintext is never exported; config/data exports and backup manifests carry only Chobo-encrypted password ciphertext plus its AES key ID. An import is allowed when the key is missing, but affected policies and backups remain unusable until the exact key file is restored. See [Upgrading Chobo](Upgrading.md).
 
 ## Access Tokens
 
@@ -99,6 +102,6 @@ ChoboCli clusters update-credentials --id <cluster-id> --username <user> --passw
 ChoboCli targets update-s3 --id <target-id> --name prod-s3 --endpoint https://s3.example.com --bucket chobo-backups --access-key <key> --secret-key <secret>
 ```
 
-Never import raw access tokens, decrypted credentials, or local AES key material from another server.
+Never put raw access tokens, decrypted credentials, or AES key material inside an export envelope. Transfer required AES key files separately through an approved secret-backup channel.
 
 
