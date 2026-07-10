@@ -1190,4 +1190,4 @@ td code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-s
   min-width: 0;
 }
 
-.backup-encryption-indicator,.encryption-key-status{display:inline-flex;align-items:center;gap:.3rem}.encryption-available{color:var(--success,#16803c)}.encryption-missing{color:var(--danger,#b42318)}
+.backup-encryption-indicator,.encryption-key-status{display:inline-flex;align-items:center;gap:.3rem}.encryption-unencrypted,.encryption-available{color:var(--success,#16803c)}.encryption-missing{color:var(--danger,#b42318)}

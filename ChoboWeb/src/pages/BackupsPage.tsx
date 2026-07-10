@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { Archive, ArrowUpToLine, Ban, CheckCircle2, ExternalLink, Info, LockKeyhole, Pin, PinOff, Play, RefreshCw, RotateCcw, Trash2, TriangleAlert, XCircle } from "lucide-react";
+import { Archive, ArrowUpToLine, Ban, CheckCircle2, ExternalLink, Info, LockKeyhole, LockKeyholeOpen, Pin, PinOff, Play, RefreshCw, RotateCcw, Trash2, XCircle } from "lucide-react";
 import type { BackupDto, BackupPolicyDto, BackupRunStatus, BackupTableDto, BackupTableShardDto, BackupType } from "../api/generated";
 import { useApi } from "../api-context";
 import { ConfirmDialog, DataTable, Detail, Drawer, Empty, ErrorDetailDialog, ExpandableErrorText, Input, Page, Select, Status } from "../components/ui";
@@ -110,11 +110,11 @@ export function Backups() {
 }
 
 export function BackupEncryptionIndicator({ state, showText = false }: { state: BackupDto["encryptionState"]; showText?: boolean }) {
-  if (state === "Unencrypted") return <span className="hint">none</span>;
+  if (state === "Unencrypted") return <span className="backup-encryption-indicator encryption-unencrypted" title="Backup is unencrypted; no AES key is required"><LockKeyholeOpen size={16} aria-label="Backup is unencrypted" />{showText && " none"}</span>;
   if (state === "EncryptedMissingKey") {
-    return <span className="backup-encryption-indicator encryption-missing" title="Encrypted backup has a missing or invalid AES key"><LockKeyhole size={16} aria-label="Encrypted backup key unavailable" /><TriangleAlert size={13} />{showText && " encrypted; key unavailable"}</span>;
+    return <span className="backup-encryption-indicator encryption-missing" title="Encrypted backup has a missing or invalid AES key"><LockKeyhole size={16} aria-label="Encrypted backup key unavailable" />{showText && " encrypted; key unavailable"}</span>;
   }
-  return <span className="backup-encryption-indicator encryption-available" title="Encrypted backup AES keys are available"><LockKeyhole size={16} aria-label="Encrypted backup key available" /><CheckCircle2 size={13} />{showText && " encrypted; key available"}</span>;
+  return <span className="backup-encryption-indicator encryption-available" title="Encrypted backup AES keys are available"><LockKeyhole size={16} aria-label="Encrypted backup key available" />{showText && " encrypted; key available"}</span>;
 }
 
 export function BackupAttributes({ backup }: { backup: BackupDto }) {
