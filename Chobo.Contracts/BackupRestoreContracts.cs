@@ -22,6 +22,8 @@ public enum BackupTableStatus { Queued, Running, Succeeded, PartiallySucceeded, 
 
 public enum BackupTriggerType { Manual, Scheduled }
 
+public enum BackupEncryptionState { Unencrypted, EncryptedKeyAvailable, EncryptedMissingKey }
+
 public enum RestoreRunStatus { Queued, Running, Succeeded, PartiallySucceeded, Failed, Canceled }
 
 public enum RestoreTableStatus { Queued, Running, Succeeded, PartiallySucceeded, Failed, Skipped }
@@ -62,7 +64,10 @@ public sealed record BackupDto(
     IReadOnlyDictionary<string, JsonElement> ClickHouseBackupSettings,
     IReadOnlyList<Guid> RelatedFullBackupIds,
     IReadOnlyList<Guid> ChildBackupIds,
-    IReadOnlyList<BackupTableDto> Tables);
+    IReadOnlyList<BackupTableDto> Tables,
+    BackupEncryptionState EncryptionState = BackupEncryptionState.Unencrypted,
+    BackupCompressionMethod? CompressionMethod = null,
+    int? CompressionLevel = null);
 
 public sealed record BackupTableDto(
     Guid Id,
@@ -104,7 +109,10 @@ public sealed record BackupTableShardDto(
     string? ClickHouseStatus,
     DateTimeOffset? StartedAt,
     DateTimeOffset? CompletedAt,
-    string? Error);
+    string? Error,
+    bool IsPasswordProtected = false,
+    Guid? PasswordKeyId = null,
+    bool? PasswordKeyAvailable = null);
 
 public sealed record ManualBackupRequest(
     Guid ClusterId,

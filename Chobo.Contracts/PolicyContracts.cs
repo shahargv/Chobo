@@ -15,6 +15,10 @@ public enum FailedBackupRetentionMode
 
 public enum BackupContentMode { SchemaAndData, SchemaOnly }
 
+public enum BackupPasswordMode { None, Constant, GeneratedPerTableShard }
+
+public enum BackupCompressionMethod { Store, Deflate, Bzip2, Lzma, Zstd, Xz }
+
 public sealed record BackupRetentionDto(
     int? FullRetentionMinutes,
     int? IncrementalRetentionMinutes,
@@ -56,7 +60,12 @@ public sealed record BackupPolicyDto(
     DateTimeOffset CreatedAt,
     DateTimeOffset? UpdatedAt,
     int? MaxAgeHoursForBaseBackup = null,
-    int EffectiveMaxAgeHoursForBaseBackup = 0);
+    int EffectiveMaxAgeHoursForBaseBackup = 0,
+    BackupPasswordMode PasswordMode = BackupPasswordMode.None,
+    bool HasConfiguredPassword = false,
+    bool? PasswordKeyAvailable = null,
+    BackupCompressionMethod? CompressionMethod = null,
+    int? CompressionLevel = null);
 
 public sealed record UpsertPolicyRequest(
     string Name,
@@ -68,7 +77,11 @@ public sealed record UpsertPolicyRequest(
     FailedBackupRetentionMode FailedBackupRetentionMode = FailedBackupRetentionMode.KeepAndExcludeFromMinBackupsToKeep,
     IReadOnlyDictionary<string, JsonElement>? ClickHouseBackupSettings = null,
     IReadOnlyDictionary<string, JsonElement>? ClickHouseRestoreSettings = null,
-    int? MaxAgeHoursForBaseBackup = null);
+    int? MaxAgeHoursForBaseBackup = null,
+    BackupPasswordMode PasswordMode = BackupPasswordMode.None,
+    string? BackupPassword = null,
+    BackupCompressionMethod? CompressionMethod = null,
+    int? CompressionLevel = null);
 
 public sealed record PolicySelector(int Version, IReadOnlyList<PolicySelectorRule> Rules)
 {

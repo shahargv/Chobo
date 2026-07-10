@@ -9,10 +9,16 @@ public sealed class ClickHouseAdvancedSettingsTests
     public void Normalize_rejects_chobo_managed_settings()
     {
         using var backup = JsonDocument.Parse("{\"base_backup\":\"s3://custom\"}");
+        using var backupPassword = JsonDocument.Parse("{\"password\":\"secret\"}");
         using var restore = JsonDocument.Parse("{\"allow_non_empty_tables\":true}");
+        using var restorePassword = JsonDocument.Parse("{\"password\":\"secret\"}");
+        using var restoreBasePassword = JsonDocument.Parse("{\"use_same_password_for_base_backup\":true}");
 
         Assert.Throws<ArgumentException>(() => ClickHouseAdvancedSettings.Normalize(ToDictionary(backup), ClickHouseAdvancedSettingsKind.Backup));
+        Assert.Throws<ArgumentException>(() => ClickHouseAdvancedSettings.Normalize(ToDictionary(backupPassword), ClickHouseAdvancedSettingsKind.Backup));
         Assert.Throws<ArgumentException>(() => ClickHouseAdvancedSettings.Normalize(ToDictionary(restore), ClickHouseAdvancedSettingsKind.Restore));
+        Assert.Throws<ArgumentException>(() => ClickHouseAdvancedSettings.Normalize(ToDictionary(restorePassword), ClickHouseAdvancedSettingsKind.Restore));
+        Assert.Throws<ArgumentException>(() => ClickHouseAdvancedSettings.Normalize(ToDictionary(restoreBasePassword), ClickHouseAdvancedSettingsKind.Restore));
     }
 
     [Fact]

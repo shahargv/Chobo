@@ -199,6 +199,9 @@ button:disabled, .primary:disabled, .secondary:disabled, .ghost:disabled, .dange
   flex-wrap: nowrap;
   gap: 6px;
 }
+.backup-attributes { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+.backup-attribute { display: inline-flex; align-items: center; color: var(--muted); }
+.backup-attribute.pinned { color: var(--primary); }
 .backup-history-filter {
   align-items: end;
   gap: 16px;
@@ -1187,3 +1190,4 @@ td code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-s
   min-width: 0;
 }
 
+.backup-encryption-indicator,.encryption-key-status{display:inline-flex;align-items:center;gap:.3rem}.encryption-unencrypted,.encryption-available{color:var(--success,#16803c)}.encryption-missing{color:var(--danger,#b42318)}

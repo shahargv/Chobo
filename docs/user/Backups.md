@@ -176,6 +176,8 @@ ChoboCli backups list --cluster-name prod-cluster --table-name sales.orders
 ChoboCli backups list --status PartiallySucceeded
 ```
 
+Password-protected and compressed backups are single `.zip` objects. In backup history, a healthy lock/check means every protected shard's AES key is available; a warning lock means at least one key is missing or invalid. Backup details show the affected shard and AES key ID without exposing ciphertext or password plaintext. A compressed-only backup remains `Unencrypted` and reports its effective compression method and level separately.
+
 ## What Chobo Backs Up
 
 For each selected table, Chobo preserves the table definition so the backup can be inspected and used for restore planning later.

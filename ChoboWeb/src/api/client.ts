@@ -9,6 +9,7 @@ import type {
   BackupGarbageCollectorQueueItemDto,
   BackupGarbageCollectorStatusDto,
   BackupMetadataRecoveryResult,
+  ImportResultDto,
   BackupRestoreQueueItemDto,
   BackupRestoreQueueKind,
   BackupRestoreQueueStatus,
@@ -172,9 +173,9 @@ export class ChoboApiClient {
   clearAudits(before: string) { return this.post<{ deleted: number }>("audit/clear", { before }); }
 
   exportData() { return this.get<ExportEnvelope>("data/export"); }
-  importData(envelope: ExportEnvelope) { return this.post<void>("data/import", envelope); }
+  importData(envelope: ExportEnvelope) { return this.post<ImportResultDto>("data/import", envelope); }
   exportConfig() { return this.get<ExportEnvelope>("config/export"); }
-  importConfig(envelope: ExportEnvelope) { return this.post<void>("config/import", envelope); }
+  importConfig(envelope: ExportEnvelope) { return this.post<ImportResultDto>("config/import", envelope); }
 
   private get<T>(path: string) { return this.request<T>(path); }
   private requestText(path: string, options: { accept?: string } = {}) { return this.requestRaw(path, { accept: options.accept }).then((response) => response.text()); }

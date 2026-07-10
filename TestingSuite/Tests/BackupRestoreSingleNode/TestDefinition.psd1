@@ -61,9 +61,21 @@
             ExpectTextNotContains = @('{backupStore.SecretKey}')
         }
         @{
+            Name = 'add-protected-policy'
+            Type = 'Cli'
+            Args = @('policies', 'add', '--name', 'single-node-protected', '--source-cluster-id', '{sourceCluster.id}', '--target-id', '{target.id}', '--selector-file', '/suite/Tests/BackupRestoreSingleNode/selector-all.json', '--password-mode', 'constant', '--backup-password', 'SingleNode-System-Password!')
+            SaveJsonAs = 'protectedPolicy'
+            ExpectJson = @(
+                @{ Path = 'passwordMode'; Equals = 'Constant' }
+                @{ Path = 'hasConfiguredPassword'; Equals = $true }
+                @{ Path = 'passwordKeyAvailable'; Equals = $true }
+            )
+            ExpectTextNotContains = 'SingleNode-System-Password!'
+        }
+        @{
             Name = 'start-manual-backup'
             Type = 'Cli'
-            Args = @('backup', 'manual', '--cluster-id', '{sourceCluster.id}', '--target-id', '{target.id}', '--selector-file', '/suite/Tests/BackupRestoreSingleNode/selector-all.json')
+            Args = @('backup', 'manual', '--policy-id', '{protectedPolicy.id}')
             SaveJsonAs = 'backup'
             ExpectJson = @(
                 @{ Path = 'id'; NotEmpty = $true }
@@ -77,6 +89,19 @@
             ExpectJson = @(
                 @{ Path = 'status'; Equals = 'Succeeded' }
             )
+        }
+        @{
+            Name = 'show-protected-backup'
+            Type = 'Cli'
+            Args = @('backups', 'show', '--id', '{backup.id}')
+            ExpectJson = @(
+                @{ Path = 'encryptionState'; Equals = 'EncryptedKeyAvailable' }
+                @{ Path = 'tables[0].shards[0].isPasswordProtected'; Equals = $true }
+                @{ Path = 'tables[0].shards[0].passwordKeyAvailable'; Equals = $true }
+                @{ Path = 'tables[0].shards[0].passwordKeyId'; NotEmpty = $true }
+                @{ Path = 'tables[0].shards[0].storagePath'; Contains = '.zip' }
+            )
+            ExpectTextNotContains = 'SingleNode-System-Password!'
         }
         @{
             Name = 'show-backup-single-shard-progress'

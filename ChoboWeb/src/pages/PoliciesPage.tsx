@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import { CalendarClock, Copy, ListFilter, Play, Save, X } from "lucide-react";
-import type { BackupContentMode, BackupPolicyDto, BackupType, FailedBackupRetentionMode, PolicyMatchKind, PolicySelector, PolicySelectorAction, PolicySelectorRule, UpsertPolicyRequest } from "../api/generated";
+import type { BackupCompressionMethod, BackupContentMode, BackupPasswordMode, BackupPolicyDto, BackupType, FailedBackupRetentionMode, PolicyMatchKind, PolicySelector, PolicySelectorAction, PolicySelectorRule, UpsertPolicyRequest } from "../api/generated";
 import { useApi } from "../api-context";
 import { DataTable, Input, Page, Select } from "../components/ui";
 import { ClickHouseAdvancedSettingsEditor, type ClickHouseSettings } from "../components/ClickHouseAdvancedSettingsEditor";
@@ -20,12 +20,12 @@ export function Policies() {
   const [editing, setEditing] = useState<BackupPolicyDto | null>(null);
   const [createdPolicy, setCreatedPolicy] = useState<BackupPolicyDto | null>(null);
   const [runPolicyTarget, setRunPolicyTarget] = useState<BackupPolicyDto | null>(null);
-  const defaultPolicyDraft = (): UpsertPolicyRequest => ({ name: "", sourceClusterId: "", targetId: "", selector: emptySelector, contentMode: "SchemaAndData", retention: { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 }, maxAgeHoursForBaseBackup: null, failedBackupRetentionMode: "KeepAndExcludeFromMinBackupsToKeep", clickHouseBackupSettings: {}, clickHouseRestoreSettings: {} });
+  const defaultPolicyDraft = (): UpsertPolicyRequest => ({ name: "", sourceClusterId: "", targetId: "", selector: emptySelector, contentMode: "SchemaAndData", retention: { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 }, maxAgeHoursForBaseBackup: null, failedBackupRetentionMode: "KeepAndExcludeFromMinBackupsToKeep", clickHouseBackupSettings: {}, clickHouseRestoreSettings: {}, passwordMode: "None", backupPassword: null, compressionMethod: null, compressionLevel: null });
   const [draft, setDraft] = useState<UpsertPolicyRequest>(() => defaultPolicyDraft());
   const editPolicy = (policy: BackupPolicyDto) => {
     setEditing(policy);
     setCreatedPolicy(null);
-    setDraft({ name: policy.name, sourceClusterId: policy.sourceClusterId, targetId: policy.targetId ?? "", selector: policy.selector, contentMode: policy.contentMode, retention: policy.retention ?? { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 }, maxAgeHoursForBaseBackup: policy.maxAgeHoursForBaseBackup ?? null, failedBackupRetentionMode: policy.failedBackupRetentionMode, clickHouseBackupSettings: policy.clickHouseBackupSettings ?? {}, clickHouseRestoreSettings: policy.clickHouseRestoreSettings ?? {} });
+    setDraft({ name: policy.name, sourceClusterId: policy.sourceClusterId, targetId: policy.targetId ?? "", selector: policy.selector, contentMode: policy.contentMode, retention: policy.retention ?? { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 }, maxAgeHoursForBaseBackup: policy.maxAgeHoursForBaseBackup ?? null, failedBackupRetentionMode: policy.failedBackupRetentionMode, clickHouseBackupSettings: policy.clickHouseBackupSettings ?? {}, clickHouseRestoreSettings: policy.clickHouseRestoreSettings ?? {}, passwordMode: policy.passwordMode, backupPassword: null, compressionMethod: policy.compressionMethod ?? null, compressionLevel: policy.compressionLevel ?? null });
     setShowForm(true);
   };
   useEffect(() => {
@@ -118,7 +118,7 @@ export function Policies() {
         <div className="form-grid policy-general-grid">
           <Input label="Name" value={draft.name} onChange={(value) => setDraft({ ...draft, name: value })} />
           <Select label="Source cluster" value={draft.sourceClusterId} onChange={(value) => setDraft({ ...draft, sourceClusterId: value })} options={(clusters.data ?? []).map((cluster) => [cluster.id, cluster.name])} />
-          <Select label="Backup mode" value={draft.contentMode} onChange={(value) => setDraft({ ...draft, contentMode: value as BackupContentMode, targetId: value === "SchemaOnly" ? "" : draft.targetId })} options={[["SchemaAndData", "Schema + data"], ["SchemaOnly", "Schema only"]]} />
+          <Select label="Backup mode" value={draft.contentMode} onChange={(value) => setDraft({ ...draft, contentMode: value as BackupContentMode, targetId: value === "SchemaOnly" ? "" : draft.targetId, passwordMode: value === "SchemaOnly" ? "None" : draft.passwordMode, backupPassword: value === "SchemaOnly" ? null : draft.backupPassword })} options={[["SchemaAndData", "Schema + data"], ["SchemaOnly", "Schema only"]]} />
           {draft.contentMode === "SchemaAndData" && <Select label="Backup storage" value={draft.targetId} onChange={(value) => setDraft({ ...draft, targetId: value })} options={(targets.data ?? []).map((target) => [target.id, target.name])} />}
           <Select label="Failed backups" value={draft.failedBackupRetentionMode} onChange={(value) => setDraft({ ...draft, failedBackupRetentionMode: value as FailedBackupRetentionMode })} options={[["KeepAndExcludeFromMinBackupsToKeep", "Keep"], ["DeleteByGarbageCollectorAfterFailure", "Garbage collect failed backups"]]} />
         </div>
@@ -127,6 +127,23 @@ export function Policies() {
         </div>
         <div className="policy-form-section policy-retention-section">
           <RetentionEditor value={draft.retention ?? { fullRetentionMinutes: null, incrementalRetentionMinutes: null, minBackupsToKeep: 0, minFullBackupsToKeep: 0 }} maxAgeHoursForBaseBackup={draft.maxAgeHoursForBaseBackup ?? null} onChange={(retention) => setDraft({ ...draft, retention })} onMaxAgeChange={(maxAgeHoursForBaseBackup) => setDraft({ ...draft, maxAgeHoursForBaseBackup })} />
+        </div>
+        {draft.contentMode === "SchemaAndData" && <div className="policy-form-section policy-protection-section">
+          <h3>Password protection (optional)</h3>
+          <span className="hint">Leave disabled for normal unencrypted backups. Password protection creates ZIP archives.</span>
+          <div className="form-grid policy-general-grid">
+            <Select label="Password protection (optional)" value={draft.passwordMode} onChange={(value) => setDraft({ ...draft, passwordMode: value as BackupPasswordMode, backupPassword: value === "Constant" ? draft.backupPassword : null })} options={[["None", "Disabled"], ["Constant", "One constant password"], ["GeneratedPerTableShard", "Generate per table-shard"]]} />
+            {draft.passwordMode === "Constant" && <Input label={editing?.hasConfiguredPassword ? "Backup password (blank keeps current)" : "Backup password"} type="password" value={draft.backupPassword ?? ""} onChange={(value) => setDraft({ ...draft, backupPassword: value || null })} />}
+          </div>
+          {editing?.passwordMode === "Constant" && editing.passwordKeyAvailable === false && <span className="field-error">The existing password AES key is unavailable. Restore the key file or enter a replacement password.</span>}
+        </div>}
+        <div className="policy-form-section policy-compression-section">
+          <h3>Compression (optional)</h3>
+          <span className="hint">Leave disabled to preserve the normal backup format. Compression creates ZIP archives and can use additional CPU.</span>
+          <div className="form-grid policy-general-grid">
+            <Select label="Compression (optional)" value={draft.compressionMethod ?? ""} onChange={(value) => setDraft({ ...draft, compressionMethod: value ? value as BackupCompressionMethod : null, compressionLevel: value && value !== "Store" ? draft.compressionLevel : null })} options={[["", "Disabled"], ["Store", "Store (ZIP without compression)"], ["Deflate", "Deflate"], ["Bzip2", "Bzip2"], ["Lzma", "LZMA"], ["Zstd", "Zstandard"], ["Xz", "XZ"]]} />
+            {draft.compressionMethod && draft.compressionMethod !== "Store" && <Input label="Compression level (optional)" type="number" value={draft.compressionLevel?.toString() ?? ""} onChange={(value) => setDraft({ ...draft, compressionLevel: value ? Number(value) : null })} />}
+          </div>
         </div>
         <div className="policy-form-section policy-advanced-section">
           <ClickHouseAdvancedSettingsEditor title="Backup advanced settings" value={(draft.clickHouseBackupSettings ?? {}) as Record<string, string | number | boolean>} onChange={(settings) => setDraft({ ...draft, clickHouseBackupSettings: settings })} />
@@ -322,6 +339,11 @@ function validatePolicyDraft(draft: UpsertPolicyRequest) {
   if (draft.contentMode === "SchemaAndData" && !draft.targetId) errors.push("Choose backup storage.");
   if (draft.selector.rules.length === 0) errors.push("Add at least one selector rule.");
   if (draft.maxAgeHoursForBaseBackup != null && draft.maxAgeHoursForBaseBackup <= 0) errors.push("Max base backup age hours must be greater than zero.");
+  if (draft.passwordMode === "Constant" && !draft.backupPassword && draft.contentMode === "SchemaAndData") {
+    // An existing configured constant may intentionally be left blank during edit; the server validates that case.
+  }
+  if (draft.compressionLevel != null && !draft.compressionMethod) errors.push("Choose a compression method before setting a level.");
+  if (draft.compressionMethod === "Store" && draft.compressionLevel != null) errors.push("Store compression does not accept a level.");
   return errors;
 }
 

@@ -1663,7 +1663,24 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportResultDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportResultDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportResultDto"
+                }
+              }
+            }
           }
         }
       }
@@ -1723,7 +1740,24 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportResultDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportResultDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportResultDto"
+                }
+              }
+            }
           }
         }
       }
@@ -3942,6 +3976,17 @@
         },
         "additionalProperties": false
       },
+      "BackupCompressionMethod": {
+        "enum": [
+          "Store",
+          "Deflate",
+          "Bzip2",
+          "Lzma",
+          "Zstd",
+          "Xz"
+        ],
+        "type": "string"
+      },
       "BackupContentMode": {
         "enum": [
           "SchemaAndData",
@@ -4106,9 +4151,28 @@
               "$ref": "#/components/schemas/BackupTableDto"
             },
             "nullable": true
+          },
+          "encryptionState": {
+            "$ref": "#/components/schemas/BackupEncryptionState"
+          },
+          "compressionMethod": {
+            "$ref": "#/components/schemas/BackupCompressionMethod"
+          },
+          "compressionLevel": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
           }
         },
         "additionalProperties": false
+      },
+      "BackupEncryptionState": {
+        "enum": [
+          "Unencrypted",
+          "EncryptedKeyAvailable",
+          "EncryptedMissingKey"
+        ],
+        "type": "string"
       },
       "BackupExport": {
         "type": "object",
@@ -4387,9 +4451,33 @@
               "type": "string"
             },
             "nullable": true
+          },
+          "missingOrInvalidAesKeyIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "nullable": true
+          },
+          "affectedBackupShardCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "warning": {
+            "type": "string",
+            "nullable": true
           }
         },
         "additionalProperties": false
+      },
+      "BackupPasswordMode": {
+        "enum": [
+          "None",
+          "Constant",
+          "GeneratedPerTableShard"
+        ],
+        "type": "string"
       },
       "BackupPolicyDto": {
         "type": "object",
@@ -4460,6 +4548,24 @@
           "effectiveMaxAgeHoursForBaseBackup": {
             "type": "integer",
             "format": "int32"
+          },
+          "passwordMode": {
+            "$ref": "#/components/schemas/BackupPasswordMode"
+          },
+          "hasConfiguredPassword": {
+            "type": "boolean"
+          },
+          "passwordKeyAvailable": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "compressionMethod": {
+            "$ref": "#/components/schemas/BackupCompressionMethod"
+          },
+          "compressionLevel": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -4531,6 +4637,26 @@
             "nullable": true
           },
           "maxAgeHoursForBaseBackup": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "passwordMode": {
+            "$ref": "#/components/schemas/BackupPasswordMode"
+          },
+          "encryptedBackupPassword": {
+            "type": "string",
+            "nullable": true
+          },
+          "encryptedBackupPasswordKeyId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "compressionMethod": {
+            "$ref": "#/components/schemas/BackupCompressionMethod"
+          },
+          "compressionLevel": {
             "type": "integer",
             "format": "int32",
             "nullable": true
@@ -5111,6 +5237,18 @@
           "error": {
             "type": "string",
             "nullable": true
+          },
+          "isPasswordProtected": {
+            "type": "boolean"
+          },
+          "passwordKeyId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "passwordKeyAvailable": {
+            "type": "boolean",
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -5198,6 +5336,15 @@
           },
           "s3Path": {
             "type": "string",
+            "nullable": true
+          },
+          "encryptedBackupPassword": {
+            "type": "string",
+            "nullable": true
+          },
+          "encryptedBackupPasswordKeyId": {
+            "type": "string",
+            "format": "uuid",
             "nullable": true
           }
         },
@@ -6315,6 +6462,47 @@
           "DeleteByGarbageCollectorAfterFailure"
         ],
         "type": "string"
+      },
+      "ImportResultDto": {
+        "type": "object",
+        "properties": {
+          "succeeded": {
+            "type": "boolean"
+          },
+          "importedPolicies": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "importedBackups": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "importedRestores": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "affectedPolicyCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "affectedBackupShardCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "missingOrInvalidAesKeyIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "nullable": true
+          },
+          "warning": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
       },
       "InitiateRestoreRequest": {
         "type": "object",
@@ -8053,6 +8241,21 @@
             "nullable": true
           },
           "maxAgeHoursForBaseBackup": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "passwordMode": {
+            "$ref": "#/components/schemas/BackupPasswordMode"
+          },
+          "backupPassword": {
+            "type": "string",
+            "nullable": true
+          },
+          "compressionMethod": {
+            "$ref": "#/components/schemas/BackupCompressionMethod"
+          },
+          "compressionLevel": {
             "type": "integer",
             "format": "int32",
             "nullable": true

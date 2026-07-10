@@ -47,6 +47,11 @@ public sealed class SystemDefaultBackupPolicyService(ChoboDbContext db, IAuditSe
             policy.SourceClusterId = cluster.Id;
             policy.TargetId = null;
             policy.ContentMode = BackupContentMode.SchemaOnly;
+            policy.PasswordMode = BackupPasswordMode.None;
+            policy.EncryptedBackupPassword = null;
+            policy.EncryptedBackupPasswordKeyId = null;
+            policy.CompressionMethod = null;
+            policy.CompressionLevel = null;
             policy.SelectorJsonVersion = PolicySelector.Empty.Version;
             policy.SelectorJson = selectorJson;
             policy.IsSystemDefault = true;

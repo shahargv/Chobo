@@ -52,7 +52,7 @@
         @{
             Name = 'add-policy'
             Type = 'Cli'
-            Args = @('policies', 'add', '--name', 'incremental-sharded', '--source-cluster-id', '{sourceCluster.id}', '--target-id', '{target.id}', '--selector-file', '/suite/Tests/IncrementalBackupSharded/selector-all.json', '--full-retention-minutes', '10080', '--incremental-retention-minutes', '1440', '--min-backups-to-keep', '2', '--min-full-backups-to-keep', '1')
+            Args = @('policies', 'add', '--name', 'incremental-sharded', '--source-cluster-id', '{sourceCluster.id}', '--target-id', '{target.id}', '--selector-file', '/suite/Tests/IncrementalBackupSharded/selector-all.json', '--full-retention-minutes', '10080', '--incremental-retention-minutes', '1440', '--min-backups-to-keep', '2', '--min-full-backups-to-keep', '1', '--password-mode', 'generated-per-table-shard')
             SaveJsonAs = 'policy'
         }
         @{
@@ -67,8 +67,11 @@
             Args = @('backups', 'wait', '--id', '{fullBackup.id}', '--timeout-seconds', '60', '--poll-seconds', '1')
             ExpectJson = @(
                 @{ Path = 'status'; Equals = 'Succeeded' }
+                @{ Path = 'encryptionState'; Equals = 'EncryptedKeyAvailable' }
                 @{ Path = 'tables[0].effectiveBackupType'; Equals = 'Full' }
                 @{ Path = 'tables[0].shards'; Count = 2 }
+                @{ Path = 'tables[0].shards'; ContainsObject = @{ sourceShardNumber = 1; isPasswordProtected = $true; passwordKeyAvailable = $true } }
+                @{ Path = 'tables[0].shards'; ContainsObject = @{ sourceShardNumber = 2; isPasswordProtected = $true; passwordKeyAvailable = $true } }
             )
         }
         @{ Name = 'mutate-source-sharded-data'; Type = 'Sql'; Resource = 'source'; Path = 'Sql/mutate-source-sharded-data.sql' }
@@ -87,6 +90,7 @@
             ExpectJson = @(
                 @{ Path = 'status'; Equals = 'Succeeded' }
                 @{ Path = 'backupType'; Equals = 'Incremental' }
+                @{ Path = 'encryptionState'; Equals = 'EncryptedKeyAvailable' }
                 @{ Path = 'tables'; ContainsObject = @{ table = 'orders_local'; effectiveBackupType = 'Incremental' } }
                 @{ Path = 'tables'; ContainsObject = @{ table = 'new_orders_local'; effectiveBackupType = 'Full' } }
                 @{ Path = 'tables[0].shards'; Count = 2 }

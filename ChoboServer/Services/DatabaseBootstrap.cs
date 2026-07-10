@@ -85,7 +85,7 @@ public sealed class DatabaseBootstrap(
             db.SchemaStates.Add(new SchemaStateEntity
             {
                 SchemaVersion = ChoboApi.SchemaVersion,
-                AppliedMigrationId = "000000000001_Baseline",
+                AppliedMigrationId = "000000000002_PasswordProtectedBackups",
                 AppliedAt = DateTimeOffset.UtcNow,
                 ProductVersion = ChoboApi.ProductVersion
             });

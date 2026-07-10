@@ -196,10 +196,20 @@ public sealed class ClickHouseAdapter(ICredentialProtector protector, IEndpointR
     public async Task<ClickHouseOperationResult> StartBackupShardAsync(ClickHouseNodeEndpoint endpoint, ClickHouseClusterEntity cluster, BackupTargetEntity target, BackupTableEntity table, BackupTableShardEntity shard, string? baseBackupPath, IReadOnlyDictionary<string, JsonElement> settings, CancellationToken cancellationToken)
     {
         var destination = await storageProviders.Get(target).CreateBackupDestinationAsync(target, shard.StoragePath, baseBackupPath, cancellationToken);
-        var settingsClause = ClickHouseAdvancedSettings.ToSettingsClause(settings, destination.Settings.ToArray());
+        var password = await protector.DecryptAsync(shard.EncryptedBackupPassword, shard.EncryptedBackupPasswordKeyId, cancellationToken);
+        var managed = destination.Settings.ToList();
+        if (password is not null)
+        {
+            managed.Add(("password", ClickHouseSql.Literal(password)));
+            if (!string.IsNullOrWhiteSpace(baseBackupPath))
+            {
+                managed.Add(("use_same_password_for_base_backup", "1"));
+            }
+        }
+        var settingsClause = ClickHouseAdvancedSettings.ToSettingsClause(settings, managed.ToArray());
         var sql = $"BACKUP TABLE {ClickHouseSql.Qualified(table.Database, table.Table)} TO {destination.Expression}{settingsClause} ASYNC";
         _logger.Information("Submitting ClickHouse backup for {Database}.{Table} shard {ShardNumber} on {Host}:{Port} to {StoragePath}.", table.Database, table.Table, shard.SourceShardNumber, endpoint.Host, endpoint.Port, shard.StoragePath);
-        return await StartOperationAsync(endpoint, cluster, sql, destination.SensitiveValues, cancellationToken);
+        return await StartOperationAsync(endpoint, cluster, sql, destination.SensitiveValues.Concat(password is null ? [] : [password]).ToList(), cancellationToken);
     }
 
     public async Task<ClickHouseOperationResult> StartRestoreAsync(ClickHouseClusterEntity cluster, BackupTargetEntity target, RestoreTableEntity table, BackupTableEntity backupTable, IReadOnlyDictionary<string, JsonElement> settings, CancellationToken cancellationToken)
@@ -214,9 +224,18 @@ public sealed class ClickHouseAdapter(ICredentialProtector protector, IEndpointR
     {
         var destination = await storageProviders.Get(target).CreateRestoreDestinationAsync(target, backupShard.StoragePath, cancellationToken);
         var allowDifferentTableDefinition = cluster.Mode == Chobo.Contracts.ClusterMode.SingleInstance && ClickHouseSql.IsReplicatedMergeTreeEngine(backupTable.Engine);
-        var sql = ClickHouseRestoreSqlBuilder.Build(backupTable, shard, destination, allowNonEmptyTables, allowDifferentTableDefinition, settings);
+        var password = await protector.DecryptAsync(backupShard.EncryptedBackupPassword, backupShard.EncryptedBackupPasswordKeyId, cancellationToken);
+        var sql = ClickHouseRestoreSqlBuilder.Build(
+            backupTable,
+            shard,
+            destination,
+            allowNonEmptyTables,
+            allowDifferentTableDefinition,
+            settings,
+            password,
+            backupShard.EffectiveBackupType == Chobo.Contracts.BackupType.Incremental);
         _logger.Information("Submitting ClickHouse restore for {SourceDatabase}.{SourceTable} source shard {SourceShard} to {TargetDatabase}.{TargetTable} on {Host}:{Port}.", backupTable.Database, backupTable.Table, backupShard.SourceShardNumber, shard.RestoreDatabase, shard.RestoreTableName, endpoint.Host, endpoint.Port);
-        return await StartOperationAsync(endpoint, cluster, sql, destination.SensitiveValues, cancellationToken);
+        return await StartOperationAsync(endpoint, cluster, sql, destination.SensitiveValues.Concat(password is null ? [] : [password]).ToList(), cancellationToken);
     }
 
     public async Task<ClickHouseOperationStatus> GetOperationStatusAsync(ClickHouseClusterEntity cluster, string operationId, CancellationToken cancellationToken)

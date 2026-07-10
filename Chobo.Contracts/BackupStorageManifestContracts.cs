@@ -89,7 +89,12 @@ public sealed record BackupStorageManifestPolicyV1(
     DateTimeOffset CreatedAt,
     DateTimeOffset? UpdatedAt,
     DateTimeOffset? DeletedAt,
-    int? MaxAgeHoursForBaseBackup = null);
+    int? MaxAgeHoursForBaseBackup = null,
+    BackupPasswordMode PasswordMode = BackupPasswordMode.None,
+    string? EncryptedBackupPassword = null,
+    Guid? EncryptedBackupPasswordKeyId = null,
+    BackupCompressionMethod? CompressionMethod = null,
+    int? CompressionLevel = null);
 
 public sealed record BackupStorageManifestScheduleV1(
     Guid Id,
@@ -165,6 +170,12 @@ public sealed record BackupStorageManifestShardV1(
 {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? S3Path { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? EncryptedBackupPassword { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? EncryptedBackupPasswordKeyId { get; init; }
 }
 public sealed record RecoverBackupMetadataFromPathRequest(Guid TargetId, string BackupPath);
 
@@ -176,7 +187,10 @@ public sealed record BackupMetadataRecoveryResult(
     int UpdatedBackupCount,
     int SkippedManifestCount,
     IReadOnlyList<BackupMetadataRecoveryItem> Items,
-    IReadOnlyList<string> Errors);
+    IReadOnlyList<string> Errors,
+    IReadOnlyList<Guid>? MissingOrInvalidAesKeyIds = null,
+    int AffectedBackupShardCount = 0,
+    string? Warning = null);
 
 public sealed record BackupMetadataRecoveryItem(
     Guid BackupId,

@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 import type { BackupDto, BackupPolicyDto, BackupTableDto, BackupTableShardDto } from "../api/generated";
 import { ApiContext } from "../api-context";
-import { Backups, BackupShardDetailsTable, BackupTablesTable, calculateBackupShardCompletion, calculateBackupSizeBytes, calculateTableSizeBytes, summarizeBackupShards } from "./BackupsPage";
+import { Backups, BackupEncryptionIndicator, BackupShardDetailsTable, BackupTablesTable, calculateBackupShardCompletion, calculateBackupSizeBytes, calculateTableSizeBytes, summarizeBackupShards } from "./BackupsPage";
 
 const baseShard = (overrides: Partial<BackupTableShardDto>): BackupTableShardDto => ({
   id: overrides.id ?? crypto.randomUUID(),
@@ -26,7 +26,10 @@ const baseShard = (overrides: Partial<BackupTableShardDto>): BackupTableShardDto
   clickHouseStatus: overrides.clickHouseStatus ?? null,
   startedAt: overrides.startedAt ?? null,
   completedAt: overrides.completedAt ?? "2026-06-21T00:00:00Z",
-  error: overrides.error ?? null
+  error: overrides.error ?? null,
+  isPasswordProtected: overrides.isPasswordProtected ?? false,
+  passwordKeyId: overrides.passwordKeyId ?? null,
+  passwordKeyAvailable: overrides.passwordKeyAvailable ?? null
 });
 
 const baseTable = (overrides: Partial<BackupTableDto> & { shards: BackupTableShardDto[] }): BackupTableDto => ({
@@ -49,6 +52,25 @@ const baseTable = (overrides: Partial<BackupTableDto> & { shards: BackupTableSha
   completedAt: overrides.completedAt ?? "2026-06-21T00:00:00Z",
   error: overrides.error ?? null,
   shards: overrides.shards
+});
+
+describe("BackupEncryptionIndicator", () => {
+  it("uses accessible text for healthy, missing-key, and unencrypted states", async () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+
+    await act(async () => root.render(<><BackupEncryptionIndicator state="EncryptedKeyAvailable" showText /><BackupEncryptionIndicator state="EncryptedMissingKey" showText /><BackupEncryptionIndicator state="Unencrypted" showText /></>));
+
+    expect(host.querySelector('[aria-label="Encrypted backup key available"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="Encrypted backup key unavailable"]')).not.toBeNull();
+    expect(host.textContent).toContain("encrypted; key available");
+    expect(host.textContent).toContain("encrypted; key unavailable");
+    expect(host.textContent).toContain("none");
+
+    await act(async () => root.unmount());
+    host.remove();
+  });
 });
 
 
@@ -507,7 +529,10 @@ function baseBackup(overrides: Partial<BackupDto> = {}): BackupDto {
     backupSizeBytes: overrides.backupSizeBytes ?? 0,
     relatedFullBackupIds: overrides.relatedFullBackupIds ?? [],
     childBackupIds: overrides.childBackupIds ?? [],
-    tables: overrides.tables ?? []
+    tables: overrides.tables ?? [],
+    encryptionState: overrides.encryptionState ?? "Unencrypted",
+    compressionMethod: overrides.compressionMethod ?? null,
+    compressionLevel: overrides.compressionLevel ?? null
   };
 }
 function basePolicy(overrides: Partial<BackupPolicyDto> = {}): BackupPolicyDto {
@@ -528,6 +553,11 @@ function basePolicy(overrides: Partial<BackupPolicyDto> = {}): BackupPolicyDto {
     isSystemDefault: overrides.isSystemDefault ?? false,
     isDeleted: overrides.isDeleted ?? false,
     createdAt: overrides.createdAt ?? "2026-06-22T00:00:00Z",
-    updatedAt: overrides.updatedAt ?? null
+    updatedAt: overrides.updatedAt ?? null,
+    passwordMode: overrides.passwordMode ?? "None",
+    hasConfiguredPassword: overrides.hasConfiguredPassword ?? false,
+    passwordKeyAvailable: overrides.passwordKeyAvailable ?? null,
+    compressionMethod: overrides.compressionMethod ?? null,
+    compressionLevel: overrides.compressionLevel ?? null
   };
 }

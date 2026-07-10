@@ -33,7 +33,7 @@ public sealed record ClusterExport(Guid Id, string Name, ClusterMode Mode, strin
 
 public sealed record BackupTargetExport(Guid Id, string Name, string Type, IReadOnlyDictionary<string, JsonElement>? Settings, IReadOnlyDictionary<string, JsonElement>? Secrets, bool IsDeleted, DateTimeOffset CreatedAt, DateTimeOffset? UpdatedAt, DateTimeOffset? DeletedAt, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] S3TargetSettingsDto? S3 = null, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? EncryptedAccessKey = null, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Guid? EncryptedAccessKeyKeyId = null, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? EncryptedSecretKey = null, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Guid? EncryptedSecretKeyKeyId = null);
 
-public sealed record BackupPolicyExport(Guid Id, string Name, Guid SourceClusterId, Guid? TargetId, BackupContentMode ContentMode, int SelectorJsonVersion, PolicySelector Selector, BackupRetentionDto? Retention, FailedBackupRetentionMode FailedBackupRetentionMode, IReadOnlyDictionary<string, JsonElement>? ClickHouseBackupSettings, IReadOnlyDictionary<string, JsonElement>? ClickHouseRestoreSettings, bool IsSystemDefault, bool IsDeleted, DateTimeOffset CreatedAt, DateTimeOffset? UpdatedAt, DateTimeOffset? DeletedAt, int? MaxAgeHoursForBaseBackup = null);
+public sealed record BackupPolicyExport(Guid Id, string Name, Guid SourceClusterId, Guid? TargetId, BackupContentMode ContentMode, int SelectorJsonVersion, PolicySelector Selector, BackupRetentionDto? Retention, FailedBackupRetentionMode FailedBackupRetentionMode, IReadOnlyDictionary<string, JsonElement>? ClickHouseBackupSettings, IReadOnlyDictionary<string, JsonElement>? ClickHouseRestoreSettings, bool IsSystemDefault, bool IsDeleted, DateTimeOffset CreatedAt, DateTimeOffset? UpdatedAt, DateTimeOffset? DeletedAt, int? MaxAgeHoursForBaseBackup = null, BackupPasswordMode PasswordMode = BackupPasswordMode.None, string? EncryptedBackupPassword = null, Guid? EncryptedBackupPasswordKeyId = null, BackupCompressionMethod? CompressionMethod = null, int? CompressionLevel = null);
 
 public sealed record BackupScheduleExport(Guid Id, string Name, Guid PolicyId, BackupType BackupType, string CronExpression, string TimeZoneId, bool IsEnabled, TimeSpan? MissedRunGracePeriod, string? Description, bool IsSystemDefault, bool IsDeleted, DateTimeOffset CreatedAt, DateTimeOffset? UpdatedAt, DateTimeOffset? DeletedAt);
 
@@ -52,7 +52,23 @@ public sealed record BackupTableShardExport(Guid Id, Guid BackupTableId, BackupT
 {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? S3Path { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? EncryptedBackupPassword { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? EncryptedBackupPasswordKeyId { get; init; }
 }
+
+public sealed record ImportResultDto(
+    bool Succeeded,
+    int ImportedPolicies,
+    int ImportedBackups,
+    int ImportedRestores,
+    int AffectedPolicyCount,
+    int AffectedBackupShardCount,
+    IReadOnlyList<Guid> MissingOrInvalidAesKeyIds,
+    string? Warning);
 
 
 public sealed record RestoreExport(Guid Id, Guid BackupId, Guid TargetClusterId, RestoreRunStatus Status, bool Append, bool AllowSchemaMismatch, RestoreLayout Layout, int? SourceShard, int? TargetShard, string RequestJson, Guid? RequestedByUserId, string RequestedByName, DateTimeOffset CreatedAt, DateTimeOffset? QueuedAt, DateTimeOffset? StartedAt, DateTimeOffset? CompletedAt, string? Error, string? FailureReason, IReadOnlyDictionary<string, JsonElement>? ClickHouseRestoreSettings);

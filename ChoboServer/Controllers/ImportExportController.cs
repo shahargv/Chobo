@@ -11,12 +11,11 @@ public sealed class ImportExportController(IExportImportService exports) : Contr
     public Task<ExportEnvelope> ExportData() => exports.ExportAsync(configOnly: false);
 
     [HttpPost(ChoboApi.ApiPrefix + "/data/import")]
-    public async Task<IActionResult> ImportData(ExportEnvelope envelope)
+    public async Task<ActionResult<ImportResultDto>> ImportData(ExportEnvelope envelope)
     {
         try
         {
-            await exports.ImportAsync(envelope, configOnly: false);
-            return NoContent();
+            return await exports.ImportAsync(envelope, configOnly: false);
         }
         catch (InvalidOperationException ex)
         {
@@ -28,12 +27,11 @@ public sealed class ImportExportController(IExportImportService exports) : Contr
     public Task<ExportEnvelope> ExportConfig() => exports.ExportAsync(configOnly: true);
 
     [HttpPost(ChoboApi.ApiPrefix + "/config/import")]
-    public async Task<IActionResult> ImportConfig(ExportEnvelope envelope)
+    public async Task<ActionResult<ImportResultDto>> ImportConfig(ExportEnvelope envelope)
     {
         try
         {
-            await exports.ImportAsync(envelope, configOnly: true);
-            return NoContent();
+            return await exports.ImportAsync(envelope, configOnly: true);
         }
         catch (InvalidOperationException ex)
         {

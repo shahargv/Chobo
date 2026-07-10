@@ -1,5 +1,9 @@
 # Troubleshooting
 
+## Encrypted backup shows a warning lock
+
+Open backup details and note every AES key ID marked with a red X. Restore those exact files from the trusted `secrets/aes-keys` backup, preserve restrictive permissions, and refresh the page. Missing and malformed files both count as unavailable. Do not delete the backup merely to clear the warning: it remains eligible for normal retention and garbage collection, but cannot be restored or selected as an incremental base until its key is available.
+
 Start with the run record, then move outward to logs, audits, ClickHouse, and S3.
 
 ## Quick Health Checks

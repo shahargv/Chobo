@@ -21,7 +21,8 @@ public sealed class BackupApplicationService(
     BackupRestoreOperationGate operationGate,
     IAuditService audit,
     ActorContext actor,
-    Serilog.ILogger logger)
+    Serilog.ILogger logger,
+    ChoboServer.Repositories.IAesKeyRepository aesKeys)
 {
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
     private readonly Serilog.ILogger _logger = logger.ForContext<BackupApplicationService>();
@@ -47,7 +48,12 @@ public sealed class BackupApplicationService(
 
         return ClickHouseAdvancedSettings.MergeWithSources(
             ("cluster", ClickHouseAdvancedSettings.Deserialize(cluster.ClickHouseBackupSettingsJson, ClickHouseAdvancedSettingsKind.Backup)),
-            ("policy", policy is null ? ClickHouseAdvancedSettings.Empty : ClickHouseAdvancedSettings.Deserialize(policy.ClickHouseBackupSettingsJson, ClickHouseAdvancedSettingsKind.Backup)));
+            ("policy", policy is null
+                ? ClickHouseAdvancedSettings.Empty
+                : ClickHouseAdvancedSettings.WithPolicyCompression(
+                    ClickHouseAdvancedSettings.Deserialize(policy.ClickHouseBackupSettingsJson, ClickHouseAdvancedSettingsKind.Backup),
+                    policy.CompressionMethod,
+                    policy.CompressionLevel)));
     }
     public async Task<BackupDto> ManualAsync(ManualBackupRequest request, CancellationToken cancellationToken = default)
     {
@@ -120,7 +126,9 @@ public sealed class BackupApplicationService(
         var inheritedSettings = await PreviewSettingsAsync(new BackupSettingsPreviewRequest(clusterId, request.PolicyId), cancellationToken);
         var effectiveSettings = request.ClickHouseBackupSettings is null
             ? inheritedSettings.Settings
-            : ClickHouseAdvancedSettings.Normalize(request.ClickHouseBackupSettings, ClickHouseAdvancedSettingsKind.Backup);
+            : ClickHouseAdvancedSettings.MergeWithSources(
+                ("inherited", inheritedSettings.Settings),
+                ("manual", ClickHouseAdvancedSettings.Normalize(request.ClickHouseBackupSettings, ClickHouseAdvancedSettingsKind.Backup))).Settings;
 
         var storedRequest = request.PolicyId is null
             ? request
@@ -162,7 +170,11 @@ public sealed class BackupApplicationService(
         _logger.Information("Manual backup {BackupId} queued.", backup.Id);
         await audit.RecordAsync("queued", AuditEntityType.Backup, backup.Id.ToString(), new { operationId = backup.Id, reason = "manual" });
 
-        return BackupRestoreMapping.ToDto(await LoadAsync(backup.Id, postCommitCancellationToken) ?? backup);
+        var loaded = await LoadAsync(backup.Id, postCommitCancellationToken) ?? backup;
+        var keyAvailability = await aesKeys.GetAvailabilitiesAsync(
+            loaded.Tables.SelectMany(x => x.Shards).Select(x => x.EncryptedBackupPasswordKeyId).OfType<Guid>(),
+            postCommitCancellationToken);
+        return BackupRestoreMapping.ToDto(loaded, keyAvailability: keyAvailability);
     }
     public async Task<IReadOnlyList<BackupDto>> ListAsync(Guid? policyId, string? clusterName, string? tableName, BackupRunStatus? status, DateTimeOffset? from, DateTimeOffset? to, bool includeTables = true, CancellationToken cancellationToken = default)
     {
@@ -198,11 +210,13 @@ public sealed class BackupApplicationService(
         if (includeTables)
         {
             var loadedBackups = await query.OrderByDescending(x => x.CreatedAt).Take(200).ToListAsync(cancellationToken);
+            var loadedAvailability = await KeyAvailabilityAsync(loadedBackups.SelectMany(x => x.Tables).SelectMany(x => x.Shards).Select(x => x.EncryptedBackupPasswordKeyId), cancellationToken);
             var loadedChildBackupIdsByBackupId = await ChildBackupIdsByBackupIdAsync(loadedBackups.Select(x => x.Id).ToList(), cancellationToken);
             return loadedBackups
                 .Select(backup => BackupRestoreMapping.ToDto(
                     backup,
-                    childBackupIds: loadedChildBackupIdsByBackupId.TryGetValue(backup.Id, out var loadedChildBackupIds) ? loadedChildBackupIds : []))
+                    childBackupIds: loadedChildBackupIdsByBackupId.TryGetValue(backup.Id, out var loadedChildBackupIds) ? loadedChildBackupIds : [],
+                    keyAvailability: loadedAvailability))
                 .ToList();
         }
 
@@ -270,6 +284,18 @@ public sealed class BackupApplicationService(
             .GroupBy(x => x.BackupId)
             .ToDictionary(x => x.Key, x => (IReadOnlyList<Guid>)x.Select(row => row.RelatedFullBackupId).Distinct().OrderBy(id => id).ToList());
         var childBackupIdsByBackupId = await ChildBackupIdsByBackupIdAsync(summaryIds, cancellationToken);
+        var passwordRows = summaryIds.Count == 0
+            ? []
+            : await db.BackupTableShards.AsNoTracking()
+                .Where(x => x.BackupTable != null && summaryIds.Contains(x.BackupTable.BackupId) && x.EncryptedBackupPassword != null)
+                .Select(x => new BackupPasswordRow(x.BackupTable!.BackupId, x.EncryptedBackupPasswordKeyId))
+                .ToListAsync(cancellationToken);
+        var summaryAvailability = await KeyAvailabilityAsync(passwordRows.Select(x => x.KeyId), cancellationToken);
+        var encryptionByBackupId = passwordRows.GroupBy(x => x.BackupId).ToDictionary(
+            x => x.Key,
+            x => x.All(row => row.KeyId is { } keyId && summaryAvailability.GetValueOrDefault(keyId) == ChoboServer.Repositories.AesKeyAvailability.Available)
+                ? BackupEncryptionState.EncryptedKeyAvailable
+                : BackupEncryptionState.EncryptedMissingKey);
         return summaries
             .Select(x =>
             {
@@ -309,7 +335,8 @@ public sealed class BackupApplicationService(
                     stats?.BackupSizeBytes,
                     relatedFullBackupIds ?? [],
                     childBackupIds ?? [],
-                    x.ClickHouseBackupSettingsJson);
+                    x.ClickHouseBackupSettingsJson,
+                    encryptionByBackupId.GetValueOrDefault(x.Id, BackupEncryptionState.Unencrypted));
             })
             .ToList();
     }
@@ -323,7 +350,8 @@ public sealed class BackupApplicationService(
             }
 
             var includedChildBackupIds = await DependentBackupIdsAsync(id, cancellationToken);
-            return BackupRestoreMapping.ToDto(backup, childBackupIds: includedChildBackupIds);
+            var availability = await KeyAvailabilityAsync(backup.Tables.SelectMany(x => x.Shards).Select(x => x.EncryptedBackupPasswordKeyId), cancellationToken);
+            return BackupRestoreMapping.ToDto(backup, childBackupIds: includedChildBackupIds, keyAvailability: availability);
         }
 
         var summary = await db.Backups
@@ -338,7 +366,11 @@ public sealed class BackupApplicationService(
 
         var relatedFullBackupIds = await RelatedFullBackupIdsAsync(id, cancellationToken);
         var childBackupIds = await DependentBackupIdsAsync(id, cancellationToken);
-        return BackupRestoreMapping.ToDto(summary.Backup, summary.TableCount, summary.BackupSizeBytes, relatedFullBackupIds, childBackupIds, includeTables: false);
+        var keyIds = await db.BackupTableShards.AsNoTracking().Where(x => x.BackupTable != null && x.BackupTable.BackupId == id && x.EncryptedBackupPassword != null).Select(x => x.EncryptedBackupPasswordKeyId).ToListAsync(cancellationToken);
+        var keyAvailability = await KeyAvailabilityAsync(keyIds, cancellationToken);
+        var encryptionState = keyIds.Count == 0 ? BackupEncryptionState.Unencrypted : keyIds.All(x => x is { } keyId && keyAvailability.GetValueOrDefault(keyId) == ChoboServer.Repositories.AesKeyAvailability.Available) ? BackupEncryptionState.EncryptedKeyAvailable : BackupEncryptionState.EncryptedMissingKey;
+        var dto = BackupRestoreMapping.ToDto(summary.Backup, summary.TableCount, summary.BackupSizeBytes, relatedFullBackupIds, childBackupIds, includeTables: false);
+        return dto with { EncryptionState = encryptionState };
     }
 
     public async Task<BackupDto?> PinAsync(Guid id, CancellationToken cancellationToken = default)
@@ -355,7 +387,7 @@ public sealed class BackupApplicationService(
         backup.PinnedByName = actor.ActorName;
         await db.SaveChangesAsync(cancellationToken);
         await audit.RecordAsync("pin", AuditEntityType.Backup, id.ToString(), new { operationId = id, backup.PinnedByUserId, backup.PinnedByName });
-        return BackupRestoreMapping.ToDto(backup);
+        return BackupRestoreMapping.ToDto(backup, keyAvailability: await KeyAvailabilityAsync(backup.Tables.SelectMany(x => x.Shards).Select(x => x.EncryptedBackupPasswordKeyId), cancellationToken));
     }
 
     public async Task<BackupDto?> UnpinAsync(Guid id, CancellationToken cancellationToken = default)
@@ -373,7 +405,7 @@ public sealed class BackupApplicationService(
         backup.PinnedByName = null;
         await db.SaveChangesAsync(cancellationToken);
         await audit.RecordAsync("unpin", AuditEntityType.Backup, id.ToString(), previous);
-        return BackupRestoreMapping.ToDto(backup);
+        return BackupRestoreMapping.ToDto(backup, keyAvailability: await KeyAvailabilityAsync(backup.Tables.SelectMany(x => x.Shards).Select(x => x.EncryptedBackupPasswordKeyId), cancellationToken));
     }
 
     public async Task<BackupDto?> RequestDeleteAsync(Guid id, bool force = false, bool confirmDestructive = false, CancellationToken cancellationToken = default)
@@ -402,7 +434,7 @@ public sealed class BackupApplicationService(
         }
         if (IsDeletedOrDeleteRequested(backup.Status))
         {
-            return BackupRestoreMapping.ToDto(backup);
+            return BackupRestoreMapping.ToDto(backup, keyAvailability: await KeyAvailabilityAsync(backup.Tables.SelectMany(x => x.Shards).Select(x => x.EncryptedBackupPasswordKeyId), cancellationToken));
         }
 
         List<BackupEntity> dependents = [];
@@ -431,7 +463,7 @@ public sealed class BackupApplicationService(
             await audit.RecordAsync("dependent-delete-requested", AuditEntityType.Backup, dependent.Id.ToString(), new { parentBackupId = id, force });
         }
         await audit.RecordAsync("delete-requested", AuditEntityType.Backup, id.ToString(), new { operationId = id, reason = backup.DeletionReason, force, backup.IsPinned });
-        return BackupRestoreMapping.ToDto(backup);
+        return BackupRestoreMapping.ToDto(backup, keyAvailability: await KeyAvailabilityAsync(backup.Tables.SelectMany(x => x.Shards).Select(x => x.EncryptedBackupPasswordKeyId), cancellationToken));
     }
 
     public async Task<BackupDto?> CancelAsync(Guid id, CancellationToken cancellationToken = default)
@@ -476,7 +508,7 @@ public sealed class BackupApplicationService(
         await db.SaveChangesAsync(cancellationToken);
         var killResults = await KillBackupOperationsAsync(backup, cancellationToken);
         await audit.RecordAsync("canceled", AuditEntityType.Backup, id.ToString(), new { operationId = id, actor.UserId, actor.ActorName, killed = killResults.Killed, killFailures = killResults.Failures });
-        return BackupRestoreMapping.ToDto(backup);
+        return BackupRestoreMapping.ToDto(backup, keyAvailability: await KeyAvailabilityAsync(backup.Tables.SelectMany(x => x.Shards).Select(x => x.EncryptedBackupPasswordKeyId), cancellationToken));
     }
 
 
@@ -535,6 +567,10 @@ public sealed class BackupApplicationService(
     private sealed record BackupTableStats(Guid BackupId, int TableCount, long? BackupSizeBytes);
     private sealed record BackupRelatedFullRow(Guid BackupId, Guid RelatedFullBackupId);
     private sealed record BackupChildRow(Guid ParentBackupId, Guid ChildBackupId);
+    private sealed record BackupPasswordRow(Guid BackupId, Guid? KeyId);
+
+    private Task<IReadOnlyDictionary<Guid, ChoboServer.Repositories.AesKeyAvailability>> KeyAvailabilityAsync(IEnumerable<Guid?> keyIds, CancellationToken cancellationToken) =>
+        aesKeys.GetAvailabilitiesAsync(keyIds.OfType<Guid>(), cancellationToken);
     private async Task<(int Killed, IReadOnlyList<string> Failures)> KillBackupOperationsAsync(BackupEntity backup, CancellationToken cancellationToken)
     {
         if (backup.SourceCluster is null)

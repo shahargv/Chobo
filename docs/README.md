@@ -19,6 +19,7 @@ Use these guides when you operate Chobo for ClickHouse backups and restores:
 - [Configuration reference](user/Configuration.md)
 - [Backup lifecycle management](user/BackupLifecycle.md)
 - [Troubleshooting](user/Troubleshooting.md)
+- [Upgrading](user/Upgrading.md)
 
 ## Developer Documentation
 

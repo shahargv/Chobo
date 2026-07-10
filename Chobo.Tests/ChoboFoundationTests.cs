@@ -1044,7 +1044,7 @@ public sealed class ChoboFoundationTests
         }
 
         var response = await client.PostAsJsonAsync("/api/v1/config/import", export, JsonOptions);
-        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
         using var scope = factory.Services.CreateScope();
         var dbAfter = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
@@ -1062,7 +1062,7 @@ public sealed class ChoboFoundationTests
         var previousVersionConfigJson = JsonSerializer.Serialize(new
         {
             exportVersion = ChoboApi.ExportVersion,
-            schemaVersion = ChoboApi.SchemaVersion,
+            schemaVersion = 1,
             generatedAt = DateTimeOffset.Parse("2026-05-15T10:11:12+00:00"),
             productVersion = "0.12.0",
             data = new
@@ -1087,7 +1087,7 @@ public sealed class ChoboFoundationTests
 
         var response = await client.PostAsync("/api/v1/config/import", content);
 
-        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
         var audit = await db.AuditEntries.SingleAsync(x => x.Action == "import" && x.EntityType == "config");
@@ -1108,7 +1108,7 @@ public sealed class ChoboFoundationTests
         var targetClient = AuthenticatedClient(targetFactory);
         var response = await targetClient.PostAsJsonAsync("/api/v1/config/import", export, JsonOptions);
 
-        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         using var scope = targetFactory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
         var cluster = await db.ClickHouseClusters.SingleAsync(x => x.Id == ids.ClusterId);
@@ -1151,7 +1151,7 @@ public sealed class ChoboFoundationTests
         var targetClient = AuthenticatedClient(targetFactory);
         var response = await targetClient.PostAsJsonAsync("/api/v1/config/import", export, JsonOptions);
         var responseText = await response.Content.ReadAsStringAsync();
-        Assert.True(response.StatusCode == HttpStatusCode.NoContent, responseText);
+        Assert.True(response.StatusCode == HttpStatusCode.OK, responseText);
 
         using var scope = targetFactory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
@@ -1211,7 +1211,7 @@ public sealed class ChoboFoundationTests
 
         var response = await targetClient.PostAsJsonAsync("/api/v1/data/import", export, JsonOptions);
         var responseText = await response.Content.ReadAsStringAsync();
-        Assert.True(response.StatusCode == HttpStatusCode.NoContent, responseText);
+        Assert.True(response.StatusCode == HttpStatusCode.OK, responseText);
 
         using var verifyScope = targetFactory.Services.CreateScope();
         var imported = verifyScope.ServiceProvider.GetRequiredService<ChoboDbContext>();
@@ -1244,6 +1244,81 @@ public sealed class ChoboFoundationTests
         Assert.Contains("\"credentialsImportedAsEmpty\":true", importAudit.Details);
         Assert.Contains("\"importedBackups\":1", importAudit.Details);
         Assert.Contains("\"importedRestores\":1", importAudit.Details);
+    }
+
+    [Fact]
+    public async Task Data_import_preserves_protected_rows_with_missing_key_and_becomes_usable_after_key_restore()
+    {
+        var sourceDataDirectory = NewTestDataDirectory();
+        await using var sourceFactory = CreateFactory(sourceDataDirectory);
+        var ids = await SeedFullExportGraphAsync(sourceFactory, includeCredentials: false);
+        ProtectedSecret protectedSecret;
+        using (var sourceScope = sourceFactory.Services.CreateScope())
+        {
+            protectedSecret = (await sourceScope.ServiceProvider.GetRequiredService<ICredentialProtector>()
+                .EncryptAsync("imported-backup-password"))!;
+        }
+        var sourceKeyPath = Path.Combine(GetFactoryDataDirectory(sourceFactory), "secrets", "aes-keys", protectedSecret.KeyId.ToString());
+        var sourceClient = AuthenticatedClient(sourceFactory);
+        var export = await sourceClient.GetFromJsonAsync<ExportEnvelope>("/api/v1/data/export", JsonOptions);
+        Assert.NotNull(export);
+        export = export! with
+        {
+            Data = export.Data with
+            {
+                BackupPolicies = export.Data.BackupPolicies.Select(policy => policy.Id == ids.PolicyId
+                    ? policy with
+                    {
+                        PasswordMode = BackupPasswordMode.Constant,
+                        EncryptedBackupPassword = protectedSecret.Ciphertext,
+                        EncryptedBackupPasswordKeyId = protectedSecret.KeyId,
+                        CompressionMethod = BackupCompressionMethod.Lzma,
+                        CompressionLevel = 3
+                    }
+                    : policy).ToList(),
+                BackupTableShards = export.Data.BackupTableShards.Select(shard => shard.Id == ids.BackupTableShardId
+                    ? shard with
+                    {
+                        EncryptedBackupPassword = protectedSecret.Ciphertext,
+                        EncryptedBackupPasswordKeyId = protectedSecret.KeyId
+                    }
+                    : shard).ToList()
+            }
+        };
+
+        var targetDataDirectory = NewTestDataDirectory();
+        await using var targetFactory = CreateFactory(targetDataDirectory);
+        var targetClient = AuthenticatedClient(targetFactory);
+        var response = await targetClient.PostAsJsonAsync("/api/v1/data/import", export, JsonOptions);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var result = await response.Content.ReadFromJsonAsync<ImportResultDto>(JsonOptions);
+        Assert.NotNull(result);
+        Assert.Equal([protectedSecret.KeyId], result!.MissingOrInvalidAesKeyIds);
+        Assert.Equal(1, result.AffectedPolicyCount);
+        Assert.Equal(1, result.AffectedBackupShardCount);
+        Assert.Contains("unusable", result.Warning, StringComparison.OrdinalIgnoreCase);
+
+        using (var missingScope = targetFactory.Services.CreateScope())
+        {
+            var db = missingScope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+            Assert.True(await db.BackupPolicies.AnyAsync(x => x.Id == ids.PolicyId && x.EncryptedBackupPassword == protectedSecret.Ciphertext));
+            Assert.True(await db.BackupTableShards.AnyAsync(x => x.Id == ids.BackupTableShardId && x.EncryptedBackupPassword == protectedSecret.Ciphertext));
+            var unavailable = await missingScope.ServiceProvider.GetRequiredService<BackupApplicationService>().GetAsync(ids.BackupId, includeTables: true);
+            Assert.Equal(BackupEncryptionState.EncryptedMissingKey, unavailable!.EncryptionState);
+            Assert.False(Assert.Single(Assert.Single(unavailable.Tables).Shards).PasswordKeyAvailable);
+        }
+
+        var targetKeyDirectory = Path.Combine(GetFactoryDataDirectory(targetFactory), "secrets", "aes-keys");
+        Directory.CreateDirectory(targetKeyDirectory);
+        File.Copy(sourceKeyPath, Path.Combine(targetKeyDirectory, protectedSecret.KeyId.ToString()));
+        targetFactory.Services.GetRequiredService<IAesKeyRepository>().Refresh(protectedSecret.KeyId);
+
+        using var restoredScope = targetFactory.Services.CreateScope();
+        var available = await restoredScope.ServiceProvider.GetRequiredService<BackupApplicationService>().GetAsync(ids.BackupId, includeTables: true);
+        Assert.Equal(BackupEncryptionState.EncryptedKeyAvailable, available!.EncryptionState);
+        Assert.True(Assert.Single(Assert.Single(available.Tables).Shards).PasswordKeyAvailable);
+        Assert.Equal("imported-backup-password", await restoredScope.ServiceProvider.GetRequiredService<ICredentialProtector>()
+            .DecryptAsync(protectedSecret.Ciphertext, protectedSecret.KeyId));
     }
 
     [Theory]
@@ -1301,7 +1376,7 @@ public sealed class ChoboFoundationTests
         var targetClient = AuthenticatedClient(targetFactory);
         var response = await targetClient.PostAsJsonAsync("/api/v1/data/import", inFlight, JsonOptions);
         var responseText = await response.Content.ReadAsStringAsync();
-        Assert.True(response.StatusCode == HttpStatusCode.NoContent, responseText);
+        Assert.True(response.StatusCode == HttpStatusCode.OK, responseText);
 
         using var verifyScope = targetFactory.Services.CreateScope();
         var db = verifyScope.ServiceProvider.GetRequiredService<ChoboDbContext>();
@@ -1348,7 +1423,7 @@ public sealed class ChoboFoundationTests
         await Post<CreateUserResponse>(targetClient, "/api/v1/users", new CreateUserRequest("keep-me"));
         var response = await targetClient.PostAsJsonAsync("/api/v1/data/import", malformed, JsonOptions);
         var responseText = await response.Content.ReadAsStringAsync();
-        Assert.True(response.StatusCode == HttpStatusCode.NoContent, responseText);
+        Assert.True(response.StatusCode == HttpStatusCode.OK, responseText);
 
         using var scope = targetFactory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();

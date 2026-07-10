@@ -924,6 +924,143 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Policy_constant_password_and_compression_are_secret_safe_and_preserved_replaced_then_cleared()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var service = fixture.Services.GetRequiredService<PolicyApplicationService>();
+        var request = new UpsertPolicyRequest(
+            "protected",
+            fixture.SourceClusterId,
+            fixture.TargetId,
+            PolicySelector.Empty,
+            PasswordMode: BackupPasswordMode.Constant,
+            BackupPassword: "first-password",
+            CompressionMethod: BackupCompressionMethod.Lzma,
+            CompressionLevel: 3);
+
+        var created = await service.AddAsync(request);
+        Assert.True(created.HasConfiguredPassword);
+        Assert.True(created.PasswordKeyAvailable);
+        Assert.Equal(BackupCompressionMethod.Lzma, created.CompressionMethod);
+        var entity = await fixture.Db.BackupPolicies.SingleAsync(x => x.Id == created.Id);
+        var originalCiphertext = entity.EncryptedBackupPassword;
+        var originalKeyId = entity.EncryptedBackupPasswordKeyId;
+        Assert.NotNull(originalCiphertext);
+        Assert.DoesNotContain("first-password", originalCiphertext, StringComparison.Ordinal);
+        Assert.Equal("first-password", await fixture.Services.GetRequiredService<ICredentialProtector>()
+            .DecryptAsync(originalCiphertext, originalKeyId));
+
+        await service.UpdateAsync(created.Id, request with { Name = "renamed", BackupPassword = null });
+        fixture.Db.ChangeTracker.Clear();
+        entity = await fixture.Db.BackupPolicies.SingleAsync(x => x.Id == created.Id);
+        Assert.Equal(originalCiphertext, entity.EncryptedBackupPassword);
+        Assert.Equal(originalKeyId, entity.EncryptedBackupPasswordKeyId);
+
+        await service.UpdateAsync(created.Id, request with { BackupPassword = "replacement-password" });
+        fixture.Db.ChangeTracker.Clear();
+        entity = await fixture.Db.BackupPolicies.SingleAsync(x => x.Id == created.Id);
+        Assert.NotEqual(originalCiphertext, entity.EncryptedBackupPassword);
+        Assert.Equal("replacement-password", await fixture.Services.GetRequiredService<ICredentialProtector>()
+            .DecryptAsync(entity.EncryptedBackupPassword, entity.EncryptedBackupPasswordKeyId));
+
+        var cleared = await service.UpdateAsync(created.Id, request with
+        {
+            PasswordMode = BackupPasswordMode.None,
+            BackupPassword = null,
+            CompressionMethod = null,
+            CompressionLevel = null
+        });
+        fixture.Db.ChangeTracker.Clear();
+        entity = await fixture.Db.BackupPolicies.SingleAsync(x => x.Id == created.Id);
+        Assert.False(cleared!.HasConfiguredPassword);
+        Assert.Null(entity.EncryptedBackupPassword);
+        Assert.Null(entity.EncryptedBackupPasswordKeyId);
+        Assert.Null(entity.CompressionMethod);
+
+        var auditText = string.Join('\n', await fixture.Db.AuditEntries
+            .Where(x => x.EntityId == created.Id.ToString())
+            .Select(x => x.Details)
+            .ToListAsync());
+        Assert.DoesNotContain("first-password", auditText, StringComparison.Ordinal);
+        Assert.DoesNotContain("replacement-password", auditText, StringComparison.Ordinal);
+        Assert.DoesNotContain(originalCiphertext, auditText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Policy_rejects_invalid_password_and_compression_combinations()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var service = fixture.Services.GetRequiredService<PolicyApplicationService>();
+        var valid = new UpsertPolicyRequest("policy", fixture.SourceClusterId, fixture.TargetId, PolicySelector.Empty);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => service.AddAsync(valid with { PasswordMode = BackupPasswordMode.Constant }));
+        await Assert.ThrowsAsync<ArgumentException>(() => service.AddAsync(valid with { BackupPassword = "unexpected" }));
+        await Assert.ThrowsAsync<ArgumentException>(() => service.AddAsync(valid with { ContentMode = BackupContentMode.SchemaOnly, TargetId = null, PasswordMode = BackupPasswordMode.GeneratedPerTableShard }));
+        await Assert.ThrowsAsync<ArgumentException>(() => service.AddAsync(valid with { CompressionLevel = 3 }));
+        await Assert.ThrowsAsync<ArgumentException>(() => service.AddAsync(valid with { CompressionMethod = BackupCompressionMethod.Store, CompressionLevel = 3 }));
+        await Assert.ThrowsAsync<ArgumentException>(() => service.AddAsync(valid with
+        {
+            CompressionMethod = BackupCompressionMethod.Lzma,
+            ClickHouseBackupSettings = Settings(("compression_method", "zstd"))
+        }));
+    }
+
+    [Fact]
+    public async Task Combined_and_compression_only_policies_create_zip_backups_with_correct_metadata()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+        var policies = fixture.Services.GetRequiredService<PolicyApplicationService>();
+        var backups = fixture.Services.GetRequiredService<BackupApplicationService>();
+
+        var combinedPolicy = await policies.AddAsync(new UpsertPolicyRequest(
+            "combined",
+            fixture.SourceClusterId,
+            fixture.TargetId,
+            PolicySelector.Empty,
+            PasswordMode: BackupPasswordMode.Constant,
+            BackupPassword: "table-shard-password",
+            CompressionMethod: BackupCompressionMethod.Lzma,
+            CompressionLevel: 3));
+        var combined = await backups.ManualAsync(new ManualBackupRequest(Guid.Empty, null, PolicySelector.Empty, PolicyId: combinedPolicy.Id));
+        await fixture.RunBackupAsync(combined.Id);
+
+        fixture.Db.ChangeTracker.Clear();
+        var combinedEntity = await fixture.Db.Backups.Include(x => x.Tables).ThenInclude(x => x.Shards).SingleAsync(x => x.Id == combined.Id);
+        var combinedShard = Assert.Single(Assert.Single(combinedEntity.Tables).Shards);
+        Assert.EndsWith(".zip", combinedShard.StoragePath, StringComparison.OrdinalIgnoreCase);
+        Assert.NotNull(combinedShard.EncryptedBackupPassword);
+        Assert.Equal("table-shard-password", await fixture.Services.GetRequiredService<ICredentialProtector>()
+            .DecryptAsync(combinedShard.EncryptedBackupPassword, combinedShard.EncryptedBackupPasswordKeyId));
+        Assert.Equal(BackupCompressionMethod.Lzma, ClickHouseAdvancedSettings.CompressionMethod(
+            ClickHouseAdvancedSettings.Deserialize(combinedEntity.ClickHouseBackupSettingsJson, ClickHouseAdvancedSettingsKind.Backup)));
+        var combinedDetail = await backups.GetAsync(combined.Id, includeTables: true);
+        Assert.Equal(BackupEncryptionState.EncryptedKeyAvailable, combinedDetail!.EncryptionState);
+        Assert.Equal(BackupCompressionMethod.Lzma, combinedDetail.CompressionMethod);
+        Assert.Equal(3, combinedDetail.CompressionLevel);
+
+        var compressionPolicy = await policies.AddAsync(new UpsertPolicyRequest(
+            "compression-only",
+            fixture.SourceClusterId,
+            fixture.TargetId,
+            PolicySelector.Empty,
+            CompressionMethod: BackupCompressionMethod.Lzma,
+            CompressionLevel: 3));
+        var compressed = await backups.ManualAsync(new ManualBackupRequest(Guid.Empty, null, PolicySelector.Empty, PolicyId: compressionPolicy.Id));
+        await fixture.RunBackupAsync(compressed.Id);
+
+        fixture.Db.ChangeTracker.Clear();
+        var compressedEntity = await fixture.Db.Backups.Include(x => x.Tables).ThenInclude(x => x.Shards).SingleAsync(x => x.Id == compressed.Id);
+        var compressedShard = Assert.Single(Assert.Single(compressedEntity.Tables).Shards);
+        Assert.EndsWith(".zip", compressedShard.StoragePath, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(compressedShard.EncryptedBackupPassword);
+        var compressedDetail = await backups.GetAsync(compressed.Id, includeTables: true);
+        Assert.Equal(BackupEncryptionState.Unencrypted, compressedDetail!.EncryptionState);
+        Assert.Equal(BackupCompressionMethod.Lzma, compressedDetail.CompressionMethod);
+        Assert.Equal(3, compressedDetail.CompressionLevel);
+    }
+
+    [Fact]
     public async Task Backup_executor_capacity_ignores_queued_rows_that_have_not_started()
     {
         await using var fixture = await TestFixture.CreateAsync(
@@ -1536,6 +1673,121 @@ public sealed class BackupRestoreExecutionTests
         Assert.Null(failedOrders.ParentFullBackupId);
         Assert.Equal(BackupType.Full, Assert.Single(failedOrders.Shards).EffectiveBackupType);
         Assert.Null(Assert.Single(failedOrders.Shards).ParentFullBackupId);
+    }
+
+    [Fact]
+    public async Task Generated_passwords_are_distinct_per_shard_and_incrementals_inherit_the_parent_chain_password()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        fixture.ClickHouse.Topology.Clear();
+        fixture.ClickHouse.Topology.AddRange([
+            new ClickHouseShardReplicaInfo(1, "shard-1", 1, "source-s1", 9000, false, 0),
+            new ClickHouseShardReplicaInfo(2, "shard-2", 1, "source-s2", 9000, false, 0)
+        ]);
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+        var policy = await fixture.SeedPolicyAsync();
+        policy.PasswordMode = BackupPasswordMode.GeneratedPerTableShard;
+        await fixture.Db.SaveChangesAsync();
+
+        var full = new BackupEntity
+        {
+            TriggerType = BackupTriggerType.Manual,
+            Status = BackupRunStatus.Queued,
+            BackupType = BackupType.Full,
+            SourceClusterId = fixture.SourceClusterId,
+            TargetId = fixture.TargetId,
+            PolicyId = policy.Id
+        };
+        fixture.Db.Backups.Add(full);
+        await fixture.Db.SaveChangesAsync();
+        await fixture.RunBackupAsync(full.Id);
+
+        fixture.Db.ChangeTracker.Clear();
+        var fullShards = await fixture.Db.BackupTableShards
+            .Where(x => x.BackupTable!.BackupId == full.Id)
+            .OrderBy(x => x.SourceShardNumber)
+            .ToListAsync();
+        Assert.Equal(2, fullShards.Count);
+        var protector = fixture.Services.GetRequiredService<ICredentialProtector>();
+        var fullPasswords = await Task.WhenAll(fullShards.Select(x => protector.DecryptAsync(x.EncryptedBackupPassword, x.EncryptedBackupPasswordKeyId)));
+        Assert.All(fullPasswords, password => Assert.Equal(20, password!.Length));
+        Assert.Equal(2, fullPasswords.Distinct(StringComparer.Ordinal).Count());
+        Assert.All(fullShards, shard => Assert.EndsWith(".zip", shard.StoragePath, StringComparison.OrdinalIgnoreCase));
+
+        policy = await fixture.Db.BackupPolicies.SingleAsync(x => x.Id == policy.Id);
+        policy.PasswordMode = BackupPasswordMode.None;
+        await fixture.Db.SaveChangesAsync();
+        var incremental = new BackupEntity
+        {
+            TriggerType = BackupTriggerType.Manual,
+            Status = BackupRunStatus.Queued,
+            BackupType = BackupType.Incremental,
+            SourceClusterId = fixture.SourceClusterId,
+            TargetId = fixture.TargetId,
+            PolicyId = policy.Id
+        };
+        fixture.Db.Backups.Add(incremental);
+        await fixture.Db.SaveChangesAsync();
+        await fixture.RunBackupAsync(incremental.Id);
+
+        fixture.Db.ChangeTracker.Clear();
+        var incrementalShards = await fixture.Db.BackupTableShards
+            .Where(x => x.BackupTable!.BackupId == incremental.Id)
+            .OrderBy(x => x.SourceShardNumber)
+            .ToListAsync();
+        Assert.Equal(2, incrementalShards.Count);
+        foreach (var child in incrementalShards)
+        {
+            Assert.Equal(BackupType.Incremental, child.EffectiveBackupType);
+            var parent = fullShards.Single(x => x.Id == child.ParentFullBackupTableShardId);
+            Assert.Equal(
+                await protector.DecryptAsync(parent.EncryptedBackupPassword, parent.EncryptedBackupPasswordKeyId),
+                await protector.DecryptAsync(child.EncryptedBackupPassword, child.EncryptedBackupPasswordKeyId));
+            Assert.EndsWith(".zip", child.StoragePath, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Fact]
+    public async Task Incremental_uses_full_fallback_when_newest_parent_key_is_missing_instead_of_older_usable_parent()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        fixture.ClickHouse.Inventory.Add(Table("sales", "orders", "MergeTree"));
+        var policy = await fixture.SeedPolicyAsync();
+        var older = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, DateTimeOffset.UtcNow.AddHours(-2), tableName: "orders");
+        var newest = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, DateTimeOffset.UtcNow.AddHours(-1), tableName: "orders");
+        var protectedSecret = await fixture.Services.GetRequiredService<ICredentialProtector>().EncryptAsync("parent-password");
+        var newestShard = Assert.Single(Assert.Single(newest.Tables).Shards);
+        newestShard.EncryptedBackupPassword = protectedSecret!.Ciphertext;
+        newestShard.EncryptedBackupPasswordKeyId = protectedSecret.KeyId;
+        await fixture.Db.SaveChangesAsync();
+        var keyPath = Path.Combine(fixture.DataDirectory, "secrets", "aes-keys", protectedSecret.KeyId.ToString());
+        File.Delete(keyPath);
+        fixture.Services.GetRequiredService<IAesKeyRepository>().Refresh(protectedSecret.KeyId);
+
+        var incremental = new BackupEntity
+        {
+            TriggerType = BackupTriggerType.Manual,
+            Status = BackupRunStatus.Queued,
+            BackupType = BackupType.Incremental,
+            SourceClusterId = fixture.SourceClusterId,
+            TargetId = fixture.TargetId,
+            PolicyId = policy.Id
+        };
+        fixture.Db.Backups.Add(incremental);
+        await fixture.Db.SaveChangesAsync();
+        await fixture.RunBackupAsync(incremental.Id);
+
+        fixture.Db.ChangeTracker.Clear();
+        var child = await fixture.Db.BackupTableShards.SingleAsync(x => x.BackupTable!.BackupId == incremental.Id);
+        Assert.Equal(BackupType.Full, child.EffectiveBackupType);
+        Assert.Null(child.ParentFullBackupId);
+        Assert.Null(child.ParentFullBackupTableShardId);
+        Assert.NotEqual(older.Id, child.ParentFullBackupId);
+        var fallbackAudit = await fixture.Db.AuditEntries.SingleAsync(x =>
+            x.Action == "incremental-shard-fallback-to-full" &&
+            x.EntityId == incremental.Id.ToString() &&
+            x.Details.Contains("parent-password-key-unavailable"));
+        Assert.Contains(protectedSecret.KeyId.ToString(), fallbackAudit.Details, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -4652,6 +4904,31 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Restore_rejects_only_selected_shards_whose_password_key_is_missing()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Succeeded, "backup-op", true)
+        ]);
+        backup.Status = BackupRunStatus.Succeeded;
+        backup.CompletedAt = DateTimeOffset.UtcNow;
+        var shard = Assert.Single(Assert.Single(backup.Tables).Shards);
+        var secret = await fixture.Services.GetRequiredService<ICredentialProtector>().EncryptAsync("restore-password");
+        shard.EncryptedBackupPassword = secret!.Ciphertext;
+        shard.EncryptedBackupPasswordKeyId = secret.KeyId;
+        await fixture.Db.SaveChangesAsync();
+        File.Delete(Path.Combine(fixture.DataDirectory, "secrets", "aes-keys", secret.KeyId.ToString()));
+        fixture.Services.GetRequiredService<IAesKeyRepository>().Refresh(secret.KeyId);
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(() => fixture.Services.GetRequiredService<RestoreApplicationService>().InitiateAsync(
+            new InitiateRestoreRequest(backup.Id, fixture.TargetClusterId, "sales", "orders", null, null, false, false)));
+
+        Assert.Contains(shard.Id.ToString(), error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(secret.KeyId.ToString(), error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(await fixture.Db.Restores.AnyAsync(x => x.BackupId == backup.Id));
+    }
+
+    [Fact]
     public async Task Restore_from_incremental_fails_clearly_when_parent_full_storage_is_missing()
     {
         await using var fixture = await TestFixture.CreateAsync();
@@ -6535,6 +6812,7 @@ public sealed class BackupRestoreExecutionTests
         public Guid SourceClusterId { get; }
         public Guid TargetClusterId { get; }
         public Guid TargetId { get; }
+        public string DataDirectory => _dataDirectory;
 
         private static class TestOptionsMonitor
         {
@@ -6588,6 +6866,11 @@ public sealed class BackupRestoreExecutionTests
                 .AddScoped<ActorContext>()
                 .AddScoped<IActorContext>(provider => provider.GetRequiredService<ActorContext>())
                 .AddScoped<IAuditService, AuditService>()
+                .AddSingleton(Options.Create(new ChoboStorageOptions { DataDirectory = dataDirectory }))
+                .AddSingleton(Options.Create(new ChoboSecurityOptions()))
+                .AddSingleton<IAesKeyRepository, FileAesKeyRepository>()
+                .AddSingleton<ICredentialProtector, CredentialProtector>()
+                .AddSingleton<IBackupPasswordGenerator, BackupPasswordGenerator>()
                 .AddSingleton(Options.Create(new ChoboTestHooksOptions()))
                 .AddSingleton(Options.Create(new ChoboEndpointRewriteOptions()))
                 .AddSingleton<IEndpointRewriteService, EndpointRewriteService>()
