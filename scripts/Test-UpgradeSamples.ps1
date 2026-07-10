@@ -109,7 +109,18 @@ function Start-ChoboServerForUpgrade([string]$Root, [string]$DataDirectory, [int
     try {
         $outLog = [System.IO.Path]::ChangeExtension($LogPath, '.out.log')
         $errLog = [System.IO.Path]::ChangeExtension($LogPath, '.err.log')
-        $process = Start-Process -FilePath 'dotnet' -ArgumentList @($serverDll) -WorkingDirectory ([System.IO.Path]::Combine($Root, 'ChoboServer')) -RedirectStandardOutput $outLog -RedirectStandardError $errLog -WindowStyle Hidden -PassThru
+        $startProcessParameters = @{
+            FilePath = 'dotnet'
+            ArgumentList = @($serverDll)
+            WorkingDirectory = [System.IO.Path]::Combine($Root, 'ChoboServer')
+            RedirectStandardOutput = $outLog
+            RedirectStandardError = $errLog
+            PassThru = $true
+        }
+        if ($IsWindows) {
+            $startProcessParameters.WindowStyle = 'Hidden'
+        }
+        $process = Start-Process @startProcessParameters
     }
     finally {
         foreach ($key in $oldEnvironment.Keys) {
