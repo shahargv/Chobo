@@ -1,4 +1,5 @@
 import { Children, Fragment, isValidElement, useMemo, useState, type ReactElement, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   flexRender,
   getCoreRowModel,
@@ -12,10 +13,20 @@ import {
   type Header,
   type SortingState
 } from "@tanstack/react-table";
-import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, Save, Search, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, RefreshCw, Save, Search, X } from "lucide-react";
 
 export function Page({ title, subtitle, action, children }: { title: string; subtitle: string; action?: ReactNode; children: ReactNode }) {
-  return <div className="page"><div className="page-head"><div><h1>{title}</h1><p>{subtitle}</p></div>{action}</div>{children}</div>;
+  const queryClient = useQueryClient();
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const refresh = async () => {
+    setIsRefreshing(true);
+    try {
+      await queryClient.refetchQueries({ type: "active" });
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+  return <div className="page"><div className="page-head"><div><h1>{title}</h1><p>{subtitle}</p></div><div className="page-actions">{action}<button type="button" className="secondary icon-button" title="Refresh screen data" aria-label="Refresh screen data" disabled={isRefreshing} onClick={refresh}><RefreshCw size={16} /></button></div></div>{children}</div>;
 }
 
 export function CrudPage({ title, subtitle, showForm, onAdd, formTitle, saveLabel = "Save", form, table, onSave, onCancel }: { title: string; subtitle: string; showForm: boolean; onAdd: () => void; formTitle?: string; saveLabel?: string; form: ReactNode; table: ReactNode; onSave: () => void; onCancel?: () => void }) {

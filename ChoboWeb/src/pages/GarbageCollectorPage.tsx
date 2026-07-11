@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Clock, Play, RefreshCw, Trash2 } from "lucide-react";
+import { Clock, Play, Trash2 } from "lucide-react";
 import { useApi } from "../api-context";
 import { DataTable, Input, Page, Stat, Status } from "../components/ui";
 import { formatTime } from "../utils/format";
@@ -65,7 +65,7 @@ export function GarbageCollectorPage() {
   const resetToLastHour = () => setAuditWindow(defaultAuditWindow());
 
   return <>
-    <Page title="Garbage Collector" subtitle="Review cleanup activity and run cleanup for expired or failed backup remains." action={<div className="actions"><button className="secondary" disabled={status.isFetching || queue.isFetching || logs.isFetching || audits.isFetching} onClick={refreshAll}><RefreshCw size={16} /> Refresh</button><button className="primary" disabled={run.isPending || current?.isRunning} onClick={() => run.mutate()}><Play size={16} /> Manual Execute</button></div>}>
+    <Page title="Garbage Collector" subtitle="Review cleanup activity and run cleanup for expired or failed backup remains." action={<button className="primary" disabled={run.isPending || current?.isRunning} onClick={() => run.mutate()}><Play size={16} /> Manual Execute</button>}>
       <section className="panel">
         <div className="section-head">
           <div>

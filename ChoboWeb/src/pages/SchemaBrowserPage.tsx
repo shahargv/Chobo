@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Database, Download, RefreshCw } from "lucide-react";
+import { Database, Download } from "lucide-react";
 import type { SchemaBackupSummaryDto, SchemaDatabaseDto, SchemaTableDto } from "../api/generated";
 import { useApi } from "../api-context";
 import { Empty, Input, Page, Select, Status } from "../components/ui";
@@ -70,7 +70,7 @@ export function SchemaBrowserPage() {
   });
 
   return (
-    <Page title="Schema Browser" subtitle="Browse and export table schemas captured during backup runs." action={<button className="secondary" onClick={() => { backups.refetch(); schema.refetch(); }}><RefreshCw size={16} /> Refresh</button>}>
+    <Page title="Schema Browser" subtitle="Browse and export table schemas captured during backup runs.">
       <section className="panel">
         <div className="form-grid">
           <Select label="Backup range" value={rangePreset} onChange={(value) => setRangePreset(value as RangePreset)} options={[["last7d", "Last week"], ["last24h", "Last 24 hours"], ["last30d", "Last 30 days"], ["custom", "Custom range"]]} />

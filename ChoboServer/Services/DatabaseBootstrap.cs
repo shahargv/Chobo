@@ -4,6 +4,7 @@ using ChoboServer.Options;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using System.Diagnostics;
 
 namespace ChoboServer.Services;
 
@@ -29,8 +30,53 @@ public sealed class DatabaseBootstrap(
 
     public async Task EnsureDatabaseObjectsAsync(CancellationToken cancellationToken = default)
     {
+        var startupTimer = Stopwatch.StartNew();
+        _logger.Information("Starting database schema migration checks for supported schema version {SchemaVersion}.", ChoboApi.SchemaVersion);
+
+        var compatibilityTimer = Stopwatch.StartNew();
+        _logger.Information("Schema migration step: verifying database compatibility.");
         await VerifySchemaCompatibilityBeforeMigrationAsync(cancellationToken);
-        await db.Database.MigrateAsync(cancellationToken);
+        _logger.Information("Schema migration step completed: database compatibility verified in {ElapsedMilliseconds} ms.", compatibilityTimer.ElapsedMilliseconds);
+
+        var appliedMigrations = (await db.Database.GetAppliedMigrationsAsync(cancellationToken)).ToHashSet(StringComparer.Ordinal);
+        var migrations = db.Database.GetMigrations().ToList();
+        var pendingMigrations = migrations.Where(migration => !appliedMigrations.Contains(migration)).ToList();
+        _logger.Information(
+            "Schema migration inventory: {AppliedCount} applied, {PendingCount} pending, {KnownCount} known migrations.",
+            appliedMigrations.Count,
+            pendingMigrations.Count,
+            migrations.Count);
+
+        foreach (var migration in pendingMigrations)
+        {
+            _logger.Information("Schema migration step pending: {MigrationId}.", migration);
+        }
+
+        var migrationTimer = Stopwatch.StartNew();
+        try
+        {
+            _logger.Information("Schema migration step: applying {PendingCount} pending migration(s).", pendingMigrations.Count);
+            await db.Database.MigrateAsync(cancellationToken);
+            foreach (var migration in pendingMigrations)
+            {
+                _logger.Information("Schema migration step completed: applied migration {MigrationId}.", migration);
+            }
+            _logger.Information("Schema migration apply completed in {ElapsedMilliseconds} ms.", migrationTimer.ElapsedMilliseconds);
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(
+                ex,
+                "Schema migration step failed after {ElapsedMilliseconds} ms. Pending migrations: {PendingMigrations}.",
+                migrationTimer.ElapsedMilliseconds,
+                pendingMigrations);
+            throw;
+        }
+
+        _logger.Information(
+            "Database schema migration checks completed in {ElapsedMilliseconds} ms; applied {AppliedMigrationCount} migration(s).",
+            startupTimer.ElapsedMilliseconds,
+            pendingMigrations.Count);
     }
 
     private async Task VerifySchemaCompatibilityBeforeMigrationAsync(CancellationToken cancellationToken)
@@ -48,6 +94,7 @@ public sealed class DatabaseBootstrap(
             tableCommand.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'SchemaStates' LIMIT 1;";
             if (await tableCommand.ExecuteScalarAsync(cancellationToken) is null)
             {
+                _logger.Information("Schema compatibility check: SchemaStates table does not exist yet; treating database as new.");
                 return;
             }
 
@@ -56,10 +103,12 @@ public sealed class DatabaseBootstrap(
             var value = await versionCommand.ExecuteScalarAsync(cancellationToken);
             if (value is null || value == DBNull.Value)
             {
+                _logger.Warning("Schema compatibility check: SchemaStates exists but contains no schema version.");
                 return;
             }
 
             var schemaVersion = Convert.ToInt32(value, System.Globalization.CultureInfo.InvariantCulture);
+            _logger.Information("Schema compatibility check: database version {DatabaseSchemaVersion}, server-supported version {SupportedSchemaVersion}.", schemaVersion, ChoboApi.SchemaVersion);
             if (schemaVersion > ChoboApi.SchemaVersion)
             {
                 throw new InvalidOperationException($"Database schema version {schemaVersion} is newer than server-supported schema version {ChoboApi.SchemaVersion}.");

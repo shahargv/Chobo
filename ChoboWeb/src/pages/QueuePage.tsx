@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ArrowDown, ArrowUp, ChevronsUp, ExternalLink, Play, RefreshCw, Table2 } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronsUp, ExternalLink, Play, Table2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { BackupDrawer } from "./BackupsPage";
 import type { BackupRestoreQueueItemDto, BackupRestoreQueueKind, BackupRestoreQueueMoveDirection } from "../api/generated";
@@ -33,7 +33,7 @@ export function QueuePage() {
     onError: (error) => showToast({ kind: "error", text: String(error) })
   });
   const rows = queue.data ?? [];
-  return <Page title="Queue" subtitle="Inspect and prioritize active backup and restore shard work." action={<button className="secondary" disabled={queue.isFetching} onClick={() => queue.refetch()}><RefreshCw size={16} /> Refresh</button>}>
+  return <Page title="Queue" subtitle="Inspect and prioritize active backup and restore shard work.">
     <section className="panel queue-panel">
       <div className="form-grid compact-grid">
         <Select label="Kind" value={kind} onChange={(value) => setKind(value as BackupRestoreQueueKind)} options={[["All", "All"], ["Backup", "Backups"], ["Restore", "Restores"]]} />
