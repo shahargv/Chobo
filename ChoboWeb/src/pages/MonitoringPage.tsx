@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ExternalLink, RefreshCw } from "lucide-react";
+import { ExternalLink } from "lucide-react";
 import { useApi } from "../api-context";
 import { DataTable, Page } from "../components/ui";
 
@@ -11,7 +11,7 @@ export function MonitoringPage() {
   const openJsonMetrics = () => openTextDocument(() => api.metricsJsonText(), "application/json", (error) => showToast({ kind: "error", text: String(error) }));
 
   return (
-    <Page title="Monitoring" subtitle="View server runtime metrics and download the raw metrics payload for diagnostics." action={<button className="secondary" onClick={() => { metrics.refetch(); }}><RefreshCw size={16} /> Refresh</button>}>
+    <Page title="Monitoring" subtitle="View server runtime metrics and download the raw metrics payload for diagnostics.">
       <section className="panel monitoring-links">
         <div>
           <h2>Metrics endpoint</h2>

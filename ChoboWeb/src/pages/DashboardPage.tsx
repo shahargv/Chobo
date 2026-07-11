@@ -1,7 +1,7 @@
 import { NavLink } from "react-router-dom";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Activity, CalendarX, CheckCircle2, Circle, Info, ShieldCheck } from "lucide-react";
+import { CalendarX, CheckCircle2, Circle, Info, ShieldCheck } from "lucide-react";
 import type { BackupDto } from "../api/generated";
 import { useApi } from "../api-context";
 import { DataTable, Empty, ExpandableErrorText, Page, Stat, Status } from "../components/ui";
@@ -41,7 +41,7 @@ export function Dashboard() {
   });
   const missingOnboarding = onboarding.filter((step) => !step.done);
   return (
-    <Page title="Dashboard" subtitle="See upcoming schedules, running backups, and recent operational health at a glance." action={<button className="secondary" onClick={() => { dashboard.refetch(); backups.refetch(); missingBackups.refetch(); }}><Activity size={16} /> Refresh</button>}>
+    <Page title="Dashboard" subtitle="See upcoming schedules, running backups, and recent operational health at a glance.">
       {onboardingIsLoading ? <OnboardingLoading /> : missingOnboarding.length > 0 ? <OnboardingPanel steps={onboarding} /> : <OnboardingComplete />}
       <div className="stat-grid">
         <Stat label="Running backups" value={running.length} tone={running.length ? "warn" : "ok"} />

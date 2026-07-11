@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { RefreshCw, RotateCcw, Save, SlidersHorizontal, Undo2 } from "lucide-react";
+import { RotateCcw, Save, SlidersHorizontal, Undo2 } from "lucide-react";
 import { useApi } from "../api-context";
 import type { RuntimeSettingDto } from "../api/generated";
 import { DataTable, Empty, Page, Status } from "../components/ui";
@@ -40,7 +40,7 @@ export function SettingsPage() {
     onError: (error) => showToast({ kind: "error", text: String(error) })
   });
 
-  return <Page title="Settings" subtitle="Edit server runtime settings stored in the managed overlay." action={<div className="actions"><button className="secondary" disabled={settings.isFetching} onClick={() => settings.refetch()}><RefreshCw size={16} /> Refresh</button><button className="primary" disabled={reload.isPending} onClick={() => reload.mutate()}><SlidersHorizontal size={16} /> Reload</button></div>}>
+  return <Page title="Settings" subtitle="Edit server runtime settings stored in the managed overlay." action={<button className="primary" disabled={reload.isPending} onClick={() => reload.mutate()}><SlidersHorizontal size={16} /> Reload</button>}>
     <section className="panel settings-panel">
       <div className="section-head settings-head">
         <div>

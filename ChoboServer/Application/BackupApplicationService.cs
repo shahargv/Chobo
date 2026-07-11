@@ -673,12 +673,16 @@ public sealed class BackupApplicationService(
     private async Task<IReadOnlyList<Guid>> DependentBackupIdsAsync(Guid fullBackupId, CancellationToken cancellationToken)
     {
         var tableDependents = await db.BackupTables
-            .Where(x => x.ParentFullBackupTable != null && x.ParentFullBackupTable.BackupId == fullBackupId)
+            .AsNoTracking()
+            .Where(x => x.ParentFullBackupId == fullBackupId)
             .Select(x => x.BackupId)
+            .Distinct()
             .ToListAsync(cancellationToken);
         var shardDependents = await db.BackupTableShards
-            .Where(x => x.ParentFullBackupTableShard != null && x.ParentFullBackupTableShard.BackupTable!.BackupId == fullBackupId)
+            .AsNoTracking()
+            .Where(x => x.ParentFullBackupId == fullBackupId && x.BackupTable != null)
             .Select(x => x.BackupTable!.BackupId)
+            .Distinct()
             .ToListAsync(cancellationToken);
         return tableDependents.Concat(shardDependents).Distinct().ToList();
     }
