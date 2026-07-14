@@ -148,9 +148,10 @@ public sealed class BackupsGarbageCollectorBackgroundService(
         {
             var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
             var audit = scope.ServiceProvider.GetRequiredService<IAuditService>();
+            var evaluator = scope.ServiceProvider.GetRequiredService<BackupGarbageCollectionEvaluationService>();
             _logger.Information("Backup garbage collection mark phase started.");
             var queuePruned = await PruneCompletedQueueItemsAsync(db, audit, cancellationToken);
-            var failedMarked = await MarkFailedBackupsAsync(db, audit, cancellationToken);
+            var failedMarked = await MarkFailedBackupsAsync(db, audit, evaluator, cancellationToken);
             var orphanedMarked = await MarkOrphanIncrementalBackupsAsync(db, audit, cancellationToken);
             markedCount = failedMarked + orphanedMarked;
             _logger.Information("Backup garbage collection mark phase completed. Completed queue rows pruned={QueuePrunedCount}, failed marked={FailedMarkedCount}, orphaned marked={OrphanedMarkedCount}, total marked={MarkedCount}.", queuePruned, failedMarked, orphanedMarked, markedCount);
@@ -169,7 +170,8 @@ public sealed class BackupsGarbageCollectorBackgroundService(
         {
             var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
             var audit = scope.ServiceProvider.GetRequiredService<IAuditService>();
-            markedCount = await MarkOneIfEligibleAsync(db, audit, backupId, cancellationToken);
+            var evaluator = scope.ServiceProvider.GetRequiredService<BackupGarbageCollectionEvaluationService>();
+            markedCount = await MarkOneIfEligibleAsync(db, audit, evaluator, backupId, cancellationToken);
             pending = (await GetPendingCleanupAsync(db, backupId, cancellationToken)).SingleOrDefault();
             _logger.Information("Single backup garbage collection queue lookup for backup {BackupId}: marked={MarkedCount}, pending={IsPending}.", backupId, markedCount, pending is not null);
         }
@@ -241,14 +243,28 @@ public sealed class BackupsGarbageCollectorBackgroundService(
         return deleted;
     }
 
-    private async Task<int> MarkFailedBackupsAsync(ChoboDbContext db, IAuditService audit, CancellationToken cancellationToken)
+    private async Task<int> MarkFailedBackupsAsync(
+        ChoboDbContext db,
+        IAuditService audit,
+        BackupGarbageCollectionEvaluationService evaluator,
+        CancellationToken cancellationToken)
     {
         var now = timeProvider.GetUtcNow();
+        var failedIds = await db.Backups.AsNoTracking()
+            .Where(x => x.Status == BackupRunStatus.Failed)
+            .Select(x => x.Id)
+            .ToListAsync(cancellationToken);
+        var eligibleIds = new List<Guid>();
+        foreach (var failedId in failedIds)
+        {
+            if ((await evaluator.EvaluateAsync(failedId, cancellationToken))?.EligibleForDeletion == true)
+            {
+                eligibleIds.Add(failedId);
+            }
+        }
         var backups = await db.Backups
             .Include(x => x.Policy)
-            .Where(x => x.Status == BackupRunStatus.Failed &&
-                        x.Policy != null &&
-                        x.Policy.FailedBackupRetentionMode == FailedBackupRetentionMode.DeleteByGarbageCollectorAfterFailure)
+            .Where(x => eligibleIds.Contains(x.Id))
             .ToListAsync(cancellationToken);
 
         _logger.Information("Backup garbage collection found {FailedBackupCount} failed backup(s) eligible for cleanup marking.", backups.Count);
@@ -274,7 +290,12 @@ public sealed class BackupsGarbageCollectorBackgroundService(
         return dependentMarkedCount + backups.Count;
     }
 
-    private async Task<int> MarkOneIfEligibleAsync(ChoboDbContext db, IAuditService audit, Guid backupId, CancellationToken cancellationToken)
+    private async Task<int> MarkOneIfEligibleAsync(
+        ChoboDbContext db,
+        IAuditService audit,
+        BackupGarbageCollectionEvaluationService evaluator,
+        Guid backupId,
+        CancellationToken cancellationToken)
     {
         var now = timeProvider.GetUtcNow();
         var backup = await db.Backups
@@ -286,7 +307,7 @@ public sealed class BackupsGarbageCollectorBackgroundService(
         }
 
         if (backup.Status == BackupRunStatus.Failed &&
-            backup.Policy?.FailedBackupRetentionMode == FailedBackupRetentionMode.DeleteByGarbageCollectorAfterFailure)
+            (await evaluator.EvaluateAsync(backup.Id, cancellationToken))?.EligibleForDeletion == true)
         {
             var markedCount = await MarkDependentIncrementalBackupsAsync(db, audit, [backup.Id], now, "failed-parent-garbage-collector", cancellationToken);
             MarkBackupForGarbageCollection(backup, now, "failed-backup-garbage-collector");

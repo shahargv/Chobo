@@ -1,4 +1,5 @@
 using Chobo.Contracts;
+using ChoboServer.Application;
 using ChoboServer.BackgroundServices;
 using ChoboServer.Services;
 using Microsoft.AspNetCore.Mvc;
@@ -9,6 +10,7 @@ namespace ChoboServer.Controllers;
 [Route(ChoboApi.ApiPrefix)]
 public sealed class BackupGarbageCollectorController(
     BackupsGarbageCollectorBackgroundService garbageCollector,
+    BackupGarbageCollectionEvaluationService evaluator,
     IAuditService audit) : ControllerBase
 {
     [HttpGet("backups/garbage-collector/status")]
@@ -17,6 +19,13 @@ public sealed class BackupGarbageCollectorController(
     [HttpGet("backups/garbage-collector/queue")]
     public async Task<IReadOnlyList<BackupGarbageCollectorQueueItemDto>> Queue(CancellationToken cancellationToken) =>
         await garbageCollector.GetQueueAsync(cancellationToken);
+
+    [HttpGet("backups/{backupId:guid}/garbage-collection-evaluation")]
+    public async Task<ActionResult<BackupGarbageCollectionEvaluationDto>> Evaluate(Guid backupId, CancellationToken cancellationToken)
+    {
+        var evaluation = await evaluator.EvaluateAsync(backupId, cancellationToken);
+        return evaluation is null ? NotFound() : evaluation;
+    }
 
     [HttpPost("backups/garbage-collector/run")]
     public async Task<ActionResult<BackupGarbageCollectorStatusDto>> Run(CancellationToken cancellationToken)

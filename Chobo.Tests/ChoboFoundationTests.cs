@@ -2294,6 +2294,25 @@ public sealed class ChoboFoundationTests
         Assert.DoesNotContain(audits.Items, x => x.Action == "old-time-window-audit");
     }
 
+    [Fact]
+    public async Task Garbage_collection_evaluation_api_returns_structured_reasons_and_not_found()
+    {
+        await using var factory = CreateFactory();
+        var client = AuthenticatedClient(factory);
+        var ids = await SeedFullExportGraphAsync(factory, includeCredentials: false);
+
+        var evaluation = await client.GetFromJsonAsync<BackupGarbageCollectionEvaluationDto>(
+            $"/api/v1/backups/{ids.BackupId}/garbage-collection-evaluation", JsonOptions);
+        var missing = await client.GetAsync($"/api/v1/backups/{Guid.NewGuid()}/garbage-collection-evaluation");
+
+        Assert.NotNull(evaluation);
+        Assert.False(evaluation.EligibleForDeletion);
+        Assert.Contains(evaluation.Reasons, x => x.Reason == BackupGarbageCollectionReason.BackupPinned);
+        Assert.Contains(evaluation.Reasons, x => x.Reason == BackupGarbageCollectionReason.ProtectedByMinimumBackupCount);
+        Assert.Contains("pinned", evaluation.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+    }
+
     private static async Task<FullExportGraphIds> SeedFullExportGraphAsync(WebApplicationFactory<Program> factory, bool includeCredentials, bool softDeletedConfig = false)
     {
         using var scope = factory.Services.CreateScope();

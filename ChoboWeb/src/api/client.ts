@@ -4,6 +4,7 @@ import type {
   PagedResultDto,
   AuditEntryDto,
   BackupDto,
+  BackupGarbageCollectionEvaluationDto,
   BackupSettingsPreviewRequest,
   ClickHouseSettingsPreviewDto,
   BackupGarbageCollectorQueueItemDto,
@@ -144,6 +145,7 @@ export class ChoboApiClient {
   cancelBackup(id: string) { return this.post<BackupDto>(`backups/${id}/cancel`, {}); }
   recoverBackupFromPath(request: RecoverBackupMetadataFromPathRequest) { return this.post<BackupMetadataRecoveryResult>("backups/recover/from-path", request); }
   recoverBackupFromScan(request: RecoverBackupMetadataScanRequest) { return this.post<BackupMetadataRecoveryResult>("backups/recover/scan", request); }
+  backupGarbageCollectionEvaluation(id: string) { return this.get<BackupGarbageCollectionEvaluationDto>(`backups/${id}/garbage-collection-evaluation`); }
   backupGarbageCollectorStatus() { return this.get<BackupGarbageCollectorStatusDto>("backups/garbage-collector/status"); }
   backupGarbageCollectorQueue() { return this.get<BackupGarbageCollectorQueueItemDto[]>("backups/garbage-collector/queue"); }
   runBackupGarbageCollector() { return this.post<BackupGarbageCollectorStatusDto>("backups/garbage-collector/run", {}); }

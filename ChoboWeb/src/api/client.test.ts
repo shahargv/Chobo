@@ -52,4 +52,15 @@ describe("ChoboApiClient destructive requests", () => {
     expect(init).toEqual(expect.objectContaining({ method: "POST" }));
     expect(JSON.parse(String(init.body))).toMatchObject({ confirmDestructive: true, tables: [{ targetTable: "orders" }] });
   });
+
+  it("requests garbage collection evaluation for the selected backup", async () => {
+    const fetchMock = stubJsonResponse({ backupId: "backup-id", eligibleForDeletion: false, reasons: [] });
+
+    await apiClient().backupGarbageCollectionEvaluation("backup-id");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://chobo.test/api/v1/backups/backup-id/garbage-collection-evaluation",
+      expect.any(Object)
+    );
+  });
 });

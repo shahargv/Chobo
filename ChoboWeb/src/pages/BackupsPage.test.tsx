@@ -249,6 +249,59 @@ describe("Backups destructive delete flow", () => {
     queryClient.clear();
     host.remove();
   });
+  it("evaluates garbage collection on demand from the attributes column", async () => {
+    const backup = baseBackup({ id: "backup-gc-explain", isPinned: true });
+    const backupGarbageCollectionEvaluation = vi.fn(async () => ({
+      backupId: backup.id,
+      eligibleForDeletion: false,
+      text: "Backup is pinned and has an active child.",
+      reasons: [
+        { reason: "BackupPinned" as const, text: "This backup is pinned.", relatedBackupIds: [] },
+        { reason: "ActiveDependentBackups" as const, text: "Child backup child-1 depends on it.", relatedBackupIds: ["child-1"] }
+      ],
+      evaluatedAt: "2026-06-22T01:00:00Z"
+    }));
+    const api = {
+      backups: vi.fn(async () => [backup]),
+      schedules: vi.fn(async () => []),
+      policies: vi.fn(async () => []),
+      backupGarbageCollectionEvaluation,
+      deleteBackup: vi.fn(),
+      pinBackup: vi.fn(),
+      unpinBackup: vi.fn(),
+      cancelBackup: vi.fn()
+    };
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={["/backups"]}>
+            <ApiContext.Provider value={{ api: api as never, showToast: vi.fn() }}><Backups /></ApiContext.Provider>
+          </MemoryRouter>
+        </QueryClientProvider>
+      );
+    });
+    await flushUi();
+
+    const explainButton = host.querySelector('button[aria-label="Explain garbage collection for backup backup-gc-explain"]') as HTMLButtonElement;
+    await act(async () => explainButton.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    await flushUi();
+
+    expect(host.textContent).toContain("GC");
+    expect(backupGarbageCollectionEvaluation).toHaveBeenCalledWith("backup-gc-explain");
+    expect(host.textContent).toContain("Not eligible for deletion");
+    expect(host.textContent).toContain("BackupPinned: This backup is pinned.");
+    expect(host.textContent).toContain("ActiveDependentBackups: Child backup child-1 depends on it.");
+
+    await act(async () => root.unmount());
+    queryClient.clear();
+    host.remove();
+  });
+
   it("shows confirmation and sends confirmDestructive for non-pinned backup deletes", async () => {
     const backup = baseBackup({ id: "backup-delete-id", isPinned: false });
     const deleteBackup = vi.fn(async () => ({ ...backup, status: "ManualDeleteRequested" as const }));

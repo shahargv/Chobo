@@ -155,6 +155,35 @@ public sealed record BackupGarbageCollectorQueueItemDto(
     int DeletionAttemptCount,
     string? DeletionError);
 
+public enum BackupGarbageCollectionReason
+{
+    EligibleForDeletion,
+    BackupAlreadyDeleted,
+    DeletionAlreadyRequested,
+    BackupInProgress,
+    BackupStatusNotEligible,
+    PolicyMissing,
+    PolicyDeleted,
+    RetentionNotConfigured,
+    RetentionPeriodNotElapsed,
+    ProtectedByMinimumBackupCount,
+    ProtectedByMinimumFullBackupCount,
+    BackupPinned,
+    ActiveDependentBackups
+}
+
+public sealed record BackupGarbageCollectionReasonDto(
+    BackupGarbageCollectionReason Reason,
+    string Text,
+    IReadOnlyList<Guid> RelatedBackupIds);
+
+public sealed record BackupGarbageCollectionEvaluationDto(
+    Guid BackupId,
+    bool EligibleForDeletion,
+    string Text,
+    IReadOnlyList<BackupGarbageCollectionReasonDto> Reasons,
+    DateTimeOffset EvaluatedAt);
+
 public enum BackupRestoreQueueKind { All, Backup, Restore }
 
 public enum BackupRestoreQueueStatus { Queued, Running, Succeeded, PartiallySucceeded, Failed, Skipped, Canceled }

@@ -4336,7 +4336,7 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
-    public async Task Retention_deletes_expired_incremental_before_full_parent()
+    public async Task Retention_deletes_expired_incremental_and_full_parent_in_the_same_run()
     {
         var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
         await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now));
@@ -4349,12 +4349,35 @@ public sealed class BackupRestoreExecutionTests
 
         await fixture.Services.GetRequiredService<RetentionManagementBackgroundService>().RunOnceAsync();
         fixture.Db.ChangeTracker.Clear();
-        Assert.Equal(BackupRunStatus.Succeeded, (await fixture.Db.Backups.SingleAsync(x => x.Id == full.Id)).Status);
-        Assert.Equal(BackupRunStatus.BackupExpiredDeleted, (await fixture.Db.Backups.SingleAsync(x => x.Id == incremental.Id)).Status);
-
-        await fixture.Services.GetRequiredService<RetentionManagementBackgroundService>().RunOnceAsync();
-        fixture.Db.ChangeTracker.Clear();
         Assert.Equal(BackupRunStatus.BackupExpiredDeleted, (await fixture.Db.Backups.SingleAsync(x => x.Id == full.Id)).Status);
+        Assert.Equal(BackupRunStatus.BackupExpiredDeleted, (await fixture.Db.Backups.SingleAsync(x => x.Id == incremental.Id)).Status);
+    }
+
+    [Fact]
+    public async Task Garbage_collection_evaluation_returns_all_retention_blockers_with_dependent_ids()
+    {
+        var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now));
+        var policy = await fixture.SeedPolicyAsync(retentionMinutes: 120, minBackupsToKeep: 4);
+        policy.MinFullBackupsToKeep = 2;
+        await fixture.Db.SaveChangesAsync();
+        var full = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, now.AddMinutes(-10), isPinned: true, tableName: "orders");
+        var incremental = await fixture.SeedDependentIncrementalAsync(policy.Id, full, now.AddMinutes(-5));
+
+        var evaluation = await fixture.Services.GetRequiredService<BackupGarbageCollectionEvaluationService>()
+            .EvaluateAsync(full.Id);
+
+        Assert.NotNull(evaluation);
+        Assert.False(evaluation.EligibleForDeletion);
+        var reasons = evaluation.Reasons.Select(x => x.Reason).ToHashSet();
+        Assert.Contains(BackupGarbageCollectionReason.ProtectedByMinimumBackupCount, reasons);
+        Assert.Contains(BackupGarbageCollectionReason.ProtectedByMinimumFullBackupCount, reasons);
+        Assert.Contains(BackupGarbageCollectionReason.BackupPinned, reasons);
+        Assert.Contains(BackupGarbageCollectionReason.RetentionPeriodNotElapsed, reasons);
+        Assert.Contains(BackupGarbageCollectionReason.ActiveDependentBackups, reasons);
+        var dependencyReason = Assert.Single(evaluation.Reasons, x => x.Reason == BackupGarbageCollectionReason.ActiveDependentBackups);
+        Assert.Equal([incremental.Id], dependencyReason.RelatedBackupIds);
+        Assert.Contains(incremental.Id.ToString(), dependencyReason.Text);
     }
 
     [Fact]
@@ -6897,6 +6920,7 @@ public sealed class BackupRestoreExecutionTests
                 .AddScoped<BackupRunnerService>()
                 .AddScoped<RestoreRunnerService>()
                 .AddScoped<BackupCleanupService>()
+                .AddScoped<BackupGarbageCollectionEvaluationService>()
                 .AddSingleton<IBackupRestoreQueues, BackupRestoreQueues>()
                 .AddSingleton(TestOptionsMonitor.Create(options ?? new ChoboBackupRestoreOptions { MaxDop = 1, PollInterval = TimeSpan.FromMilliseconds(1), SchedulerInterval = TimeSpan.FromSeconds(1) }))
                 .AddSingleton(TestOptionsMonitor.Create(new ChoboClusterMetadataOptions { CacheDuration = TimeSpan.FromHours(1), RefreshInterval = TimeSpan.FromMinutes(30) }))
