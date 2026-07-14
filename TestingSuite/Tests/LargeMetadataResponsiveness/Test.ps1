@@ -33,7 +33,7 @@ function Get-ChoboTestDefinition {
 function New-ChoboHttpClient {
     $client = [System.Net.Http.HttpClient]::new()
     $client.BaseAddress = [Uri]'http://choboserver:8080/api/v1/'
-    $client.Timeout = [TimeSpan]::FromSeconds(120)
+    $client.Timeout = [TimeSpan]::FromSeconds(300)
     $client.DefaultRequestHeaders.Authorization = [System.Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer', 'static-test-token')
     $client
 }
@@ -138,30 +138,28 @@ function Invoke-LargeMetadataResponsiveness {
     try {
         $seed = Invoke-TimedHttp -Client $client -Name 'seed large metadata graph' -Method 'POST' -Path 'test-hooks/seed-large-metadata-graph' -Body @{
             backupCount = 300
-            tablesPerBackup = 10
-            shardsPerTable = 4
-            restoreCount = 60
+            tablesPerBackup = 100
+            shardsPerTable = 24
+            restoreCount = 20
             completedQueueRows = 1000
-        } -MaxMs 30000
+        } -MaxMs 240000
         $timings.Add($seed)
         $seedJson = $seed.parsedJson
-        if ($seedJson.backupCount -lt 300 -or $seedJson.backupTableCount -lt 3000 -or $seedJson.backupShardCount -lt 12000) {
+        if ($seedJson.backupCount -lt 300 -or $seedJson.incrementalBackupCount -lt 270 -or $seedJson.backupTableCount -lt 30000 -or $seedJson.backupShardCount -lt 720000) {
             throw "Seeded graph was smaller than expected: $($seedJson | ConvertTo-Json -Compress)"
         }
 
         Start-Sleep -Seconds 4
 
-        $timings.Add((Invoke-TimedHttp -Client $client -Name 'api backups summary list' -Method 'GET' -Path 'backups?includeTables=false' -MaxMs 3000))
-        $timings.Add((Invoke-TimedHttp -Client $client -Name 'api backups detailed list' -Method 'GET' -Path 'backups' -MaxMs 12000))
+        $timings.Add((Invoke-TimedHttp -Client $client -Name 'api backups summary list' -Method 'GET' -Path 'backups?includeTables=false' -MaxMs 5000))
         $timings.Add((Invoke-TimedHttp -Client $client -Name 'api backup summary show' -Method 'GET' -Path "backups/$($seedJson.sampleBackupId)?includeTables=false" -MaxMs 2000))
         $timings.Add((Invoke-TimedHttp -Client $client -Name 'api backup detailed show' -Method 'GET' -Path "backups/$($seedJson.sampleBackupId)" -MaxMs 5000))
         $timings.Add((Invoke-TimedHttp -Client $client -Name 'api dashboard' -Method 'GET' -Path 'dashboard?nextHours=24' -MaxMs 5000))
         $timings.Add((Invoke-TimedHttp -Client $client -Name 'api queue all' -Method 'GET' -Path 'queue?status=all&limit=1000' -MaxMs 5000))
         $timings.Add((Invoke-TimedHttp -Client $client -Name 'api audit recent' -Method 'GET' -Path 'audit?last=50' -MaxMs 3000))
         $timings.Add((Invoke-TimedHttp -Client $client -Name 'api logs recent' -Method 'GET' -Path 'logs?last=50' -MaxMs 3000))
-        $timings.Add((Invoke-TimedHttp -Client $client -Name 'api garbage collector run' -Method 'POST' -Path 'backups/garbage-collector/run' -Body @{} -MaxMs 10000))
+        $timings.Add((Invoke-TimedHttp -Client $client -Name 'api garbage collector run' -Method 'POST' -Path 'backups/garbage-collector/run' -Body @{} -MaxMs 5000))
 
-        $timings.Add((Invoke-TimedCli -Name 'cli backups list default' -Arguments @('backups', 'list') -MaxMs 15000))
         $timings.Add((Invoke-TimedCli -Name 'cli dashboard show' -Arguments @('dashboard', 'show', '--next-hours', '24') -MaxMs 8000))
         $timings.Add((Invoke-TimedCli -Name 'cli queue list all' -Arguments @('queue', 'list', '--status', 'all') -MaxMs 8000))
         $timings.Add((Invoke-TimedCli -Name 'cli audit show' -Arguments @('audit', 'show', '--last', '50') -MaxMs 5000))

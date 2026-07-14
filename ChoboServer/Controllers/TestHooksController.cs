@@ -477,8 +477,8 @@ public sealed class TestHooksController(
         if (!TestHooksAvailable()) return NotFound();
 
         var backupCount = Math.Clamp(request.BackupCount ?? 300, 1, 600);
-        var tablesPerBackup = Math.Clamp(request.TablesPerBackup ?? 10, 1, 50);
-        var shardsPerTable = Math.Clamp(request.ShardsPerTable ?? 4, 1, 16);
+        var tablesPerBackup = Math.Clamp(request.TablesPerBackup ?? 10, 1, 200);
+        var shardsPerTable = Math.Clamp(request.ShardsPerTable ?? 4, 1, 32);
         var restoreCount = Math.Clamp(request.RestoreCount ?? 60, 0, backupCount);
         var completedQueueRows = Math.Clamp(request.CompletedQueueRows ?? 1000, 0, backupCount * tablesPerBackup * shardsPerTable);
         var now = DateTimeOffset.UtcNow;
@@ -504,6 +504,7 @@ public sealed class TestHooksController(
             var queueItems = new List<BackupRestoreQueueItemEntity>(completedQueueRows);
             var backupTablesByBackup = new Dictionary<Guid, List<BackupTableEntity>>(backupCount);
             var backupShardsByTable = new Dictionary<Guid, List<BackupTableShardEntity>>(backupCount * tablesPerBackup);
+            Guid? lastFullBackupId = null;
 
             db.ClickHouseClusters.Add(new ClickHouseClusterEntity
             {
@@ -557,6 +558,12 @@ public sealed class TestHooksController(
             for (var backupIndex = 0; backupIndex < backupCount; backupIndex++)
             {
                 var backupId = Guid.NewGuid();
+                var backupType = backupIndex % 10 == 0 ? BackupType.Full : BackupType.Incremental;
+                var parentFullBackupId = backupType == BackupType.Incremental ? lastFullBackupId : null;
+                if (backupType == BackupType.Full)
+                {
+                    lastFullBackupId = backupId;
+                }
                 if (backupIndex == 0)
                 {
                     sampleBackupId = backupId;
@@ -568,7 +575,7 @@ public sealed class TestHooksController(
                     Id = backupId,
                     TriggerType = BackupTriggerType.Scheduled,
                     Status = BackupRunStatus.Succeeded,
-                    BackupType = BackupType.Full,
+                    BackupType = backupType,
                     ContentMode = BackupContentMode.SchemaAndData,
                     SourceClusterId = clusterId,
                     TargetId = targetId,
@@ -605,7 +612,8 @@ public sealed class TestHooksController(
                     {
                         Id = tableId,
                         BackupId = backupId,
-                        EffectiveBackupType = BackupType.Full,
+                        EffectiveBackupType = backupType,
+                        ParentFullBackupId = parentFullBackupId,
                         Database = database,
                         Table = tableName,
                         Engine = "ReplicatedMergeTree",
@@ -628,6 +636,7 @@ public sealed class TestHooksController(
                             Id = Guid.NewGuid(),
                             BackupTableId = tableId,
                             EffectiveBackupType = backupTable.EffectiveBackupType,
+                            ParentFullBackupId = parentFullBackupId,
                             SourceShardNumber = shardIndex,
                             SourceShardName = $"shard-{shardIndex:0000}",
                             ReplicaNumber = 1,
@@ -763,6 +772,7 @@ public sealed class TestHooksController(
                 sampleBackupId,
                 sampleTableName,
                 backupCount,
+                incrementalBackupCount = backups.Count(x => x.BackupType == BackupType.Incremental),
                 backupTableCount = backupTables.Count,
                 backupShardCount = backupShards.Count,
                 restoreCount = restores.Count,
