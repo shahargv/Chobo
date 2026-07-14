@@ -8,6 +8,15 @@
       "reason": "Release owner approved publishing 1.0.3 without a ChoboApi.SchemaVersion bump after reviewing the application log storage move from the main Chobo database.",
       "approvedBy": "release owner",
       "approvedAt": "2026-07-08"
+    },
+    {
+      "version": "1.1.2",
+      "baseTag": "v1.1.1",
+      "baseSchemaVersion": 2,
+      "currentSchemaVersion": 2,
+      "reason": "Release owner approved publishing 1.1.2 without a ChoboApi.SchemaVersion bump because startup database performance maintenance creates the filtered backup-table-shard index with CREATE INDEX IF NOT EXISTS.",
+      "approvedBy": "release owner",
+      "approvedAt": "2026-07-14"
     }
   ]
 }
