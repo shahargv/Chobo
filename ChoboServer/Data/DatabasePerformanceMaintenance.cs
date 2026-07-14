@@ -40,6 +40,7 @@ public static class DatabasePerformanceMaintenance
             CREATE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_ClusterId_NodeHost_NodePort_NodeUseTls_StartedAt_CompletedAt ON BackupRestoreQueueItems (ClusterId, NodeHost, NodePort, NodeUseTls, StartedAt, CompletedAt);
             CREATE INDEX IF NOT EXISTS IX_BackupTables_ParentFullBackupId ON BackupTables (ParentFullBackupId);
             CREATE INDEX IF NOT EXISTS IX_BackupTableShards_ParentFullBackupId ON BackupTableShards (ParentFullBackupId);
+            CREATE INDEX IF NOT EXISTS IX_BackupTableShards_Encrypted_BackupTableId ON BackupTableShards (BackupTableId) WHERE EncryptedBackupPassword IS NOT NULL;
             """);
     }
 

@@ -7,8 +7,11 @@ using ChoboServer.Repositories;
 using ChoboServer.Services;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using System.Collections.Concurrent;
+using System.Data.Common;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -4734,6 +4737,27 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Garbage_collector_orphan_scan_keeps_table_and_shard_queries_separate()
+    {
+        await using var fixture = await TestFixture.CreateAsync(captureSql: true);
+        var policy = await fixture.SeedPolicyAsync();
+        var full = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, DateTimeOffset.UtcNow.AddHours(-2), tableName: "orders");
+        await fixture.SeedDependentIncrementalAsync(policy.Id, full, DateTimeOffset.UtcNow.AddHours(-1));
+        fixture.SqlCommands.Clear();
+
+        await fixture.Services.GetRequiredService<BackupsGarbageCollectorBackgroundService>().GetQueueAsync();
+
+        var orphanScanCommands = fixture.SqlCommands
+            .Where(command => command.Contains("EffectiveBackupType", StringComparison.Ordinal) &&
+                              command.Contains("ParentFullBackupId", StringComparison.Ordinal))
+            .ToList();
+        Assert.True(orphanScanCommands.Count >= 2);
+        Assert.Contains(orphanScanCommands, command => command.Contains("FROM \"BackupTables\"", StringComparison.Ordinal));
+        Assert.Contains(orphanScanCommands, command => command.Contains("FROM \"BackupTableShards\"", StringComparison.Ordinal));
+        Assert.DoesNotContain(orphanScanCommands, command => command.Contains("UNION", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task Backup_cancel_marks_run_canceled_kills_queries_and_garbage_collector_cleans_remains()
     {
         await using var fixture = await TestFixture.CreateAsync(options: FastCancelOptions());
@@ -6802,6 +6826,25 @@ public sealed class BackupRestoreExecutionTests
             Task.FromResult(new StorageConnectionTestResult(target.Id, target.Type, true, "ok"));
     }
 
+    private sealed class RecordingDbCommandInterceptor(ConcurrentQueue<string> commands) : DbCommandInterceptor
+    {
+        public override InterceptionResult<DbDataReader> ReaderExecuting(DbCommand command, CommandEventData eventData, InterceptionResult<DbDataReader> result)
+        {
+            commands.Enqueue(command.CommandText);
+            return result;
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            commands.Enqueue(command.CommandText);
+            return ValueTask.FromResult(result);
+        }
+    }
+
     private sealed class TestFixture : IAsyncDisposable
     {
         private readonly string _dataDirectory;
@@ -6813,6 +6856,7 @@ public sealed class BackupRestoreExecutionTests
         public Guid TargetClusterId { get; }
         public Guid TargetId { get; }
         public string DataDirectory => _dataDirectory;
+        public ConcurrentQueue<string> SqlCommands { get; }
 
         private static class TestOptionsMonitor
         {
@@ -6827,7 +6871,7 @@ public sealed class BackupRestoreExecutionTests
 
             public static IOptionsMonitor<T> Create(T value) => new TestOptionsMonitorValue<T>(value);
         }
-        private TestFixture(string dataDirectory, IServiceProvider services, ChoboDbContext db, FakeClickHouseAdapter clickHouse, FakeBackupStorageOperations storageDeletion, Guid sourceClusterId, Guid targetClusterId, Guid targetId)
+        private TestFixture(string dataDirectory, IServiceProvider services, ChoboDbContext db, FakeClickHouseAdapter clickHouse, FakeBackupStorageOperations storageDeletion, Guid sourceClusterId, Guid targetClusterId, Guid targetId, ConcurrentQueue<string> sqlCommands)
         {
             _dataDirectory = dataDirectory;
             Services = services;
@@ -6837,9 +6881,10 @@ public sealed class BackupRestoreExecutionTests
             SourceClusterId = sourceClusterId;
             TargetClusterId = targetClusterId;
             TargetId = targetId;
+            SqlCommands = sqlCommands;
         }
 
-        public static async Task<TestFixture> CreateAsync(int? clusterMaxDop = null, ChoboBackupRestoreOptions? options = null, TimeProvider? timeProvider = null)
+        public static async Task<TestFixture> CreateAsync(int? clusterMaxDop = null, ChoboBackupRestoreOptions? options = null, TimeProvider? timeProvider = null, bool captureSql = false)
         {
             var dataDirectory = Path.Combine(Path.GetTempPath(), "chobo-tests", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(dataDirectory);
@@ -6851,9 +6896,19 @@ public sealed class BackupRestoreExecutionTests
             }.ToString();
             var fake = new FakeClickHouseAdapter();
             var storageDeletion = new FakeBackupStorageOperations();
+            var sqlCommands = new ConcurrentQueue<string>();
+            var commandInterceptor = new RecordingDbCommandInterceptor(sqlCommands);
+            void ConfigureDatabase(DbContextOptionsBuilder builder)
+            {
+                builder.UseSqlite(connectionString);
+                if (captureSql)
+                {
+                    builder.AddInterceptors(commandInterceptor);
+                }
+            }
             var services = new ServiceCollection()
-                .AddDbContext<ChoboDbContext>(builder => builder.UseSqlite(connectionString))
-                .AddDbContextFactory<ChoboDbContext>(builder => builder.UseSqlite(connectionString), ServiceLifetime.Scoped)
+                .AddDbContext<ChoboDbContext>(ConfigureDatabase)
+                .AddDbContextFactory<ChoboDbContext>(ConfigureDatabase, ServiceLifetime.Scoped)
                 .AddSingleton(fake)
                 .AddScoped<IClickHouseAdapter>(provider => provider.GetRequiredService<FakeClickHouseAdapter>())
                 .AddSingleton<IClickHouseClusterMetadataService, ClickHouseClusterMetadataService>()
@@ -6934,7 +6989,7 @@ public sealed class BackupRestoreExecutionTests
             db.BackupTargets.Add(CreateS3TargetEntity(targetId, "minio", "http://minio:9000", "us-east-1", "data-bucket", null, true, false));
             await db.SaveChangesAsync();
 
-            return new TestFixture(dataDirectory, services, db, fake, storageDeletion, sourceClusterId, targetClusterId, targetId);
+            return new TestFixture(dataDirectory, services, db, fake, storageDeletion, sourceClusterId, targetClusterId, targetId, sqlCommands);
         }
 
         public async Task<Guid> CreateManualBackupAsync(PolicySelector? selector = null, string actorName = "system", Guid? actorUserId = null, bool schemaOnly = false)

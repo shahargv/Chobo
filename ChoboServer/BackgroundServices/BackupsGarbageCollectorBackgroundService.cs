@@ -435,10 +435,11 @@ public sealed class BackupsGarbageCollectorBackgroundService(
                 x.Status == BackupRunStatus.Canceled ? "canceled-backup-garbage-collector" : "failed-backup-garbage-collector"))
             .ToListAsync(cancellationToken);
 
-    private static Task<List<Guid>> FindOrphanIncrementalBackupIdsAsync(ChoboDbContext db, CancellationToken cancellationToken)
+    private static async Task<List<Guid>> FindOrphanIncrementalBackupIdsAsync(ChoboDbContext db, CancellationToken cancellationToken)
     {
         var deletedStatuses = DeletedStatuses;
-        return db.BackupTables
+        var tableOrphanIds = await db.BackupTables
+            .AsNoTracking()
             .Where(x => x.EffectiveBackupType == BackupType.Incremental &&
                         ((x.ParentFullBackupId != null &&
                           !db.Backups.Any(parent => parent.Id == x.ParentFullBackupId.Value && !deletedStatuses.Contains(parent.Status))) ||
@@ -449,13 +450,20 @@ public sealed class BackupsGarbageCollectorBackgroundService(
                               shard.ParentFullBackupId != null &&
                               db.Backups.Any(parent => parent.Id == shard.ParentFullBackupId.Value && !deletedStatuses.Contains(parent.Status))))))
             .Select(x => x.BackupId)
-            .Concat(db.BackupTableShards
-                .Where(x => x.EffectiveBackupType == BackupType.Incremental &&
-                            (x.ParentFullBackupId == null ||
-                             !db.Backups.Any(parent => parent.Id == x.ParentFullBackupId.Value && !deletedStatuses.Contains(parent.Status))))
-                .Select(x => x.BackupTable!.BackupId))
             .Distinct()
             .ToListAsync(cancellationToken);
+        var shardOrphanIds = await db.BackupTableShards
+            .AsNoTracking()
+            .Where(x => x.EffectiveBackupType == BackupType.Incremental &&
+                        (x.ParentFullBackupId == null ||
+                         !db.Backups.Any(parent => parent.Id == x.ParentFullBackupId.Value && !deletedStatuses.Contains(parent.Status))))
+            .Select(x => x.BackupTable!.BackupId)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+
+        // Keep the two indexed entity scans independent. Composing them with Concat makes EF emit
+        // SELECT DISTINCT over a UNION, which forces SQLite to build a growing temporary result set.
+        return tableOrphanIds.Concat(shardOrphanIds).Distinct().ToList();
     }
 
     private static async Task<bool> IsOrphanIncrementalAsync(ChoboDbContext db, Guid backupId, CancellationToken cancellationToken) =>

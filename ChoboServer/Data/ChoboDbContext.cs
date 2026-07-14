@@ -140,6 +140,9 @@ public sealed class ChoboDbContext(DbContextOptions<ChoboDbContext> options) : D
         modelBuilder.Entity<BackupTableEntity>().HasIndex(x => x.Status);
         modelBuilder.Entity<BackupTableEntity>().HasIndex(x => x.ParentFullBackupTableId);
         modelBuilder.Entity<BackupTableShardEntity>().HasIndex(x => x.BackupTableId);
+        modelBuilder.Entity<BackupTableShardEntity>()
+            .HasIndex(x => x.BackupTableId, "IX_BackupTableShards_Encrypted_BackupTableId")
+            .HasFilter("EncryptedBackupPassword IS NOT NULL");
         modelBuilder.Entity<BackupTableShardEntity>().HasIndex(x => new { x.BackupTableId, x.SourceShardNumber });
         modelBuilder.Entity<BackupTableShardEntity>().HasIndex(x => new { x.EffectiveBackupType, x.ParentFullBackupTableShardId });
         modelBuilder.Entity<BackupTableShardEntity>().HasIndex(x => x.ParentFullBackupId);

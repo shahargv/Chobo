@@ -270,6 +270,7 @@ public sealed class BackupApplicationService(
                 .AsNoTracking()
                 .Where(x => summaryIds.Contains(x.BackupId) && x.ParentFullBackupId != null)
                 .Select(x => new BackupRelatedFullRow(x.BackupId, x.ParentFullBackupId!.Value))
+                .Distinct()
                 .ToListAsync(cancellationToken);
         var shardRelatedFullRows = summaryIds.Count == 0
             ? []
@@ -277,6 +278,7 @@ public sealed class BackupApplicationService(
                 .AsNoTracking()
                 .Where(x => x.BackupTable != null && summaryIds.Contains(x.BackupTable.BackupId) && x.ParentFullBackupId != null)
                 .Select(x => new BackupRelatedFullRow(x.BackupTable!.BackupId, x.ParentFullBackupId!.Value))
+                .Distinct()
                 .ToListAsync(cancellationToken);
         var relatedFullRows = tableRelatedFullRows.Concat(shardRelatedFullRows).Distinct().ToList();
         var statsByBackupId = tableStats.ToDictionary(x => x.BackupId);
@@ -289,6 +291,7 @@ public sealed class BackupApplicationService(
             : await db.BackupTableShards.AsNoTracking()
                 .Where(x => x.BackupTable != null && summaryIds.Contains(x.BackupTable.BackupId) && x.EncryptedBackupPassword != null)
                 .Select(x => new BackupPasswordRow(x.BackupTable!.BackupId, x.EncryptedBackupPasswordKeyId))
+                .Distinct()
                 .ToListAsync(cancellationToken);
         var summaryAvailability = await KeyAvailabilityAsync(passwordRows.Select(x => x.KeyId), cancellationToken);
         var encryptionByBackupId = passwordRows.GroupBy(x => x.BackupId).ToDictionary(
@@ -654,11 +657,13 @@ public sealed class BackupApplicationService(
             .AsNoTracking()
             .Where(x => x.ParentFullBackupId != null && backupIds.Contains(x.ParentFullBackupId.Value))
             .Select(x => new BackupChildRow(x.ParentFullBackupId!.Value, x.BackupId))
+            .Distinct()
             .ToListAsync(cancellationToken);
         var shardChildren = await db.BackupTableShards
             .AsNoTracking()
             .Where(x => x.BackupTable != null && x.ParentFullBackupId != null && backupIds.Contains(x.ParentFullBackupId.Value))
             .Select(x => new BackupChildRow(x.ParentFullBackupId!.Value, x.BackupTable!.BackupId))
+            .Distinct()
             .ToListAsync(cancellationToken);
         return tableChildren
             .Concat(shardChildren)
