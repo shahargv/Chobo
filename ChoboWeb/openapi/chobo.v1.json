@@ -181,6 +181,46 @@
         }
       }
     },
+    "/api/v1/backups/{backupId}/garbage-collection-evaluation": {
+      "get": {
+        "tags": [
+          "BackupGarbageCollector"
+        ],
+        "parameters": [
+          {
+            "name": "backupId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupGarbageCollectionEvaluationDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupGarbageCollectionEvaluationDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupGarbageCollectionEvaluationDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/backups/garbage-collector/run": {
       "post": {
         "tags": [
@@ -4303,6 +4343,73 @@
           "clickHouseBackupSettings": {
             "type": "object",
             "additionalProperties": { },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "BackupGarbageCollectionEvaluationDto": {
+        "type": "object",
+        "properties": {
+          "backupId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "eligibleForDeletion": {
+            "type": "boolean"
+          },
+          "text": {
+            "type": "string",
+            "nullable": true
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BackupGarbageCollectionReasonDto"
+            },
+            "nullable": true
+          },
+          "evaluatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BackupGarbageCollectionReason": {
+        "enum": [
+          "EligibleForDeletion",
+          "BackupAlreadyDeleted",
+          "DeletionAlreadyRequested",
+          "BackupInProgress",
+          "BackupStatusNotEligible",
+          "PolicyMissing",
+          "PolicyDeleted",
+          "RetentionNotConfigured",
+          "RetentionPeriodNotElapsed",
+          "ProtectedByMinimumBackupCount",
+          "ProtectedByMinimumFullBackupCount",
+          "BackupPinned",
+          "ActiveDependentBackups"
+        ],
+        "type": "string"
+      },
+      "BackupGarbageCollectionReasonDto": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "$ref": "#/components/schemas/BackupGarbageCollectionReason"
+          },
+          "text": {
+            "type": "string",
+            "nullable": true
+          },
+          "relatedBackupIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
             "nullable": true
           }
         },

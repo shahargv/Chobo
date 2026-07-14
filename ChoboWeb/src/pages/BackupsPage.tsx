@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Archive, ArrowUpToLine, Ban, CheckCircle2, ExternalLink, Info, LockKeyhole, LockKeyholeOpen, Pin, PinOff, Play, RefreshCw, RotateCcw, Trash2, XCircle } from "lucide-react";
-import type { BackupDto, BackupPolicyDto, BackupRunStatus, BackupTableDto, BackupTableShardDto, BackupType } from "../api/generated";
+import type { BackupDto, BackupGarbageCollectionEvaluationDto, BackupPolicyDto, BackupRunStatus, BackupTableDto, BackupTableShardDto, BackupType } from "../api/generated";
 import { useApi } from "../api-context";
 import { ConfirmDialog, DataTable, Detail, Drawer, Empty, ErrorDetailDialog, ExpandableErrorText, Input, Page, Select, Status } from "../components/ui";
 import { ClickHouseAdvancedSettingsEditor, type ClickHouseSettings } from "../components/ClickHouseAdvancedSettingsEditor";
@@ -118,14 +118,34 @@ export function BackupEncryptionIndicator({ state, showText = false }: { state: 
 }
 
 export function BackupAttributes({ backup }: { backup: BackupDto }) {
+  const { api, showToast } = useApi();
+  const [garbageCollectionEvaluation, setGarbageCollectionEvaluation] = useState<BackupGarbageCollectionEvaluationDto | null>(null);
+  const evaluateGarbageCollection = useMutation({
+    mutationFn: () => api.backupGarbageCollectionEvaluation(backup.id),
+    onSuccess: setGarbageCollectionEvaluation,
+    onError: (error) => showToast({ kind: "error", text: String(error) })
+  });
   const compression = backup.compressionMethod
     ? `${backup.compressionMethod}${backup.compressionLevel != null ? `, level ${backup.compressionLevel}` : ""}`
     : "none";
-  return <span className="backup-attributes" aria-label={`Backup attributes: ${backup.encryptionState}; compression ${compression}; ${backup.isPinned ? "pinned" : "not pinned"}`}>
-    <span className="backup-attribute" title={backup.encryptionState === "Unencrypted" ? "Protection: unencrypted" : backup.encryptionState === "EncryptedMissingKey" ? "Protection: encrypted; AES key unavailable" : "Protection: encrypted; AES key available"}><BackupEncryptionIndicator state={backup.encryptionState} /></span>
-    <span className="backup-attribute" title={`Compression: ${compression}`}><Archive size={16} aria-label={`Compression: ${compression}`} /></span>
-    <span className={`backup-attribute${backup.isPinned ? " pinned" : ""}`} title={backup.isPinned ? "Pinned: yes" : "Pinned: no"}><Pin size={16} aria-label={backup.isPinned ? "Pinned: yes" : "Pinned: no"} /></span>
-  </span>;
+  return <>
+    <span className="backup-attributes" aria-label={`Backup attributes: ${backup.encryptionState}; compression ${compression}; ${backup.isPinned ? "pinned" : "not pinned"}`}>
+      <span className="backup-attribute" title={backup.encryptionState === "Unencrypted" ? "Protection: unencrypted" : backup.encryptionState === "EncryptedMissingKey" ? "Protection: encrypted; AES key unavailable" : "Protection: encrypted; AES key available"}><BackupEncryptionIndicator state={backup.encryptionState} /></span>
+      <span className="backup-attribute" title={`Compression: ${compression}`}><Archive size={16} aria-label={`Compression: ${compression}`} /></span>
+      <span className={`backup-attribute${backup.isPinned ? " pinned" : ""}`} title={backup.isPinned ? "Pinned: yes" : "Pinned: no"}><Pin size={16} aria-label={backup.isPinned ? "Pinned: yes" : "Pinned: no"} /></span>
+      <button className="ghost icon-button backup-attribute gc-icon" type="button" disabled={evaluateGarbageCollection.isPending} title="Explain garbage collection" aria-label={`Explain garbage collection for backup ${backup.id}`} onClick={() => evaluateGarbageCollection.mutate()}><span aria-hidden="true">GC</span></button>
+    </span>
+    {garbageCollectionEvaluation && <ErrorDetailDialog
+      title={`Garbage collection evaluation for ${shortBackupId(backup.id)}`}
+      error={formatGarbageCollectionEvaluation(garbageCollectionEvaluation)}
+      onClose={() => setGarbageCollectionEvaluation(null)}
+    />}
+  </>;
+}
+
+export function formatGarbageCollectionEvaluation(evaluation: BackupGarbageCollectionEvaluationDto) {
+  const disposition = evaluation.eligibleForDeletion ? "Eligible for deletion" : "Not eligible for deletion";
+  return `${disposition}\nEvaluated: ${formatTime(evaluation.evaluatedAt)}\n\n${evaluation.reasons.map((reason) => `${reason.reason}: ${reason.text}`).join("\n\n")}`;
 }
 
 export function BackupDrawer({ backupId, onClose, onOpenBackup }: { backupId: string; onClose: () => void; onOpenBackup?: (backupId: string) => void }) {

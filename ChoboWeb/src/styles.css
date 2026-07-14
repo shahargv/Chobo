@@ -203,6 +203,7 @@ button:disabled, .primary:disabled, .secondary:disabled, .ghost:disabled, .dange
 .backup-attributes { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
 .backup-attribute { display: inline-flex; align-items: center; color: var(--muted); }
 .backup-attribute.pinned { color: var(--primary); }
+.backup-attribute.gc-icon { font-size: 11px; font-weight: 700; letter-spacing: -0.02em; }
 .backup-history-filter {
   align-items: end;
   gap: 16px;

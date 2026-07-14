@@ -160,6 +160,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<BackupRunnerService>();
         services.AddScoped<RestoreRunnerService>();
         services.AddScoped<BackupCleanupService>();
+        services.AddScoped<BackupGarbageCollectionEvaluationService>();
         services.AddScoped<BackupRestoreQueueApplicationService>();
         services.AddSingleton<BackupRestoreQueueClaimPolicy>();
         services.AddSingleton<BackupRestoreOperationGate>();
