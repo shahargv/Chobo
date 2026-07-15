@@ -46,29 +46,22 @@ public sealed class BackupGarbageCollectionEvaluationService(
             return Result(false);
         }
 
-        if (backup.Status == BackupRunStatus.Failed)
-        {
-            if (backup.Policy is not null &&
-                backup.Policy.FailedBackupRetentionMode == FailedBackupRetentionMode.DeleteByGarbageCollectorAfterFailure)
-            {
-                Add(BackupGarbageCollectionReason.EligibleForDeletion,
-                    $"Backup {backup.Id} failed, and policy '{backup.Policy.Name}' is configured to garbage-collect failed backups.");
-                return Result(true);
-            }
-
-            Add(BackupGarbageCollectionReason.BackupStatusNotEligible,
-                $"Backup {backup.Id} failed, but its policy is not configured to garbage-collect failed backups.");
-            return Result(false);
-        }
-
-        if (backup.Status != BackupRunStatus.Succeeded)
-        {
-            Add(BackupGarbageCollectionReason.BackupStatusNotEligible,
-                $"Backup {backup.Id} has status {backup.Status}. Automatic retention deletion currently applies only to succeeded backups and opted-in failed backups.");
-            return Result(false);
-        }
-
         var policy = backup.Policy;
+        if (backup.Status == BackupRunStatus.Failed &&
+            policy?.FailedBackupRetentionMode == FailedBackupRetentionMode.DeleteByGarbageCollectorAfterFailure)
+        {
+            Add(BackupGarbageCollectionReason.EligibleForDeletion,
+                $"Backup {backup.Id} failed, and policy '{policy.Name}' is configured to garbage-collect failed backups.");
+            return Result(true);
+        }
+
+        if (backup.Status is not (BackupRunStatus.Succeeded or BackupRunStatus.PartiallySucceeded or BackupRunStatus.Failed))
+        {
+            Add(BackupGarbageCollectionReason.BackupStatusNotEligible,
+                $"Backup {backup.Id} has status {backup.Status}. Automatic retention deletion applies only to completed backups.");
+            return Result(false);
+        }
+
         if (policy is null)
         {
             Add(BackupGarbageCollectionReason.PolicyMissing,
@@ -83,27 +76,31 @@ public sealed class BackupGarbageCollectionEvaluationService(
             return Result(false);
         }
 
-        var successful = await db.Backups
+        // Failed backups kept by policy expire by age, but the policy mode explicitly
+        // excludes them from minimum-backup counts. Partial backups remain usable and
+        // therefore participate in the same safeguards as successful backups.
+        var countable = await db.Backups
             .AsNoTracking()
-            .Where(x => x.PolicyId == policy.Id && x.Status == BackupRunStatus.Succeeded)
+            .Where(x => x.PolicyId == policy.Id &&
+                (x.Status == BackupRunStatus.Succeeded || x.Status == BackupRunStatus.PartiallySucceeded))
             .OrderByDescending(x => x.CompletedAt ?? x.CreatedAt)
             .ThenByDescending(x => x.Id)
             .Select(x => new { x.Id, x.BackupType })
             .ToListAsync(cancellationToken);
-        var globalPosition = successful.FindIndex(x => x.Id == backup.Id) + 1;
+        var globalPosition = countable.FindIndex(x => x.Id == backup.Id) + 1;
         if (globalPosition > 0 && globalPosition <= policy.MinBackupsToKeep)
         {
             Add(BackupGarbageCollectionReason.ProtectedByMinimumBackupCount,
-                $"Backup {backup.Id} is number {globalPosition} among the newest successful backups for policy '{policy.Name}'. The policy protects the newest {policy.MinBackupsToKeep} successful backup(s).");
+                $"Backup {backup.Id} is number {globalPosition} among the newest successful or partially successful backups for policy '{policy.Name}'. The policy protects the newest {policy.MinBackupsToKeep} backup(s).");
         }
 
         if (backup.BackupType == BackupType.Full)
         {
-            var fullPosition = successful.Where(x => x.BackupType == BackupType.Full).ToList().FindIndex(x => x.Id == backup.Id) + 1;
+            var fullPosition = countable.Where(x => x.BackupType == BackupType.Full).ToList().FindIndex(x => x.Id == backup.Id) + 1;
             if (fullPosition > 0 && fullPosition <= policy.MinFullBackupsToKeep)
             {
                 Add(BackupGarbageCollectionReason.ProtectedByMinimumFullBackupCount,
-                    $"Backup {backup.Id} is number {fullPosition} among the newest successful full backups for policy '{policy.Name}'. The policy protects the newest {policy.MinFullBackupsToKeep} full backup(s).");
+                    $"Backup {backup.Id} is number {fullPosition} among the newest successful or partially successful full backups for policy '{policy.Name}'. The policy protects the newest {policy.MinFullBackupsToKeep} full backup(s).");
             }
         }
 

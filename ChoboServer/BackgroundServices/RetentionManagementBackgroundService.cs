@@ -81,14 +81,18 @@ public sealed class RetentionManagementBackgroundService(
 
         foreach (var policy in policies)
         {
-            var successfulIds = await db.Backups
+            var retentionCandidateIds = await db.Backups
                 .AsNoTracking()
-                .Where(x => x.PolicyId == policy.Id && x.Status == BackupRunStatus.Succeeded)
+                .Where(x => x.PolicyId == policy.Id &&
+                    (x.Status == BackupRunStatus.Succeeded ||
+                     x.Status == BackupRunStatus.PartiallySucceeded ||
+                     (x.Status == BackupRunStatus.Failed &&
+                      policy.FailedBackupRetentionMode == FailedBackupRetentionMode.KeepAndExcludeFromMinBackupsToKeep)))
                 .OrderByDescending(x => x.CompletedAt ?? x.CreatedAt)
                 .Select(x => x.Id)
                 .ToListAsync(cancellationToken);
 
-            foreach (var backupId in successfulIds)
+            foreach (var backupId in retentionCandidateIds)
             {
                 var evaluation = await evaluator.EvaluateAsync(backupId, cancellationToken);
                 if (evaluation?.EligibleForDeletion != true)
