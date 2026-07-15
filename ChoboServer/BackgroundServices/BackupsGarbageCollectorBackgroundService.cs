@@ -251,7 +251,9 @@ public sealed class BackupsGarbageCollectorBackgroundService(
     {
         var now = timeProvider.GetUtcNow();
         var failedIds = await db.Backups.AsNoTracking()
-            .Where(x => x.Status == BackupRunStatus.Failed)
+            .Where(x => x.Status == BackupRunStatus.Failed &&
+                x.Policy != null &&
+                x.Policy.FailedBackupRetentionMode == FailedBackupRetentionMode.DeleteByGarbageCollectorAfterFailure)
             .Select(x => x.Id)
             .ToListAsync(cancellationToken);
         var eligibleIds = new List<Guid>();
@@ -307,6 +309,7 @@ public sealed class BackupsGarbageCollectorBackgroundService(
         }
 
         if (backup.Status == BackupRunStatus.Failed &&
+            backup.Policy?.FailedBackupRetentionMode == FailedBackupRetentionMode.DeleteByGarbageCollectorAfterFailure &&
             (await evaluator.EvaluateAsync(backup.Id, cancellationToken))?.EligibleForDeletion == true)
         {
             var markedCount = await MarkDependentIncrementalBackupsAsync(db, audit, [backup.Id], now, "failed-parent-garbage-collector", cancellationToken);

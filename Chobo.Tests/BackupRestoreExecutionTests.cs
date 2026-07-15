@@ -4244,7 +4244,6 @@ public sealed class BackupRestoreExecutionTests
         var oldest = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, now.AddHours(-5));
         var pinned = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, now.AddHours(-4), isPinned: true);
         var keptNewest = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, now.AddHours(-3));
-        var failed = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Failed, now.AddHours(-6));
 
         await fixture.Services.GetRequiredService<RetentionManagementBackgroundService>().RunOnceAsync();
 
@@ -4252,7 +4251,48 @@ public sealed class BackupRestoreExecutionTests
         Assert.Equal(BackupRunStatus.BackupExpiredDeleted, (await fixture.Db.Backups.SingleAsync(x => x.Id == oldest.Id)).Status);
         Assert.Equal(BackupRunStatus.Succeeded, (await fixture.Db.Backups.SingleAsync(x => x.Id == pinned.Id)).Status);
         Assert.Equal(BackupRunStatus.Succeeded, (await fixture.Db.Backups.SingleAsync(x => x.Id == keptNewest.Id)).Status);
-        Assert.Equal(BackupRunStatus.Failed, (await fixture.Db.Backups.SingleAsync(x => x.Id == failed.Id)).Status);
+    }
+
+    [Fact]
+    public async Task Retention_applies_type_specific_periods_to_partial_and_kept_failed_backups()
+    {
+        var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now));
+        var policy = await fixture.SeedPolicyAsync(retentionMinutes: null);
+        policy.FullRetentionMinutes = 60;
+        policy.IncrementalRetentionMinutes = 180;
+        await fixture.Db.SaveChangesAsync();
+
+        var partialFull = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.PartiallySucceeded, now.AddHours(-2));
+        var partialIncremental = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.PartiallySucceeded, now.AddHours(-2), backupType: BackupType.Incremental);
+        var failedFull = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Failed, now.AddHours(-2));
+        var failedIncremental = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Failed, now.AddHours(-2), backupType: BackupType.Incremental);
+
+        await fixture.Services.GetRequiredService<RetentionManagementBackgroundService>().RunOnceAsync();
+
+        fixture.Db.ChangeTracker.Clear();
+        Assert.Equal(BackupRunStatus.BackupExpiredDeleted, (await fixture.Db.Backups.SingleAsync(x => x.Id == partialFull.Id)).Status);
+        Assert.Equal(BackupRunStatus.PartiallySucceeded, (await fixture.Db.Backups.SingleAsync(x => x.Id == partialIncremental.Id)).Status);
+        Assert.Equal(BackupRunStatus.BackupExpiredDeleted, (await fixture.Db.Backups.SingleAsync(x => x.Id == failedFull.Id)).Status);
+        Assert.Equal(BackupRunStatus.Failed, (await fixture.Db.Backups.SingleAsync(x => x.Id == failedIncremental.Id)).Status);
+    }
+
+    [Fact]
+    public async Task Retention_minimums_include_partial_backups_and_exclude_kept_failed_backups()
+    {
+        var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now));
+        var policy = await fixture.SeedPolicyAsync(retentionMinutes: 1, minBackupsToKeep: 1);
+        var succeeded = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, now.AddHours(-4));
+        var partial = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.PartiallySucceeded, now.AddHours(-3));
+        var failed = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Failed, now.AddHours(-2));
+
+        await fixture.Services.GetRequiredService<RetentionManagementBackgroundService>().RunOnceAsync();
+
+        fixture.Db.ChangeTracker.Clear();
+        Assert.Equal(BackupRunStatus.BackupExpiredDeleted, (await fixture.Db.Backups.SingleAsync(x => x.Id == succeeded.Id)).Status);
+        Assert.Equal(BackupRunStatus.PartiallySucceeded, (await fixture.Db.Backups.SingleAsync(x => x.Id == partial.Id)).Status);
+        Assert.Equal(BackupRunStatus.BackupExpiredDeleted, (await fixture.Db.Backups.SingleAsync(x => x.Id == failed.Id)).Status);
     }
 
     [Fact]
