@@ -1,5 +1,4 @@
 using Chobo.Contracts;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
@@ -8,7 +7,6 @@ namespace ChoboServer.Data;
 public sealed class ChoboDbContext(DbContextOptions<ChoboDbContext> options) : DbContext(options)
 {
     private const int SqliteBusyRetryCount = 3;
-    private static readonly TimeSpan SqliteBusyRetryDelay = TimeSpan.FromSeconds(1);
 
     public DbSet<SchemaStateEntity> SchemaStates => Set<SchemaStateEntity>();
     public DbSet<UserEntity> Users => Set<UserEntity>();
@@ -37,9 +35,9 @@ public sealed class ChoboDbContext(DbContextOptions<ChoboDbContext> options) : D
             {
                 return base.SaveChanges();
             }
-            catch (SqliteException ex) when (IsTransientSqliteLock(ex) && attempt < SqliteBusyRetryCount)
+            catch (Exception ex) when (Database.CurrentTransaction is null && SqliteTransientErrors.IsTransientLock(ex) && attempt < SqliteBusyRetryCount)
             {
-                Thread.Sleep(SqliteBusyRetryDelay);
+                Thread.Sleep(SqliteTransientErrors.RetryDelay(attempt));
             }
         }
     }
@@ -52,9 +50,9 @@ public sealed class ChoboDbContext(DbContextOptions<ChoboDbContext> options) : D
             {
                 return base.SaveChanges(acceptAllChangesOnSuccess);
             }
-            catch (SqliteException ex) when (IsTransientSqliteLock(ex) && attempt < SqliteBusyRetryCount)
+            catch (Exception ex) when (Database.CurrentTransaction is null && SqliteTransientErrors.IsTransientLock(ex) && attempt < SqliteBusyRetryCount)
             {
-                Thread.Sleep(SqliteBusyRetryDelay);
+                Thread.Sleep(SqliteTransientErrors.RetryDelay(attempt));
             }
         }
     }
@@ -70,9 +68,9 @@ public sealed class ChoboDbContext(DbContextOptions<ChoboDbContext> options) : D
             {
                 return await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
             }
-            catch (SqliteException ex) when (IsTransientSqliteLock(ex) && attempt < SqliteBusyRetryCount)
+            catch (Exception ex) when (Database.CurrentTransaction is null && SqliteTransientErrors.IsTransientLock(ex) && attempt < SqliteBusyRetryCount)
             {
-                await Task.Delay(SqliteBusyRetryDelay, cancellationToken);
+                await Task.Delay(SqliteTransientErrors.RetryDelay(attempt), cancellationToken);
             }
         }
     }
@@ -132,6 +130,8 @@ public sealed class ChoboDbContext(DbContextOptions<ChoboDbContext> options) : D
         modelBuilder.Entity<BackupEntity>().HasIndex(x => x.IsPinned);
         modelBuilder.Entity<BackupEntity>().HasIndex(x => x.DeletionRequestedAt);
         modelBuilder.Entity<BackupTableEntity>().HasIndex(x => x.BackupId);
+        modelBuilder.Entity<BackupTableEntity>()
+            .HasIndex(x => new { x.BackupId, x.ParentFullBackupId, x.BackupSizeBytes }, "IX_BackupTables_BackupId_ParentFullBackupId_BackupSizeBytes");
         modelBuilder.Entity<BackupTableEntity>().HasIndex(x => new { x.Database, x.Table });
         modelBuilder.Entity<BackupTableEntity>().HasIndex(x => x.Table);
         modelBuilder.Entity<BackupTableEntity>().HasIndex(x => new { x.EffectiveBackupType, x.ParentFullBackupTableId });
@@ -143,9 +143,14 @@ public sealed class ChoboDbContext(DbContextOptions<ChoboDbContext> options) : D
         modelBuilder.Entity<BackupTableShardEntity>()
             .HasIndex(x => x.BackupTableId, "IX_BackupTableShards_Encrypted_BackupTableId")
             .HasFilter("EncryptedBackupPassword IS NOT NULL");
+        modelBuilder.Entity<BackupTableShardEntity>()
+            .HasIndex(x => new { x.BackupTableId, x.EncryptedBackupPasswordKeyId }, "IX_BackupTableShards_Encrypted_BackupTableId_KeyId")
+            .HasFilter("EncryptedBackupPassword IS NOT NULL");
         modelBuilder.Entity<BackupTableShardEntity>().HasIndex(x => new { x.BackupTableId, x.SourceShardNumber });
+        modelBuilder.Entity<BackupTableShardEntity>().HasIndex(x => new { x.BackupTableId, x.ParentFullBackupId }, "IX_BackupTableShards_BackupTableId_ParentFullBackupId");
         modelBuilder.Entity<BackupTableShardEntity>().HasIndex(x => new { x.EffectiveBackupType, x.ParentFullBackupTableShardId });
         modelBuilder.Entity<BackupTableShardEntity>().HasIndex(x => x.ParentFullBackupId);
+        modelBuilder.Entity<BackupTableShardEntity>().HasIndex(x => new { x.ParentFullBackupId, x.BackupTableId }, "IX_BackupTableShards_ParentFullBackupId_BackupTableId");
         modelBuilder.Entity<BackupTableShardEntity>().HasIndex(x => x.Status);
         modelBuilder.Entity<BackupTableShardEntity>().HasIndex(x => x.ParentFullBackupTableShardId);
         modelBuilder.Entity<RestoreEntity>().HasIndex(x => x.Status);
@@ -209,8 +214,6 @@ public sealed class ChoboDbContext(DbContextOptions<ChoboDbContext> options) : D
         }
     }
 
-    private static bool IsTransientSqliteLock(SqliteException exception) =>
-        exception.SqliteErrorCode is 5 or 6;
 }
 
 

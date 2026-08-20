@@ -575,7 +575,7 @@ public sealed class BackupRunnerService(
         await context.Entry(backup).ReloadAsync(cancellationToken);
         await context.Entry(table).ReloadAsync(cancellationToken);
         await context.Entry(shard).ReloadAsync(cancellationToken);
-        if (IsCancellationTerminalStatus(backup.Status) || shard.Status is BackupTableStatus.Skipped or BackupTableStatus.Failed)
+        if (IsCancellationTerminalStatus(backup.Status) || IsShardTerminalStatus(shard.Status))
         {
             _logger.Information("Backup shard {BackupShardId} stopped before status write because backup {BackupId} is {BackupStatus} and shard status is {ShardStatus}.", shard.Id, backup.Id, backup.Status, shard.Status);
             return true;
@@ -771,62 +771,71 @@ public sealed class BackupRunnerService(
         }
         catch (Exception ex)
         {
-            if (await ReloadShardAndStopIfCanceledAsync(scopedDb, backup, table, shard, CancellationToken.None))
+            try
             {
-                await scopedQueue.ReleaseStartedAsync(BackupRestoreQueueKind.Backup, shard.Id, CancellationToken.None);
-                return BackupShardRunResult.Completed;
-            }
-
-            if (backupSubmissionAttempted && string.IsNullOrWhiteSpace(shard.ClickHouseOperationId) && IsTransientShardFailure(ex, cancellationToken))
-            {
-                var recoveryResult = await TryRecoverUnknownSubmittedBackupShardAsync(scopedDb, scopedClickHouse, scopedAudit, scopedQueue, scopedStorage, backup, table, shard, endpoint, scopedOptions.CurrentValue.BackupSubmissionStatusCheckDelay, scopedOptions.CurrentValue.PollInterval, scopedOptions.CurrentValue.TransientShardRetryDelay, scopedOptions.CurrentValue.TransientShardMaxRetries, retryCounts, CancellationToken.None);
-                if (recoveryResult is not null)
+                if (await ReloadShardAndStopIfCanceledAsync(scopedDb, backup, table, shard, CancellationToken.None))
                 {
-                    return recoveryResult.Value;
+                    await scopedQueue.ReleaseStartedAsync(BackupRestoreQueueKind.Backup, shard.Id, CancellationToken.None);
+                    return BackupShardRunResult.Completed;
                 }
 
-                _logger.Warning(ex, "Backup table {BackupTableId} {Database}.{Table} shard {ShardNumber} submission outcome is unknown and no matching ClickHouse operation was found; retry may use a fresh storage path.", table.Id, table.Database, table.Table, shard.SourceShardNumber);
-            }
-
-            var maxRetries = Math.Max(0, scopedOptions.CurrentValue.TransientShardMaxRetries);
-            var attempt = retryCounts.AddOrUpdate(shard.Id, 1, (_, current) => current + 1);
-            var retryWithFreshDestination = IsFreshDestinationBackupRetryFailure(ex);
-            if (attempt <= maxRetries && IsTransientShardFailure(ex, cancellationToken))
-            {
-                var retryDelay = scopedOptions.CurrentValue.TransientShardRetryDelay <= TimeSpan.Zero ? TimeSpan.FromMinutes(1) : scopedOptions.CurrentValue.TransientShardRetryDelay;
-                failedEndpoints.GetOrAdd(shard.Id, _ => new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase)).TryAdd(EndpointKey(endpoint), 0);
-                _logger.Warning(ex, "Backup table {BackupTableId} {Database}.{Table} shard {ShardNumber} failed with a transient error; retry {RetryAttempt}/{MaxRetries} will be queued after {RetryDelay}.", table.Id, table.Database, table.Table, shard.SourceShardNumber, attempt, maxRetries, retryDelay);
-                shard.Status = BackupTableStatus.Queued;
-                shard.Error = ex.Message;
-                shard.CompletedAt = null;
-                shard.StartedAt = null;
-                if (retryWithFreshDestination)
+                if (backupSubmissionAttempted && string.IsNullOrWhiteSpace(shard.ClickHouseOperationId) && IsTransientShardFailure(ex, cancellationToken))
                 {
-                    if (string.Equals(table.ClickHouseOperationId, shard.ClickHouseOperationId, StringComparison.Ordinal))
+                    var recoveryResult = await TryRecoverUnknownSubmittedBackupShardAsync(scopedDb, scopedClickHouse, scopedAudit, scopedQueue, scopedStorage, backup, table, shard, endpoint, scopedOptions.CurrentValue.BackupSubmissionStatusCheckDelay, scopedOptions.CurrentValue.PollInterval, scopedOptions.CurrentValue.TransientShardRetryDelay, scopedOptions.CurrentValue.TransientShardMaxRetries, retryCounts, CancellationToken.None);
+                    if (recoveryResult is not null)
                     {
-                        table.ClickHouseOperationId = null;
-                        table.ClickHouseStatus = null;
+                        return recoveryResult.Value;
                     }
 
-                    shard.ClickHouseOperationId = null;
-                    shard.ClickHouseStatus = null;
+                    _logger.Warning(ex, "Backup table {BackupTableId} {Database}.{Table} shard {ShardNumber} submission outcome is unknown and no matching ClickHouse operation was found; retry may use a fresh storage path.", table.Id, table.Database, table.Table, shard.SourceShardNumber);
                 }
+
+                var maxRetries = Math.Max(0, scopedOptions.CurrentValue.TransientShardMaxRetries);
+                var attempt = retryCounts.AddOrUpdate(shard.Id, 1, (_, current) => current + 1);
+                var retryWithFreshDestination = IsFreshDestinationBackupRetryFailure(ex);
+                if (attempt <= maxRetries && IsTransientShardFailure(ex, cancellationToken))
+                {
+                    var retryDelay = scopedOptions.CurrentValue.TransientShardRetryDelay <= TimeSpan.Zero ? TimeSpan.FromMinutes(1) : scopedOptions.CurrentValue.TransientShardRetryDelay;
+                    failedEndpoints.GetOrAdd(shard.Id, _ => new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase)).TryAdd(EndpointKey(endpoint), 0);
+                    _logger.Warning(ex, "Backup table {BackupTableId} {Database}.{Table} shard {ShardNumber} failed with a transient error; retry {RetryAttempt}/{MaxRetries} will be queued after {RetryDelay}.", table.Id, table.Database, table.Table, shard.SourceShardNumber, attempt, maxRetries, retryDelay);
+                    shard.Status = BackupTableStatus.Queued;
+                    shard.Error = ex.Message;
+                    shard.CompletedAt = null;
+                    shard.StartedAt = null;
+                    if (retryWithFreshDestination)
+                    {
+                        if (string.Equals(table.ClickHouseOperationId, shard.ClickHouseOperationId, StringComparison.Ordinal))
+                        {
+                            table.ClickHouseOperationId = null;
+                            table.ClickHouseStatus = null;
+                        }
+
+                        shard.ClickHouseOperationId = null;
+                        shard.ClickHouseStatus = null;
+                    }
+                    await scopedDb.SaveChangesAsync(CancellationToken.None);
+                    await scopedAudit.RecordAsync("shard-retry-scheduled", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { error = ex.Message, sourceShard = shard.SourceShardNumber, retryAttempt = attempt, maxRetries, retryDelaySeconds = retryDelay.TotalSeconds, freshDestination = retryWithFreshDestination });
+                    await scopedQueue.ClearStartedClaimAsync(BackupRestoreQueueKind.Backup, shard.Id, CancellationToken.None);
+                    await Task.Delay(retryDelay, CancellationToken.None);
+                    scopedQueue.ReleaseInMemoryClaim(BackupRestoreQueueKind.Backup, shard.Id);
+                    return BackupShardRunResult.RetryLater;
+                }
+
+                _logger.Error(ex, "Backup table {BackupTableId} {Database}.{Table} shard {ShardNumber} failed.", table.Id, table.Database, table.Table, shard.SourceShardNumber);
+                shard.Status = BackupTableStatus.Failed;
+                shard.Error = ex.Message;
+                shard.CompletedAt = DateTimeOffset.UtcNow;
                 await scopedDb.SaveChangesAsync(CancellationToken.None);
-                await scopedAudit.RecordAsync("shard-retry-scheduled", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { error = ex.Message, sourceShard = shard.SourceShardNumber, retryAttempt = attempt, maxRetries, retryDelaySeconds = retryDelay.TotalSeconds, freshDestination = retryWithFreshDestination });
-                await scopedQueue.ClearStartedClaimAsync(BackupRestoreQueueKind.Backup, shard.Id, CancellationToken.None);
-                await Task.Delay(retryDelay, CancellationToken.None);
+                await scopedAudit.RecordAsync("shard-failed", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { error = ex.Message, sourceShard = shard.SourceShardNumber, clickHouseOperationId = shard.ClickHouseOperationId });
+                await scopedQueue.MarkCompletedAsync(BackupRestoreQueueKind.Backup, shard.Id, CancellationToken.None);
+                return BackupShardRunResult.Completed;
+            }
+            catch (Exception bookkeepingEx) when (!(bookkeepingEx is OperationCanceledException))
+            {
+                _logger.Error(bookkeepingEx, "Backup table {BackupTableId} {Database}.{Table} shard {ShardNumber} could not persist its failure outcome for {OriginalError}; releasing the claim so the worker does not stall.", table.Id, table.Database, table.Table, shard.SourceShardNumber, ex.Message);
                 scopedQueue.ReleaseInMemoryClaim(BackupRestoreQueueKind.Backup, shard.Id);
                 return BackupShardRunResult.RetryLater;
             }
-
-            _logger.Error(ex, "Backup table {BackupTableId} {Database}.{Table} shard {ShardNumber} failed.", table.Id, table.Database, table.Table, shard.SourceShardNumber);
-            shard.Status = BackupTableStatus.Failed;
-            shard.Error = ex.Message;
-            shard.CompletedAt = DateTimeOffset.UtcNow;
-            await scopedDb.SaveChangesAsync(CancellationToken.None);
-            await scopedAudit.RecordAsync("shard-failed", AuditEntityType.BackupTableShard, shard.Id.ToString(), new { error = ex.Message, sourceShard = shard.SourceShardNumber, clickHouseOperationId = shard.ClickHouseOperationId });
-            await scopedQueue.MarkCompletedAsync(BackupRestoreQueueKind.Backup, shard.Id, CancellationToken.None);
-            return BackupShardRunResult.Completed;
         }
     }
 
@@ -1205,6 +1214,11 @@ public sealed class BackupRunnerService(
         if (cancellationToken.IsCancellationRequested)
         {
             return false;
+        }
+
+        if (SqliteTransientErrors.IsTransientLock(exception))
+        {
+            return true;
         }
 
         for (var current = exception; current is not null; current = current.InnerException)

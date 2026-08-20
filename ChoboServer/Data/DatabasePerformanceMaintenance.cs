@@ -6,7 +6,7 @@ namespace ChoboServer.Data;
 
 public static class DatabasePerformanceMaintenance
 {
-    public static async Task EnsureAsync(ChoboDbContext db, ChoboSqliteOptions sqliteOptions)
+    public static async Task EnsureAsync(ChoboDbContext db, ChoboSqliteOptions sqliteOptions, Serilog.ILogger logger)
     {
         await EnsureAccessTokenLookupColumnAsync(db);
 
@@ -39,9 +39,30 @@ public static class DatabasePerformanceMaintenance
             CREATE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_ClusterId_LogicalShardNumber_StartedAt_CompletedAt ON BackupRestoreQueueItems (ClusterId, LogicalShardNumber, StartedAt, CompletedAt);
             CREATE INDEX IF NOT EXISTS IX_BackupRestoreQueueItems_ClusterId_NodeHost_NodePort_NodeUseTls_StartedAt_CompletedAt ON BackupRestoreQueueItems (ClusterId, NodeHost, NodePort, NodeUseTls, StartedAt, CompletedAt);
             CREATE INDEX IF NOT EXISTS IX_BackupTables_ParentFullBackupId ON BackupTables (ParentFullBackupId);
-            CREATE INDEX IF NOT EXISTS IX_BackupTableShards_ParentFullBackupId ON BackupTableShards (ParentFullBackupId);
-            CREATE INDEX IF NOT EXISTS IX_BackupTableShards_Encrypted_BackupTableId ON BackupTableShards (BackupTableId) WHERE EncryptedBackupPassword IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS IX_BackupTables_BackupId_ParentFullBackupId_BackupSizeBytes ON BackupTables (BackupId, ParentFullBackupId, BackupSizeBytes);
+            CREATE INDEX IF NOT EXISTS IX_BackupTableShards_BackupTableId_ParentFullBackupId ON BackupTableShards (BackupTableId, ParentFullBackupId);
+            CREATE INDEX IF NOT EXISTS IX_BackupTableShards_ParentFullBackupId_BackupTableId ON BackupTableShards (ParentFullBackupId, BackupTableId);
+            CREATE INDEX IF NOT EXISTS IX_BackupTableShards_Encrypted_BackupTableId_KeyId ON BackupTableShards (BackupTableId, EncryptedBackupPasswordKeyId) WHERE EncryptedBackupPassword IS NOT NULL;
             """);
+
+        await RefreshQueryStatisticsAsync(db, logger);
+    }
+
+    public static async Task RefreshQueryStatisticsAsync(ChoboDbContext db, Serilog.ILogger logger, CancellationToken cancellationToken = default)
+    {
+        var timer = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            await db.Database.ExecuteSqlRawAsync("""
+                PRAGMA analysis_limit=400;
+                PRAGMA optimize;
+                """, cancellationToken);
+            logger.Information("SQLite query statistics refreshed in {ElapsedMilliseconds} ms.", timer.ElapsedMilliseconds);
+        }
+        catch (Exception ex)
+        {
+            logger.Warning(ex, "SQLite query statistics refresh failed after {ElapsedMilliseconds} ms; continuing with existing statistics.", timer.ElapsedMilliseconds);
+        }
     }
 
     private static async Task EnsureAccessTokenLookupColumnAsync(ChoboDbContext db)

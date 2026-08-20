@@ -12,6 +12,7 @@ function Get-ChoboTestDefinition {
                     Chobo__RetentionManagement__Interval = '00:00:01'
                     Chobo__BackupsGarbageCollector__Interval = '00:00:01'
                     Chobo__SqliteSelfBackup__Enabled = 'false'
+                    Chobo__Sqlite__QueryStatisticsRefreshInterval = '00:00:05'
                 }
             }
         )
@@ -149,7 +150,9 @@ function Invoke-LargeMetadataResponsiveness {
             throw "Seeded graph was smaller than expected: $($seedJson | ConvertTo-Json -Compress)"
         }
 
-        Start-Sleep -Seconds 4
+        # Must exceed Chobo__Sqlite__QueryStatisticsRefreshInterval so the seeded graph is measured
+        # with maintained SQLite statistics, as a steady-state server would have.
+        Start-Sleep -Seconds 10
 
         $timings.Add((Invoke-TimedHttp -Client $client -Name 'api backups summary list' -Method 'GET' -Path 'backups?includeTables=false' -MaxMs 5000))
         $timings.Add((Invoke-TimedHttp -Client $client -Name 'api backup summary show' -Method 'GET' -Path "backups/$($seedJson.sampleBackupId)?includeTables=false" -MaxMs 2000))
