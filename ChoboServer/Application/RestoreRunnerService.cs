@@ -533,32 +533,41 @@ public sealed class RestoreRunnerService(
         }
         catch (Exception ex)
         {
-            var maxRetries = Math.Max(0, scopedOptions.CurrentValue.TransientShardMaxRetries);
-            var attempt = retryCounts.AddOrUpdate(shard.Id, 1, (_, current) => current + 1);
-            if (attempt <= maxRetries && IsTransientShardFailure(ex, cancellationToken))
+            try
             {
-                var retryDelay = scopedOptions.CurrentValue.TransientShardRetryDelay <= TimeSpan.Zero ? TimeSpan.FromMinutes(1) : scopedOptions.CurrentValue.TransientShardRetryDelay;
-                failedEndpoints.GetOrAdd(shard.Id, _ => new System.Collections.Concurrent.ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase)).TryAdd(EndpointKey(endpoint), 0);
-                _logger.Warning(ex, "Restore table {RestoreTableId} {TargetDatabase}.{TargetTable} shard {SourceShardNumber}->{TargetShardNumber} failed with a transient error; retry {RetryAttempt}/{MaxRetries} will be queued after {RetryDelay}.", table.Id, table.TargetDatabase, table.TargetTable, shard.SourceShardNumber, shard.TargetShardNumber, attempt, maxRetries, retryDelay);
-                shard.Status = RestoreTableStatus.Queued;
+                var maxRetries = Math.Max(0, scopedOptions.CurrentValue.TransientShardMaxRetries);
+                var attempt = retryCounts.AddOrUpdate(shard.Id, 1, (_, current) => current + 1);
+                if (attempt <= maxRetries && IsTransientShardFailure(ex, cancellationToken))
+                {
+                    var retryDelay = scopedOptions.CurrentValue.TransientShardRetryDelay <= TimeSpan.Zero ? TimeSpan.FromMinutes(1) : scopedOptions.CurrentValue.TransientShardRetryDelay;
+                    failedEndpoints.GetOrAdd(shard.Id, _ => new System.Collections.Concurrent.ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase)).TryAdd(EndpointKey(endpoint), 0);
+                    _logger.Warning(ex, "Restore table {RestoreTableId} {TargetDatabase}.{TargetTable} shard {SourceShardNumber}->{TargetShardNumber} failed with a transient error; retry {RetryAttempt}/{MaxRetries} will be queued after {RetryDelay}.", table.Id, table.TargetDatabase, table.TargetTable, shard.SourceShardNumber, shard.TargetShardNumber, attempt, maxRetries, retryDelay);
+                    shard.Status = RestoreTableStatus.Queued;
+                    shard.Error = ex.Message;
+                    shard.CompletedAt = null;
+                    shard.StartedAt = null;
+                    await scopedDb.SaveChangesAsync(CancellationToken.None);
+                    await scopedAudit.RecordAsync("shard-retry-scheduled", AuditEntityType.RestoreTableShard, shard.Id.ToString(), new { error = ex.Message, sourceShard = shard.SourceShardNumber, targetShard = shard.TargetShardNumber, retryAttempt = attempt, maxRetries, retryDelaySeconds = retryDelay.TotalSeconds });
+                    await scopedQueue.ClearStartedClaimAsync(BackupRestoreQueueKind.Restore, shard.Id, CancellationToken.None);
+                    await Task.Delay(retryDelay, CancellationToken.None);
+                    scopedQueue.ReleaseInMemoryClaim(BackupRestoreQueueKind.Restore, shard.Id);
+                    return RestoreShardRunResult.RetryLater;
+                }
+
+                shard.Status = RestoreTableStatus.Failed;
                 shard.Error = ex.Message;
-                shard.CompletedAt = null;
-                shard.StartedAt = null;
+                shard.CompletedAt = DateTimeOffset.UtcNow;
                 await scopedDb.SaveChangesAsync(CancellationToken.None);
-                await scopedAudit.RecordAsync("shard-retry-scheduled", AuditEntityType.RestoreTableShard, shard.Id.ToString(), new { error = ex.Message, sourceShard = shard.SourceShardNumber, targetShard = shard.TargetShardNumber, retryAttempt = attempt, maxRetries, retryDelaySeconds = retryDelay.TotalSeconds });
-                await scopedQueue.ClearStartedClaimAsync(BackupRestoreQueueKind.Restore, shard.Id, CancellationToken.None);
-                await Task.Delay(retryDelay, CancellationToken.None);
+                await scopedAudit.RecordAsync("shard-failed", AuditEntityType.RestoreTableShard, shard.Id.ToString(), new { error = ex.Message, sourceShard = shard.SourceShardNumber, targetShard = shard.TargetShardNumber });
+                await scopedQueue.MarkCompletedAsync(BackupRestoreQueueKind.Restore, shard.Id, CancellationToken.None);
+                return RestoreShardRunResult.Completed;
+            }
+            catch (Exception bookkeepingEx) when (!(bookkeepingEx is OperationCanceledException))
+            {
+                _logger.Error(bookkeepingEx, "Restore table {RestoreTableId} {TargetDatabase}.{TargetTable} shard {SourceShardNumber}->{TargetShardNumber} could not persist its failure outcome for {OriginalError}; releasing the claim so the worker does not stall.", table.Id, table.TargetDatabase, table.TargetTable, shard.SourceShardNumber, shard.TargetShardNumber, ex.Message);
                 scopedQueue.ReleaseInMemoryClaim(BackupRestoreQueueKind.Restore, shard.Id);
                 return RestoreShardRunResult.RetryLater;
             }
-
-            shard.Status = RestoreTableStatus.Failed;
-            shard.Error = ex.Message;
-            shard.CompletedAt = DateTimeOffset.UtcNow;
-            await scopedDb.SaveChangesAsync(CancellationToken.None);
-            await scopedAudit.RecordAsync("shard-failed", AuditEntityType.RestoreTableShard, shard.Id.ToString(), new { error = ex.Message, sourceShard = shard.SourceShardNumber, targetShard = shard.TargetShardNumber });
-            await scopedQueue.MarkCompletedAsync(BackupRestoreQueueKind.Restore, shard.Id, CancellationToken.None);
-            return RestoreShardRunResult.Completed;
         }
     }
 
@@ -899,6 +908,11 @@ public sealed class RestoreRunnerService(
         if (cancellationToken.IsCancellationRequested)
         {
             return false;
+        }
+
+        if (SqliteTransientErrors.IsTransientLock(exception))
+        {
+            return true;
         }
 
         for (var current = exception; current is not null; current = current.InnerException)

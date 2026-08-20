@@ -6,4 +6,5 @@ public sealed class ChoboSqliteOptions
     public string Synchronous { get; set; } = "NORMAL";
     public TimeSpan BusyTimeout { get; set; } = TimeSpan.FromSeconds(15);
     public int WalAutoCheckpoint { get; set; } = 1000;
+    public TimeSpan QueryStatisticsRefreshInterval { get; set; } = TimeSpan.FromHours(1);
 }

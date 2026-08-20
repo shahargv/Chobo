@@ -176,6 +176,7 @@ public static class ServiceCollectionExtensions
         services.AddHostedService(serviceProvider => serviceProvider.GetRequiredService<BackupsGarbageCollectorBackgroundService>());
         services.AddHostedService<DataRetentionBackgroundService>();
         services.AddHostedService<SqliteSelfBackupBackgroundService>();
+        services.AddHostedService<SqliteQueryStatisticsBackgroundService>();
         return services;
     }
 
@@ -218,7 +219,7 @@ public static class ServiceCollectionExtensions
         await bootstrap.EnsureDatabaseObjectsAsync();
         await bootstrap.EnsureSchemaStateAsync();
         var sqliteOptions = scope.ServiceProvider.GetRequiredService<IOptionsMonitor<ChoboSqliteOptions>>();
-        await DatabasePerformanceMaintenance.EnsureAsync(db, sqliteOptions.CurrentValue);
+        await DatabasePerformanceMaintenance.EnsureAsync(db, sqliteOptions.CurrentValue, scope.ServiceProvider.GetRequiredService<Serilog.ILogger>());
 
         var hasUsers = await db.Users.AnyAsync();
         if (!hasUsers)
