@@ -1,5 +1,32 @@
 # Chobo Agent Notes
 
+## Repository skills and notes (read these first)
+
+Project-specific skills and long-lived feature notes live under `.codex/`, not in a
+conventional skills location. Agents that do not discover them will re-derive decisions
+that are already settled here. Read the relevant ones before planning any change:
+
+- `.codex/AGENTS.md` - repository overview, tech stack, working agreements.
+- `.codex/skills/*/SKILL.md` - task-scoped playbooks. Current set:
+  - `chobo-schema-versioning` - **mandatory** before touching SQLite schema,
+    EF migrations, or `ChoboApi.SchemaVersion`. Decides baseline-edit vs new migration.
+  - `chobo-api-contracts` - `Chobo.Contracts`, controllers, Swagger, `ChoboWeb/src/api/generated.ts`.
+  - `chobo-system-tests` - `TestingSuite` Docker Compose tests via `TestManager.ps1`.
+  - `chobo-ui-tests` - GUI scenarios and screenshot capture.
+  - `chobo-documentation` - `docs/user` vs `docs/developer`, README screenshots.
+  - `chobo-openapi-refresh` - regenerating the committed OpenAPI snapshot.
+  - `chobo-release` - version policy, release workflow, publish safety.
+- `.codex/state/<feature>.md` - per-feature state/design documents. Big features get a
+  state file plus a `<feature>_design.md`; keep both current while the feature is in flight.
+
+`.release/db-samples/<version>/` holds a real database per published release.
+`scripts/Test-UpgradeSamples.ps1` is the gate for any schema change, but note its real
+coverage before relying on it: `Get-LatestPriorMinorSample` ends in `Select-Object -First 1`,
+so it upgrades exactly **one** sample - the latest prior *minor*. For a 1.2.0 target that is
+`1.1.3` alone; the `1.0.x` samples (schema v1) are never started. No unit test executes an EF
+migration either - both fixtures use `EnsureCreatedAsync`, and `MigrateAsync` appears nowhere
+in `Chobo.Tests`. Any change that adds a schema-upgrade arm must add its own coverage.
+
 ## Architecture
 
 ChoboServer follows Onion Architecture.
