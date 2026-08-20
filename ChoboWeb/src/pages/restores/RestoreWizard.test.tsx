@@ -7,6 +7,12 @@ import type { BackupDto } from "../../api/generated";
 import { ApiContext } from "../../api-context";
 import { RestoreWizard } from "./RestoreWizard";
 
+// Relative to now so the fixture always falls inside RestoreWizard's default 72h backup
+// window. Absolute dates here silently rot the test once the window moves past them.
+const backupCreatedAt = new Date(Date.now() - 60 * 60 * 1000);
+const backupStartedAt = new Date(backupCreatedAt.getTime() + 60 * 1000);
+const backupEndedAt = new Date(backupCreatedAt.getTime() + 120 * 1000);
+
 const summaryBackup = (overrides: Partial<BackupDto> = {}): BackupDto => ({
   id: overrides.id ?? "backup-id",
   triggerType: "Scheduled",
@@ -21,9 +27,9 @@ const summaryBackup = (overrides: Partial<BackupDto> = {}): BackupDto => ({
   requestedByName: "system",
   manualRequestJson: null,
   storageRootPath: null,
-  createdAt: "2026-07-10T00:00:00Z",
-  startedAt: "2026-07-01T00:01:00Z",
-  endedAt: "2026-07-01T00:02:00Z",
+  createdAt: backupCreatedAt.toISOString(),
+  startedAt: backupStartedAt.toISOString(),
+  endedAt: backupEndedAt.toISOString(),
   error: null,
   failureReason: null,
   isPinned: false,
@@ -64,8 +70,8 @@ const detailedBackup = summaryBackup({
     status: "Succeeded",
     clickHouseOperationId: null,
     clickHouseStatus: null,
-    startedAt: "2026-07-01T00:01:00Z",
-    completedAt: "2026-07-01T00:02:00Z",
+    startedAt: backupStartedAt.toISOString(),
+    completedAt: backupEndedAt.toISOString(),
     error: null,
     shards: [{
       id: "shard-id",
@@ -84,8 +90,8 @@ const detailedBackup = summaryBackup({
       status: "Succeeded",
       clickHouseOperationId: null,
       clickHouseStatus: null,
-      startedAt: "2026-07-01T00:01:00Z",
-      completedAt: "2026-07-01T00:02:00Z",
+      startedAt: backupStartedAt.toISOString(),
+      completedAt: backupEndedAt.toISOString(),
       error: null,
       isPasswordProtected: false,
       passwordKeyId: null,
