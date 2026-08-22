@@ -160,34 +160,94 @@ public sealed class BackupGarbageCollectionEvaluationService(
             new(backup.Id, eligible, string.Join(Environment.NewLine, reasons.Select(x => x.Text)), reasons, evaluatedAt);
     }
 
-    // Driven from the parent's own tables and shards outwards. Asking the question from the
-    // Backups side instead forces a scan of every backup with two correlated EXISTS each, which
-    // walks the whole BackupTableShards table once per candidate.
+    private const int DependencyLookupChunkSize = 1000;
+
+    // ParentFullBackupId is the indexed, backup-level dependency used by current rows. The exact
+    // table/shard links remain the legacy fallback and restore-specific source of truth. Keeping the
+    // lookups separate avoids a cross-column OR and bounds every generated parameter list.
     private async Task<IReadOnlyList<Guid>> LiveDependentBackupIdsAsync(Guid fullBackupId, CancellationToken cancellationToken)
     {
         var nonBlockingStatuses = NonBlockingDependentStatuses;
+        var dependentBackupIds = new HashSet<Guid>();
 
-        var parentTableIds = db.BackupTables
-            .Where(table => table.BackupId == fullBackupId)
-            .Select(table => table.Id);
-
-        var parentShardIds = db.BackupTableShards
-            .Where(shard => parentTableIds.Contains(shard.BackupTableId))
-            .Select(shard => shard.Id);
-
-        var dependentBackupIds = db.BackupTables
-            .Where(table => table.ParentFullBackupTableId != null && parentTableIds.Contains(table.ParentFullBackupTableId.Value))
-            .Select(table => table.BackupId)
-            .Concat(db.BackupTableShards
-                .Where(shard => shard.ParentFullBackupTableShardId != null && parentShardIds.Contains(shard.ParentFullBackupTableShardId.Value))
-                .Select(shard => shard.BackupTable!.BackupId));
-
-        return await db.Backups
+        dependentBackupIds.UnionWith(await db.BackupTables
             .AsNoTracking()
-            .Where(child => !nonBlockingStatuses.Contains(child.Status) && dependentBackupIds.Contains(child.Id))
-            .OrderBy(x => x.CompletedAt ?? x.CreatedAt)
-            .Select(x => x.Id)
+            .Where(table => table.ParentFullBackupId == fullBackupId)
+            .Select(table => table.BackupId)
+            .Distinct()
+            .ToListAsync(cancellationToken));
+
+        dependentBackupIds.UnionWith(await db.BackupTableShards
+            .AsNoTracking()
+            .Where(shard => shard.ParentFullBackupId == fullBackupId)
+            .Select(shard => shard.BackupTable!.BackupId)
+            .Distinct()
+            .ToListAsync(cancellationToken));
+
+        var parentTableIds = await db.BackupTables
+            .AsNoTracking()
+            .Where(table => table.BackupId == fullBackupId)
+            .Select(table => table.Id)
             .ToListAsync(cancellationToken);
+
+        foreach (var parentTableIdChunk in ChunkIds(parentTableIds))
+        {
+            // Keep the legacy marker out of this SQL predicate. Combining it with the exact-link
+            // key makes SQLite choose the ParentFullBackupId NULL range instead of the exact-link
+            // index (measured at 105-124 ms per chunk). Projecting two ids keeps the indexed lookup
+            // bounded; only legacy rows are admitted to the result below.
+            var exactTableLinks = await db.BackupTables
+                .AsNoTracking()
+                .Where(table => table.ParentFullBackupTableId != null &&
+                                parentTableIdChunk.Contains(table.ParentFullBackupTableId.Value))
+                .Select(table => new { table.BackupId, table.ParentFullBackupId })
+                .ToListAsync(cancellationToken);
+            dependentBackupIds.UnionWith(exactTableLinks
+                .Where(table => table.ParentFullBackupId == null)
+                .Select(table => table.BackupId));
+        }
+
+        var parentShardIds = await db.BackupTableShards
+            .AsNoTracking()
+            .Where(shard => shard.BackupTable!.BackupId == fullBackupId)
+            .Select(shard => shard.Id)
+            .ToListAsync(cancellationToken);
+
+        foreach (var parentShardIdChunk in ChunkIds(parentShardIds))
+        {
+            // See the table path above: filtering the legacy marker after the exact-link seek is
+            // deliberate, so current and legacy databases use the same predictable index plan.
+            var exactShardLinks = await db.BackupTableShards
+                .AsNoTracking()
+                .Where(shard => shard.ParentFullBackupTableShardId != null &&
+                                parentShardIdChunk.Contains(shard.ParentFullBackupTableShardId.Value))
+                .Select(shard => new { shard.BackupTable!.BackupId, shard.ParentFullBackupId })
+                .ToListAsync(cancellationToken);
+            dependentBackupIds.UnionWith(exactShardLinks
+                .Where(shard => shard.ParentFullBackupId == null)
+                .Select(shard => shard.BackupId));
+        }
+
+        var liveDependents = new List<(Guid Id, DateTimeOffset SortAt)>();
+        foreach (var dependentIdChunk in ChunkIds(dependentBackupIds.ToList()))
+        {
+            var chunk = await db.Backups
+                .AsNoTracking()
+                .Where(child => dependentIdChunk.Contains(child.Id) && !nonBlockingStatuses.Contains(child.Status))
+                .Select(child => new { child.Id, SortAt = child.CompletedAt ?? child.CreatedAt })
+                .ToListAsync(cancellationToken);
+            liveDependents.AddRange(chunk.Select(child => (child.Id, child.SortAt)));
+        }
+
+        return liveDependents.OrderBy(child => child.SortAt).Select(child => child.Id).ToList();
+    }
+
+    private static IEnumerable<List<Guid>> ChunkIds(IReadOnlyList<Guid> ids)
+    {
+        for (var offset = 0; offset < ids.Count; offset += DependencyLookupChunkSize)
+        {
+            yield return ids.Skip(offset).Take(DependencyLookupChunkSize).ToList();
+        }
     }
 
     private static readonly BackupRunStatus[] FinalDeletedStatuses =

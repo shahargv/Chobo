@@ -34,15 +34,31 @@ public sealed class SchemaBrowserApplicationService(ChoboDbContext db)
     public async Task<SchemaBackupDto?> GetBackupSchemaAsync(Guid backupId, CancellationToken cancellationToken = default)
     {
         var backup = await db.Backups
-            .Include(x => x.Tables).ThenInclude(x => x.SchemaDefinition)
-            .FirstOrDefaultAsync(x => x.Id == backupId, cancellationToken);
+            .AsNoTracking()
+            .Where(x => x.Id == backupId)
+            .Select(x => new { x.Id, x.Status, x.ContentMode })
+            .FirstOrDefaultAsync(cancellationToken);
         if (backup is null)
         {
             return null;
         }
 
-        var databases = backup.Tables
-            .Where(x => x.SchemaDefinition is not null)
+        var schemaTables = await db.BackupTables
+            .AsNoTracking()
+            .Where(x => x.BackupId == backupId && x.SchemaDefinition != null)
+            .Select(x => new
+            {
+                x.Id,
+                x.Database,
+                x.Table,
+                x.Engine,
+                x.DataBackedUp,
+                CreateTableSql = x.SchemaDefinition!.CreateTableSql,
+                ColumnsJson = x.SchemaDefinition.ColumnsJson
+            })
+            .ToListAsync(cancellationToken);
+
+        var databases = schemaTables
             .OrderBy(x => x.Database, StringComparer.Ordinal)
             .ThenBy(x => x.Table, StringComparer.Ordinal)
             .GroupBy(x => x.Database, StringComparer.Ordinal)
@@ -54,8 +70,8 @@ public sealed class SchemaBrowserApplicationService(ChoboDbContext db)
                     table.Table,
                     table.Engine,
                     table.DataBackedUp,
-                    table.SchemaDefinition!.CreateTableSql,
-                    table.SchemaDefinition.ColumnsJson)).ToList()))
+                    table.CreateTableSql,
+                    table.ColumnsJson)).ToList()))
             .ToList();
 
         return new SchemaBackupDto(backup.Id, backup.Status, backup.ContentMode, databases);

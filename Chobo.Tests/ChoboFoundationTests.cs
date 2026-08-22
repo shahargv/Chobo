@@ -32,6 +32,42 @@ public sealed class ChoboFoundationTests
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
     [Fact]
+    public void Chobo_server_registers_the_database_context_once()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection().Build();
+
+        services.AddChoboServer(configuration);
+
+        Assert.Single(services, descriptor => descriptor.ServiceType == typeof(ChoboDbContext));
+    }
+
+    [Fact]
+    public async Task Chobo_server_logs_each_sqlite_command_once()
+    {
+        var dataDirectory = NewTestDataDirectory();
+        var sink = new CollectingSink();
+        var logger = new Serilog.LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(sink).CreateLogger();
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Chobo:DataDirectory"] = dataDirectory,
+            ["Chobo:DatabaseLogging:SlowQueryThreshold"] = "00:00:00"
+        }).Build();
+        var services = new ServiceCollection();
+        services.AddChoboServer(configuration);
+        services.AddSingleton<Serilog.ILogger>(logger);
+
+        await using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
+        await db.Database.ExecuteSqlRawAsync("SELECT 1;");
+
+        Assert.Single(sink.Events, logEvent =>
+            logEvent.Properties.TryGetValue("SourceContext", out var sourceContext) &&
+            sourceContext.ToString().Contains(nameof(SlowSqliteQueryLoggingInterceptor), StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Chobo_configuration_supports_environment_variables_for_appsettings_values()
     {
         using var env = new EnvironmentVariableScope(new Dictionary<string, string?>

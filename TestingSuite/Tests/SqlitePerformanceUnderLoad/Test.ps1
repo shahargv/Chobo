@@ -22,7 +22,9 @@ function Get-ChoboTestDefinition {
                     Chobo__RetentionManagement__Interval = '12:00:00'
                     Chobo__BackupsGarbageCollector__Interval = '12:00:00'
                     Chobo__SqliteSelfBackup__Enabled = 'false'
-                    Chobo__Sqlite__QueryStatisticsRefreshInterval = '00:00:05'
+                    # Seeding awaits one statistics refresh. Park the periodic worker so it cannot
+                    # race the measured replay and make unrelated reads wait behind PRAGMA optimize.
+                    Chobo__Sqlite__QueryStatisticsRefreshInterval = '12:00:00'
                     Chobo__DatabaseLogging__SlowQueryThreshold = '00:05:00'
                     # Measure the heaviest supported configuration, not the cheap default:
                     # per-table-shard metrics are opt-in, and they are what makes /metrics
@@ -336,10 +338,6 @@ function Invoke-SqlitePerformanceUnderLoad {
         if ($seed.parentTableLinkCount -le 0 -or $seed.parentShardLinkCount -le 0) {
             throw "Seeded graph has no incremental parent links: $($seed | ConvertTo-Json -Compress)"
         }
-
-        # Must exceed Chobo__Sqlite__QueryStatisticsRefreshInterval so the graph is measured with
-        # maintained SQLite statistics, as a steady-state server would have.
-        Start-Sleep -Seconds 10
 
         $ids = @{ UserId = $null; RestoreId = $null }
         $users = Invoke-ChoboApi -Client $client -Method 'GET' -Path 'users'

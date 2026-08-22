@@ -552,32 +552,40 @@ public sealed class BackupsGarbageCollectorBackgroundService(
 
     /// <summary>
     /// Distinct parent backup ids referenced by incremental rows whose parent is deleted or gone.
-    /// The liveness test runs once per distinct parent, inside SQL, so nothing is compared against a
-    /// stale snapshot and no runtime-sized parameter list is sent.
+    /// Candidate discovery and parent liveness are deliberately separate indexed reads: correlating
+    /// NOT EXISTS beneath DISTINCT makes SQLite evaluate liveness across every shard reference.
+    /// The later child lookup still rechecks parent liveness in the same statement before mutation.
     /// </summary>
     private static async Task<List<Guid>> OrphanParentBackupIdsAsync(ChoboDbContext db, CancellationToken cancellationToken)
     {
         var deletedStatuses = DeletedStatuses;
 
-        var shardOrphanParentIds = await db.BackupTableShards
+        var shardParentIds = await db.BackupTableShards
             .AsNoTracking()
             .Where(x => x.ParentFullBackupId != null)
             .Select(x => x.ParentFullBackupId!.Value)
             .Distinct()
-            .Where(parentId => !db.Backups.Any(parent => parent.Id == parentId &&
-                                                         !deletedStatuses.Contains(parent.Status)))
             .ToListAsync(cancellationToken);
 
-        var tableOrphanParentIds = await db.BackupTables
+        var tableParentIds = await db.BackupTables
             .AsNoTracking()
             .Where(x => x.ParentFullBackupId != null)
             .Select(x => x.ParentFullBackupId!.Value)
             .Distinct()
-            .Where(parentId => !db.Backups.Any(parent => parent.Id == parentId &&
-                                                         !deletedStatuses.Contains(parent.Status)))
             .ToListAsync(cancellationToken);
 
-        return shardOrphanParentIds.Union(tableOrphanParentIds).ToList();
+        var referencedParentIds = shardParentIds.Union(tableParentIds).ToList();
+        var liveParentIds = new HashSet<Guid>();
+        foreach (var parentIdChunk in Chunk(referencedParentIds, OrphanParentChunkSize))
+        {
+            liveParentIds.UnionWith(await db.Backups
+                .AsNoTracking()
+                .Where(parent => parentIdChunk.Contains(parent.Id) && !deletedStatuses.Contains(parent.Status))
+                .Select(parent => parent.Id)
+                .ToListAsync(cancellationToken));
+        }
+
+        return referencedParentIds.Where(parentId => !liveParentIds.Contains(parentId)).ToList();
     }
 
     private static async Task<bool> IsOrphanIncrementalAsync(ChoboDbContext db, Guid backupId, CancellationToken cancellationToken) =>

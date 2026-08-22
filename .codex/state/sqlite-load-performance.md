@@ -462,9 +462,9 @@ construction or chunk it.
 | Gate | Status |
 | --- | --- |
 | `dotnet build Chobo.sln -c Release` | **PASS** - 0 warnings |
-| Full unit suite | re-running after instrumentation change |
-| `SqlitePerformanceUnderLoad` | **NOT RUN YET** |
-| Full system suite | passing 16/24 on the pre-existing GC change |
+| Full unit suite | **PASS** - 323/323 |
+| `SqlitePerformanceUnderLoad` | **PASS** - three final 720k-shard runs, zero queries over 100 ms |
+| Full system suite | **PASS** - 25/25 in the release workflow configuration |
 
 ## Open items
 
@@ -477,3 +477,47 @@ construction or chunk it.
   verbatim into `chobo-logs.db`, the console, and the file sink.
 - `SlowSqliteQueryLoggingInterceptor` hooks only `*Executed*`, not `CommandFailed`. A query that
   blocks and then throws `SQLITE_BUSY` is never reported as slow.
+
+## 1.2.0 release-gate follow-up (2026-08-22)
+
+The first `v1.2.0` workflow candidate failed only `SqlitePerformanceUnderLoad`; publish was skipped,
+and no GitHub Release or Docker tags were created. A local replay reproduced the failure at the same
+720,000-shard scale. The release fix must preserve the feature's intent: keep the full GUI request
+inventory, keep the 100 ms per-query gate, and require zero raw slow-query entries.
+
+Confirmed causes and bounded fixes:
+
+- Configure the context/interceptors once. `AddDbContextFactory` already makes the context itself
+  available as scoped; the extra `AddDbContext` registration attaches the same singleton slow-query
+  interceptor twice and duplicates every event.
+- Make the load fixture deterministic by awaiting one statistics refresh immediately after seeding,
+  while the quiet five-minute threshold is active, and park the periodic refresh for 12 hours. This
+  retains maintained SQLite statistics without allowing `PRAGMA optimize` to collide with the gate.
+- Preserve garbage-collection semantics while replacing large correlated queries with indexed,
+  bounded lookups: discover dependent backup ids from both table and shard parent links, including
+  legacy exact-row-only links, and resolve distinct orphan parent candidates in chunks.
+- Project only the backup header and schema-bearing table fields in the schema browser instead of
+  tracking the complete backup/table/schema graph.
+- Do not change the already-indexed dashboard policy aggregate unless it remains slow in a
+  collision-free replay.
+
+Acceptance: build and unit tests pass, then two consecutive `SqlitePerformanceUnderLoad` runs pass
+with zero raw entries above 100 ms before regenerating the release sample and retagging the
+unpublished candidate.
+
+### Final release evidence
+
+- Release build: passed with 0 warnings and 0 errors.
+- Unit suite: 323/323 passed with a 30-second hang dump threshold.
+- `SqlitePerformanceUnderLoad`: two consecutive final standalone runs passed at 720,000 shards with
+  zero raw entries above 100 ms; the exact release-workflow full suite supplied a third pass.
+- Final full system suite: 25/25 passed serially with the release workflow's 120-second per-test
+  timeout. This includes retention cleanup, sharded cleanup, multiple full parents, large metadata,
+  1,000-table schema-only, SQLite performance, and SQLite self-backup.
+- Upgrade sample: the real published 1.1.4 database upgraded to schema v3; config import and full
+  data import both passed.
+- The load, request inventory, and threshold were not reduced. No query was excluded from logging.
+
+The unpublished first `v1.2.0` tag may now be replaced with the corrected commit. The failed workflow
+created no GitHub Release and no Docker tags, so replacing that tag cannot overwrite published
+artifacts.

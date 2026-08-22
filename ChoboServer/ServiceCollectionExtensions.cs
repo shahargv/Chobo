@@ -97,16 +97,8 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<SlowSqliteQueryLoggingInterceptor>();
         services.AddSingleton<SqlitePragmaConnectionInterceptor>();
-        services.AddDbContext<ChoboDbContext>((serviceProvider, options) =>
-        {
-            var storage = serviceProvider.GetRequiredService<IOptions<ChoboStorageOptions>>().Value;
-            ConfigureChoboSqlite(
-                options,
-                storage,
-                serviceProvider.GetRequiredService<IOptions<ChoboSqliteOptions>>().Value,
-                serviceProvider.GetRequiredService<SlowSqliteQueryLoggingInterceptor>(),
-                serviceProvider.GetRequiredService<SqlitePragmaConnectionInterceptor>());
-        });
+        // AddDbContextFactory also registers ChoboDbContext itself as scoped. Registering both paths
+        // attaches these singleton interceptors twice, so one command produces two slow-query events.
         services.AddDbContextFactory<ChoboDbContext>((serviceProvider, options) =>
         {
             var storage = serviceProvider.GetRequiredService<IOptions<ChoboStorageOptions>>().Value;

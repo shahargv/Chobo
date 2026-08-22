@@ -46,7 +46,7 @@ public static class DatabasePerformanceMaintenance
         await RefreshQueryStatisticsAsync(db, logger);
     }
 
-    public static async Task RefreshQueryStatisticsAsync(ChoboDbContext db, Serilog.ILogger logger, CancellationToken cancellationToken = default)
+    public static async Task<bool> RefreshQueryStatisticsAsync(ChoboDbContext db, Serilog.ILogger logger, CancellationToken cancellationToken = default)
     {
         var timer = System.Diagnostics.Stopwatch.StartNew();
         try
@@ -56,10 +56,16 @@ public static class DatabasePerformanceMaintenance
                 PRAGMA optimize;
                 """, cancellationToken);
             logger.Information("SQLite query statistics refreshed in {ElapsedMilliseconds} ms.", timer.ElapsedMilliseconds);
+            return true;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
             logger.Warning(ex, "SQLite query statistics refresh failed after {ElapsedMilliseconds} ms; continuing with existing statistics.", timer.ElapsedMilliseconds);
+            return false;
         }
     }
 
@@ -96,5 +102,4 @@ public static class DatabasePerformanceMaintenance
         await db.Database.ExecuteSqlRawAsync("ALTER TABLE AccessTokens ADD COLUMN TokenLookupHash TEXT NOT NULL DEFAULT '';");
     }
 }
-
 

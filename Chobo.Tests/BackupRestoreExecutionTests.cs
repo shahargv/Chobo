@@ -4433,6 +4433,7 @@ public sealed class BackupRestoreExecutionTests
         var incremental = await fixture.SeedDependentIncrementalAsync(policy.Id, full, now.AddMinutes(-5));
 
         var incrementalTable = await fixture.Db.BackupTables.SingleAsync(x => x.BackupId == incremental.Id);
+        incrementalTable.ParentFullBackupId = null;
         incrementalTable.ParentFullBackupTableId = null;
         await fixture.Db.SaveChangesAsync();
 
@@ -4458,7 +4459,35 @@ public sealed class BackupRestoreExecutionTests
             .ToListAsync();
         foreach (var shard in incrementalShards)
         {
+            shard.ParentFullBackupId = null;
             shard.ParentFullBackupTableShardId = null;
+        }
+        await fixture.Db.SaveChangesAsync();
+
+        var evaluation = await fixture.Services.GetRequiredService<BackupGarbageCollectionEvaluationService>()
+            .EvaluateAsync(full.Id);
+
+        Assert.NotNull(evaluation);
+        var dependencyReason = Assert.Single(evaluation.Reasons, x => x.Reason == BackupGarbageCollectionReason.ActiveDependentBackups);
+        Assert.Equal([incremental.Id], dependencyReason.RelatedBackupIds);
+    }
+
+    [Fact]
+    public async Task Garbage_collection_finds_legacy_dependents_linked_only_to_exact_parent_rows()
+    {
+        var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now));
+        var policy = await fixture.SeedPolicyAsync(retentionMinutes: 120);
+        var full = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, now.AddMinutes(-10), tableName: "orders");
+        var incremental = await fixture.SeedDependentIncrementalAsync(policy.Id, full, now.AddMinutes(-5));
+
+        var incrementalTable = await fixture.Db.BackupTables
+            .Include(x => x.Shards)
+            .SingleAsync(x => x.BackupId == incremental.Id);
+        incrementalTable.ParentFullBackupId = null;
+        foreach (var shard in incrementalTable.Shards)
+        {
+            shard.ParentFullBackupId = null;
         }
         await fixture.Db.SaveChangesAsync();
 
@@ -7587,4 +7616,3 @@ public sealed class BackupRestoreExecutionTests
         public override DateTimeOffset GetUtcNow() => utcNow;
     }
 }
-

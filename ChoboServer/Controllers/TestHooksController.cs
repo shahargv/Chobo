@@ -804,6 +804,13 @@ public sealed class TestHooksController(
             await db.SaveChangesAsync(cancellationToken);
             logger.Information("Seeded large metadata graph with {BackupCount} backups, {BackupTableCount} backup tables, {BackupShardCount} backup shards, {RestoreCount} restores, {ParentTableLinkCount} parent table links, {ParentShardLinkCount} parent shard links.", backupCount, backupTables.Count, backupShards.Count, restores.Count, parentTableLinkCount, parentShardLinkCount);
             db.ChangeTracker.Clear();
+            // The performance test keeps its slow-query threshold parked high while this endpoint
+            // runs. Awaiting statistics maintenance here gives the measured replay steady-state
+            // plans without racing a periodic PRAGMA optimize after the endpoint returns.
+            if (!await DatabasePerformanceMaintenance.RefreshQueryStatisticsAsync(db, logger, cancellationToken))
+            {
+                throw new InvalidOperationException("SQLite query statistics refresh failed after seeding the performance fixture.");
+            }
             return Ok(new
             {
                 clusterId,
