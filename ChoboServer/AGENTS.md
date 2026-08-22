@@ -38,6 +38,8 @@ Do not expose test hooks in normal deployments. Test hook endpoints must require
 
 Use typed options under `ChoboServer/Options`; keep direct `IConfiguration` access limited to bootstrap/composition code. Import/export must never import raw access tokens, decrypted credentials, or local AES key material. Imported ClickHouse/S3 credentials should be stored empty so operators re-enter them under the current server key.
 
+SQLite commands are tagged centrally for slow-query diagnostics using a stable semantic name derived from the Chobo call path, command kind, and primary table. When one method needs a more specific purpose tag, wrap that operation in `SqliteQueryTagging.Push("area.action-purpose")`; tags must be static lowercase names and must never contain entity ids, user data, credentials, or other dynamic values.
+
 When changing SQLite schema or startup compatibility, keep `ChoboApi.SchemaVersion`, migrations, `DatabaseBootstrap`, and `SchemaUpgradeService` aligned. The startup guard should reject newer schemas and allow older supported schemas into upgrade code.
 
 Run bounded tests. Prefer:
