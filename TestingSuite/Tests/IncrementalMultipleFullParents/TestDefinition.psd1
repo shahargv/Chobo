@@ -144,6 +144,15 @@
             )
         }
         @{
+            # The preceding checks have proved that the retained incremental protects both full
+            # parents past their shortened retention. Restore normal retention before testing the
+            # separate manual-delete cascade, so the background retention cycle cannot legitimately
+            # expire the other parent after the dependent enters a deletion state.
+            Name = 'restore-full-retention-before-manual-delete'
+            Type = 'Cli'
+            Args = @('policies', 'update', '--id', '{policy.id}', '--name', 'incremental-multi-parent', '--source-cluster-id', '{sourceCluster.id}', '--target-id', '{target.id}', '--selector-file', '/suite/Tests/IncrementalMultipleFullParents/selector-all.json', '--full-retention-minutes', '10080', '--incremental-retention-minutes', '10080', '--min-backups-to-keep', '0', '--min-full-backups-to-keep', '0')
+        }
+        @{
             Name = 'manual-delete-orders-parent'
             Type = 'Cli'
             Args = @('backups', 'delete', '--id', '{ordersFull.id}', '--confirm-destructive')

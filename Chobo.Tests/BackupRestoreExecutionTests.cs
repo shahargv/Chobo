@@ -3550,6 +3550,30 @@ public sealed class BackupRestoreExecutionTests
     }
 
     [Fact]
+    public async Task Restore_detail_splits_the_complete_graph_across_queries()
+    {
+        await using var fixture = await TestFixture.CreateAsync(captureSql: true);
+        var backup = await fixture.SeedBackupWithTablesAsync([
+            new SeedBackupTable("sales", "orders", BackupTableStatus.Succeeded, "backup-op", true)
+        ]);
+        var restore = await fixture.SeedRestoreAsync(backup, [
+            new SeedRestoreTable("sales", "orders", RestoreTableStatus.Succeeded, "restore-op")
+        ]);
+        fixture.SqlCommands.Clear();
+
+        using var scope = fixture.Services.CreateScope();
+        var dto = await scope.ServiceProvider.GetRequiredService<RestoreApplicationService>().GetAsync(restore.Id);
+
+        Assert.NotNull(dto);
+        var shard = Assert.Single(Assert.Single(dto!.Tables).Shards);
+        Assert.Equal(backup.Id, shard.SourceBackupId);
+        Assert.Equal(Assert.Single(backup.Tables).Id, shard.SourceBackupTableId);
+        Assert.Equal(backup.BackupType, shard.SourceBackupType);
+        Assert.Equal(backup.CreatedAt.ToUnixTimeMilliseconds(), shard.SourceBackupCreatedAt.ToUnixTimeMilliseconds());
+        Assert.True(fixture.SqlCommands.Count >= 3, $"Expected a split restore-detail query, captured {fixture.SqlCommands.Count} command(s).");
+    }
+
+    [Fact]
     public async Task Scheduler_skips_duplicate_active_runs_for_same_schedule()
     {
         await using var fixture = await TestFixture.CreateAsync();

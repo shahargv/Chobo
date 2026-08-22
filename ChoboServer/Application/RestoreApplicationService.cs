@@ -454,7 +454,14 @@ public sealed class RestoreApplicationService(
         endpoint is null ? "default" : $"{endpoint.Host}:{endpoint.Port}:{endpoint.UseTls}";
 
     private Task<RestoreEntity?> LoadAsync(Guid id, CancellationToken cancellationToken) =>
-        db.Restores.Include(x => x.Tables).ThenInclude(x => x.Shards).ThenInclude(x => x.BackupTableShard).ThenInclude(x => x!.BackupTable).ThenInclude(x => x!.Backup).FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+        db.Restores
+            .Include(x => x.Tables)
+            .ThenInclude(x => x.Shards)
+            .ThenInclude(x => x.BackupTableShard)
+            .ThenInclude(x => x!.BackupTable)
+            .ThenInclude(x => x!.Backup)
+            .AsSplitQuery()
+            .FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
 
     private static void ValidateCreateTableSqlOverrides(InitiateRestoreRequest request)
     {

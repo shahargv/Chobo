@@ -521,3 +521,21 @@ unpublished candidate.
 The unpublished first `v1.2.0` tag may now be replaced with the corrected commit. The failed workflow
 created no GitHub Release and no Docker tags, so replacing that tag cannot overwrite published
 artifacts.
+
+### Corrected-candidate CI follow-up
+
+The next tag candidate passed build, unit tests, release policy, and upgrade-sample validation, then
+failed two system assertions while publish remained skipped:
+
+- Restore detail produced one 100.0598 ms cartesian include query on the CI runner. `LoadAsync` now
+  uses EF split-query loading, preserving the complete restore/table/shard/source-backup DTO while
+  keeping each SQL read bounded.
+- `IncrementalMultipleFullParents` proved both parents were retention-protected, then shortened
+  retention remained active during the separate manual-delete cascade check. Once the dependent was
+  committed to deletion, the other parent could legitimately expire before its assertion on a slow
+  runner. The scenario now restores long retention after proving protection and before testing
+  manual-delete scope.
+
+Follow-up validation passed: the stabilized multiple-parent scenario, the full 324-test unit suite,
+and two consecutive unchanged 720,000-shard performance runs with zero raw queries above 100 ms.
+Restore detail completed in 5.5 ms and 6.2 ms end-to-end in those runs.
