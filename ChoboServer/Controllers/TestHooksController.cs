@@ -505,6 +505,14 @@ public sealed class TestHooksController(
             var backupTablesByBackup = new Dictionary<Guid, List<BackupTableEntity>>(backupCount);
             var backupShardsByTable = new Dictionary<Guid, List<BackupTableShardEntity>>(backupCount * tablesPerBackup);
             Guid? lastFullBackupId = null;
+            // Real incremental chains link child tables/shards to the exact parent full row, not just
+            // to the parent backup id. Seeding only ParentFullBackupId leaves every dependency query
+            // that joins through ParentFullBackupTableId / ParentFullBackupTableShardId matching nothing.
+            var fullChainIndex = -1;
+            var parentTableIdsByName = new Dictionary<string, Guid>(tablesPerBackup);
+            var parentShardIdsByTableShard = new Dictionary<(Guid TableId, int ShardNumber), Guid>(tablesPerBackup * shardsPerTable);
+            var parentTableLinkCount = 0;
+            var parentShardLinkCount = 0;
 
             db.ClickHouseClusters.Add(new ClickHouseClusterEntity
             {
@@ -563,7 +571,14 @@ public sealed class TestHooksController(
                 if (backupType == BackupType.Full)
                 {
                     lastFullBackupId = backupId;
+                    fullChainIndex++;
+                    parentTableIdsByName.Clear();
+                    parentShardIdsByTableShard.Clear();
                 }
+
+                // Tables are named per chain, not per backup, so an incremental backs up the same
+                // table names its parent full did - which is what makes the parent links resolvable.
+                var chainIndex = fullChainIndex < 0 ? 0 : fullChainIndex;
                 if (backupIndex == 0)
                 {
                     sampleBackupId = backupId;
@@ -592,11 +607,19 @@ public sealed class TestHooksController(
 
                 for (var tableIndex = 0; tableIndex < tablesPerBackup; tableIndex++)
                 {
-                    var database = $"stress_db_{backupIndex % 12:00}";
-                    var tableName = $"table_{backupIndex:0000}_{tableIndex:0000}";
+                    var database = $"stress_db_{chainIndex % 12:00}";
+                    var tableName = $"table_{chainIndex:0000}_{tableIndex:0000}";
                     sampleTableName = sampleTableName.Length == 0 ? $"{database}.{tableName}" : sampleTableName;
                     var schemaId = Guid.NewGuid();
                     var tableId = Guid.NewGuid();
+                    var qualifiedTableName = $"{database}.{tableName}";
+                    Guid? parentFullBackupTableId = null;
+                    if (backupType == BackupType.Incremental &&
+                        parentTableIdsByName.TryGetValue(qualifiedTableName, out var resolvedParentTableId))
+                    {
+                        parentFullBackupTableId = resolvedParentTableId;
+                        parentTableLinkCount++;
+                    }
                     schemas.Add(new SchemaDefinitionEntity
                     {
                         Id = schemaId,
@@ -614,6 +637,7 @@ public sealed class TestHooksController(
                         BackupId = backupId,
                         EffectiveBackupType = backupType,
                         ParentFullBackupId = parentFullBackupId,
+                        ParentFullBackupTableId = parentFullBackupTableId,
                         Database = database,
                         Table = tableName,
                         Engine = "ReplicatedMergeTree",
@@ -627,16 +651,29 @@ public sealed class TestHooksController(
                     };
                     backupTables.Add(backupTable);
                     backupTablesByBackup[backupId].Add(backupTable);
+                    if (backupType == BackupType.Full)
+                    {
+                        parentTableIdsByName[qualifiedTableName] = tableId;
+                    }
                     backupShardsByTable[tableId] = new List<BackupTableShardEntity>(shardsPerTable);
 
                     for (var shardIndex = 1; shardIndex <= shardsPerTable; shardIndex++)
                     {
+                        Guid? parentFullBackupTableShardId = null;
+                        if (parentFullBackupTableId is { } parentTableId &&
+                            parentShardIdsByTableShard.TryGetValue((parentTableId, shardIndex), out var resolvedParentShardId))
+                        {
+                            parentFullBackupTableShardId = resolvedParentShardId;
+                            parentShardLinkCount++;
+                        }
+
                         var shard = new BackupTableShardEntity
                         {
                             Id = Guid.NewGuid(),
                             BackupTableId = tableId,
                             EffectiveBackupType = backupTable.EffectiveBackupType,
                             ParentFullBackupId = parentFullBackupId,
+                            ParentFullBackupTableShardId = parentFullBackupTableShardId,
                             SourceShardNumber = shardIndex,
                             SourceShardName = $"shard-{shardIndex:0000}",
                             ReplicaNumber = 1,
@@ -651,6 +688,10 @@ public sealed class TestHooksController(
                         };
                         backupShards.Add(shard);
                         backupShardsByTable[tableId].Add(shard);
+                        if (backupType == BackupType.Full)
+                        {
+                            parentShardIdsByTableShard[(tableId, shardIndex)] = shard.Id;
+                        }
                         if (queueItems.Count < completedQueueRows)
                         {
                             queueItems.Add(new BackupRestoreQueueItemEntity
@@ -761,7 +802,7 @@ public sealed class TestHooksController(
             });
 
             await db.SaveChangesAsync(cancellationToken);
-            logger.Information("Seeded large metadata graph with {BackupCount} backups, {BackupTableCount} backup tables, {BackupShardCount} backup shards, {RestoreCount} restores.", backupCount, backupTables.Count, backupShards.Count, restores.Count);
+            logger.Information("Seeded large metadata graph with {BackupCount} backups, {BackupTableCount} backup tables, {BackupShardCount} backup shards, {RestoreCount} restores, {ParentTableLinkCount} parent table links, {ParentShardLinkCount} parent shard links.", backupCount, backupTables.Count, backupShards.Count, restores.Count, parentTableLinkCount, parentShardLinkCount);
             db.ChangeTracker.Clear();
             return Ok(new
             {
@@ -778,7 +819,9 @@ public sealed class TestHooksController(
                 restoreCount = restores.Count,
                 restoreTableCount = restoreTables.Count,
                 restoreShardCount = restoreShards.Count,
-                completedQueueRows = queueItems.Count
+                completedQueueRows = queueItems.Count,
+                parentTableLinkCount,
+                parentShardLinkCount
             });
         }
         finally

@@ -14,10 +14,8 @@ public static class DatabasePerformanceMaintenance
         await db.Database.ExecuteSqlRawAsync(SqlitePragmaConnectionInterceptor.BuildDatabasePragmaSql(sqliteOptions));
 
         await db.Database.ExecuteSqlRawAsync("""
-            CREATE INDEX IF NOT EXISTS IX_AuditEntries_Timestamp ON AuditEntries (Timestamp);
             CREATE INDEX IF NOT EXISTS IX_AuditEntries_ActorUserId_Timestamp ON AuditEntries (ActorUserId, Timestamp);
             CREATE INDEX IF NOT EXISTS IX_AuditEntries_EntityType_Timestamp ON AuditEntries (EntityType, Timestamp);
-            CREATE INDEX IF NOT EXISTS IX_AuditEntries_OperationId_Timestamp ON AuditEntries (OperationId, Timestamp);
             CREATE INDEX IF NOT EXISTS IX_AccessTokens_TokenLookupHash ON AccessTokens (TokenLookupHash);
             CREATE INDEX IF NOT EXISTS IX_AccessTokens_IsActive_TokenLookupHash ON AccessTokens (IsActive, TokenLookupHash);
             CREATE INDEX IF NOT EXISTS IX_AccessTokens_UserId_IsActive ON AccessTokens (UserId, IsActive);
@@ -41,7 +39,7 @@ public static class DatabasePerformanceMaintenance
             CREATE INDEX IF NOT EXISTS IX_BackupTables_ParentFullBackupId ON BackupTables (ParentFullBackupId);
             CREATE INDEX IF NOT EXISTS IX_BackupTables_BackupId_ParentFullBackupId_BackupSizeBytes ON BackupTables (BackupId, ParentFullBackupId, BackupSizeBytes);
             CREATE INDEX IF NOT EXISTS IX_BackupTableShards_BackupTableId_ParentFullBackupId ON BackupTableShards (BackupTableId, ParentFullBackupId);
-            CREATE INDEX IF NOT EXISTS IX_BackupTableShards_ParentFullBackupId_BackupTableId ON BackupTableShards (ParentFullBackupId, BackupTableId);
+            CREATE INDEX IF NOT EXISTS IX_BackupTableShards_ParentFullBackupId_EffectiveBackupType_BackupTableId ON BackupTableShards (ParentFullBackupId, EffectiveBackupType, BackupTableId);
             CREATE INDEX IF NOT EXISTS IX_BackupTableShards_Encrypted_BackupTableId_KeyId ON BackupTableShards (BackupTableId, EncryptedBackupPasswordKeyId) WHERE EncryptedBackupPassword IS NOT NULL;
             """);
 

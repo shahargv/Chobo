@@ -30,6 +30,7 @@ public static class ServiceCollectionExtensions
         services.AddOptions<ChoboBackupRestoreOptions>().Bind(configuration.GetSection("Chobo:BackupRestore"));
         services.AddOptions<ChoboClusterMetadataOptions>().Bind(configuration.GetSection("Chobo:ClusterMetadata"));
         services.AddOptions<ChoboDatabaseLoggingOptions>().Bind(configuration.GetSection("Chobo:DatabaseLogging"));
+        services.AddOptions<ChoboMetricsOptions>().Bind(configuration.GetSection("Chobo:Metrics"));
         services.AddOptions<BackupStorageOperationOptions>().Bind(configuration.GetSection("Chobo:BackupStorageOperations"));
         services.AddOptions<RetentionManagementOptions>().Bind(configuration.GetSection("Chobo:RetentionManagement"));
         services.AddOptions<BackupsGarbageCollectorOptions>().Bind(configuration.GetSection("Chobo:BackupsGarbageCollector"));

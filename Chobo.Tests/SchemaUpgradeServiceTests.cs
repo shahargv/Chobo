@@ -59,26 +59,72 @@ public sealed class SchemaUpgradeServiceTests
     }
 
     [Fact]
-    public async Task Version_one_database_schema_is_upgraded_to_version_two()
+    public async Task Version_two_database_schema_is_upgraded_to_version_three()
     {
         await using var fixture = await SchemaFixture.CreateAsync();
+        var schema = await SeedSchemaStateAsync(fixture, version: 2);
+
+        await new SchemaUpgradeService(fixture.Db).UpgradeAsync(schema);
+
+        fixture.Db.ChangeTracker.Clear();
+        var stored = await fixture.Db.SchemaStates.SingleAsync();
+        Assert.Equal(3, stored.SchemaVersion);
+        Assert.Equal("000000000003_IndexConsolidation", stored.AppliedMigrationId);
+        Assert.Equal(ChoboApi.ProductVersion, stored.ProductVersion);
+    }
+
+    [Fact]
+    public async Task Version_one_database_schema_is_carried_through_every_intermediate_version()
+    {
+        await using var fixture = await SchemaFixture.CreateAsync();
+        var schema = await SeedSchemaStateAsync(fixture, version: 1);
+
+        await new SchemaUpgradeService(fixture.Db).UpgradeAsync(schema);
+
+        // A database several releases behind must be carried forward through each arm in turn, not
+        // rejected for lacking a direct v1 -> current upgrade path.
+        fixture.Db.ChangeTracker.Clear();
+        var stored = await fixture.Db.SchemaStates.SingleAsync();
+        Assert.Equal(ChoboApi.SchemaVersion, stored.SchemaVersion);
+        Assert.Equal("000000000003_IndexConsolidation", stored.AppliedMigrationId);
+        Assert.Equal(ChoboApi.ProductVersion, stored.ProductVersion);
+    }
+
+    private static async Task<SchemaStateEntity> SeedSchemaStateAsync(SchemaFixture fixture, int version)
+    {
         var schema = new SchemaStateEntity
         {
-            SchemaVersion = ChoboApi.SchemaVersion - 1,
+            SchemaVersion = version,
             AppliedMigrationId = "legacy",
             AppliedAt = DateTimeOffset.Parse("2026-05-15T10:00:00+00:00"),
             ProductVersion = "legacy-product"
         };
         fixture.Db.SchemaStates.Add(schema);
         await fixture.Db.SaveChangesAsync();
+        return schema;
+    }
 
-        await new SchemaUpgradeService(fixture.Db).UpgradeAsync(schema);
+    [Fact]
+    public void Ef_schema_v3_migration_only_touches_indexes()
+    {
+        var migration = new ChoboServer.Data.Migrations.IndexConsolidation();
+        var builder = new MigrationBuilder("Microsoft.EntityFrameworkCore.Sqlite");
+        typeof(ChoboServer.Data.Migrations.IndexConsolidation)
+            .GetMethod("Up", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(migration, [builder]);
 
-        fixture.Db.ChangeTracker.Clear();
-        var stored = await fixture.Db.SchemaStates.SingleAsync();
-        Assert.Equal(ChoboApi.SchemaVersion, stored.SchemaVersion);
-        Assert.Equal("000000000002_PasswordProtectedBackups", stored.AppliedMigrationId);
-        Assert.Equal(ChoboApi.ProductVersion, stored.ProductVersion);
+        // An index-only migration must not carry any data or column change, otherwise the upgrade
+        // arm in SchemaUpgradeService would need a data transformation step to match.
+        Assert.Empty(builder.Operations.OfType<AddColumnOperation>());
+        var sql = Assert.Single(builder.Operations.OfType<SqlOperation>());
+        Assert.Contains("IX_BackupTableShards_ParentFullBackupId_EffectiveBackupType_BackupTableId", sql.Sql, StringComparison.Ordinal);
+        // Every DROP must be conditional: which of these exist depends on whether the database was
+        // created by the baseline migration or upgraded, since DatabasePerformanceMaintenance runs
+        // after MigrateAsync.
+        foreach (var line in sql.Sql.Split('\n').Where(x => x.TrimStart().StartsWith("DROP INDEX", StringComparison.Ordinal)))
+        {
+            Assert.Contains("IF EXISTS", line, StringComparison.Ordinal);
+        }
     }
 
     [Fact]

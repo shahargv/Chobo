@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Chobo.Contracts;
 using ChoboServer.Data;
 using ChoboServer.Services;
@@ -12,7 +13,7 @@ public interface IAuditStore
     Task<int> DeleteBeforeAsync(DateTimeOffset before, CancellationToken cancellationToken = default);
 }
 
-public sealed class AuditStore(ChoboDbContext db) : IAuditStore
+public sealed class AuditStore(ChoboDbContext db, SlowSqliteQueryLoggingInterceptor slowQueryLogger) : IAuditStore
 {
     public async Task<PagedResultDto<AuditEntryDto>> QueryAsync(DateTimeOffset? startTime, DateTimeOffset? endTime, int? last, int? offset = null, int? limit = null, string? operationId = null)
     {
@@ -36,6 +37,7 @@ public sealed class AuditStore(ChoboDbContext db) : IAuditStore
         command.Parameters.AddWithValue("$limit", pageLimit);
         command.Parameters.AddWithValue("$offset", pageOffset);
 
+        var readStarted = Stopwatch.GetTimestamp();
         await using var reader = await command.ExecuteReaderAsync();
         while (await reader.ReadAsync())
         {
@@ -50,6 +52,10 @@ public sealed class AuditStore(ChoboDbContext db) : IAuditStore
                 AuditDetails.ToJsonElement(reader.GetString(7))));
         }
 
+        // Measured across materialisation, not just execution: for a paged read over a growing table
+        // the cost of a wide OFFSET lands while stepping rows, which ExecuteReaderAsync returns before.
+        slowQueryLogger.LogIfSlow(command, Stopwatch.GetElapsedTime(readStarted));
+
         return new PagedResultDto<AuditEntryDto>(results, pageOffset, pageLimit, totalCount);
     }
 
@@ -60,15 +66,21 @@ public sealed class AuditStore(ChoboDbContext db) : IAuditStore
         await using var command = connection.CreateCommand();
         command.CommandText = "DELETE FROM AuditEntries WHERE Timestamp < $before;";
         command.Parameters.AddWithValue("$before", ToSqlValue(before));
-        return await command.ExecuteNonQueryAsync(cancellationToken);
+        var deleteStarted = Stopwatch.GetTimestamp();
+        var deleted = await command.ExecuteNonQueryAsync(cancellationToken);
+        slowQueryLogger.LogIfSlow(command, Stopwatch.GetElapsedTime(deleteStarted));
+        return deleted;
     }
 
-    private static async Task<int> CountAsync(SqliteConnection connection, QueryFilter filter)
+    private async Task<int> CountAsync(SqliteConnection connection, QueryFilter filter)
     {
         await using var command = connection.CreateCommand();
         command.CommandText = $"SELECT COUNT(*) FROM AuditEntries {filter.WhereSql};";
         AddParameters(command, filter);
-        return Convert.ToInt32(await command.ExecuteScalarAsync());
+        var started = Stopwatch.GetTimestamp();
+        var count = Convert.ToInt32(await command.ExecuteScalarAsync());
+        slowQueryLogger.LogIfSlow(command, Stopwatch.GetElapsedTime(started));
+        return count;
     }
 
     private static QueryFilter BuildFilter(DateTimeOffset? startTime, DateTimeOffset? endTime, string? operationId)

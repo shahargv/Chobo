@@ -160,17 +160,33 @@ public sealed class BackupGarbageCollectionEvaluationService(
             new(backup.Id, eligible, string.Join(Environment.NewLine, reasons.Select(x => x.Text)), reasons, evaluatedAt);
     }
 
+    // Driven from the parent's own tables and shards outwards. Asking the question from the
+    // Backups side instead forces a scan of every backup with two correlated EXISTS each, which
+    // walks the whole BackupTableShards table once per candidate.
     private async Task<IReadOnlyList<Guid>> LiveDependentBackupIdsAsync(Guid fullBackupId, CancellationToken cancellationToken)
     {
         var nonBlockingStatuses = NonBlockingDependentStatuses;
+
+        var parentTableIds = db.BackupTables
+            .Where(table => table.BackupId == fullBackupId)
+            .Select(table => table.Id);
+
+        var parentShardIds = db.BackupTableShards
+            .Where(shard => parentTableIds.Contains(shard.BackupTableId))
+            .Select(shard => shard.Id);
+
+        var dependentBackupIds = db.BackupTables
+            .Where(table => table.ParentFullBackupTableId != null && parentTableIds.Contains(table.ParentFullBackupTableId.Value))
+            .Select(table => table.BackupId)
+            .Concat(db.BackupTableShards
+                .Where(shard => shard.ParentFullBackupTableShardId != null && parentShardIds.Contains(shard.ParentFullBackupTableShardId.Value))
+                .Select(shard => shard.BackupTable!.BackupId));
+
         return await db.Backups
             .AsNoTracking()
-            .Where(child => !nonBlockingStatuses.Contains(child.Status) &&
-                (child.Tables.Any(table => table.ParentFullBackupTable != null && table.ParentFullBackupTable.BackupId == fullBackupId) ||
-                 child.Tables.Any(table => table.Shards.Any(shard => shard.ParentFullBackupTableShard != null && shard.ParentFullBackupTableShard.BackupTable!.BackupId == fullBackupId))))
+            .Where(child => !nonBlockingStatuses.Contains(child.Status) && dependentBackupIds.Contains(child.Id))
             .OrderBy(x => x.CompletedAt ?? x.CreatedAt)
             .Select(x => x.Id)
-            .Distinct()
             .ToListAsync(cancellationToken);
     }
 
