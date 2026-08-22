@@ -461,33 +461,123 @@ public sealed class BackupsGarbageCollectorBackgroundService(
 
     private static async Task<List<Guid>> FindOrphanIncrementalBackupIdsAsync(ChoboDbContext db, CancellationToken cancellationToken)
     {
+        // Liveness is resolved per *distinct parent* rather than per row. Asking "is my parent still
+        // alive?" once per incremental shard means a correlated subquery over the largest table in
+        // the database on every garbage-collection pass and on every poll of the GC queue endpoint.
+        // The distinct-parent set has one entry per full backup and SQLite answers it with a
+        // skip-ahead scan of the covering index on ParentFullBackupId.
+        //
+        // The liveness test itself stays inside SQL. Reading the live set into memory first and
+        // testing against that snapshot would declare a healthy backup an orphan whenever an
+        // incremental is committed against a parent that had no children when the pass began.
+        var orphanParentIds = await OrphanParentBackupIdsAsync(db, cancellationToken);
+
         var deletedStatuses = DeletedStatuses;
-        var tableOrphanIds = await db.BackupTables
+        var orphanBackupIds = new HashSet<Guid>();
+
+        // Chunked because EF expands a captured collection into one bind parameter per element - it
+        // does not use json_each - and SQLite rejects a statement above its variable limit.
+        //
+        // The chunk list only narrows the seek; liveness is re-checked in the same statement that
+        // reads the rows. Trusting the earlier snapshot alone would delete a live backup's children
+        // whenever a parent leaves DeletedStatuses mid-pass, which BackupRunnerService does when a
+        // run that was marked for deletion finishes and overwrites its own status.
+        foreach (var chunkIds in Chunk(orphanParentIds, OrphanParentChunkSize))
+        {
+            orphanBackupIds.UnionWith(await db.BackupTables
+                .AsNoTracking()
+                .Where(x => x.EffectiveBackupType == BackupType.Incremental &&
+                            x.ParentFullBackupId != null &&
+                            chunkIds.Contains(x.ParentFullBackupId.Value) &&
+                            !db.Backups.Any(parent => parent.Id == x.ParentFullBackupId.Value &&
+                                                      !deletedStatuses.Contains(parent.Status)))
+                .Select(x => x.BackupId)
+                .Distinct()
+                .ToListAsync(cancellationToken));
+
+            orphanBackupIds.UnionWith(await db.BackupTableShards
+                .AsNoTracking()
+                .Where(x => x.EffectiveBackupType == BackupType.Incremental &&
+                            x.ParentFullBackupId != null &&
+                            chunkIds.Contains(x.ParentFullBackupId.Value) &&
+                            !db.Backups.Any(parent => parent.Id == x.ParentFullBackupId.Value &&
+                                                      !deletedStatuses.Contains(parent.Status)))
+                .Select(x => x.BackupTable!.BackupId)
+                .Distinct()
+                .ToListAsync(cancellationToken));
+        }
+
+        // Parentless rows are queried separately rather than with an OR: one OR spanning two
+        // different columns stops SQLite using an index for either side. NULL sorts first in a
+        // SQLite index, so IS NULL is still a seek.
+        orphanBackupIds.UnionWith(await db.BackupTableShards
             .AsNoTracking()
-            .Where(x => x.EffectiveBackupType == BackupType.Incremental &&
-                        ((x.ParentFullBackupId != null &&
-                          !db.Backups.Any(parent => parent.Id == x.ParentFullBackupId.Value && !deletedStatuses.Contains(parent.Status))) ||
-                         (x.ParentFullBackupId == null &&
-                          !db.BackupTableShards.Any(shard =>
-                              shard.BackupTableId == x.Id &&
-                              shard.EffectiveBackupType == BackupType.Incremental &&
-                              shard.ParentFullBackupId != null &&
-                              db.Backups.Any(parent => parent.Id == shard.ParentFullBackupId.Value && !deletedStatuses.Contains(parent.Status))))))
-            .Select(x => x.BackupId)
-            .Distinct()
-            .ToListAsync(cancellationToken);
-        var shardOrphanIds = await db.BackupTableShards
-            .AsNoTracking()
-            .Where(x => x.EffectiveBackupType == BackupType.Incremental &&
-                        (x.ParentFullBackupId == null ||
-                         !db.Backups.Any(parent => parent.Id == x.ParentFullBackupId.Value && !deletedStatuses.Contains(parent.Status))))
+            .Where(x => x.EffectiveBackupType == BackupType.Incremental && x.ParentFullBackupId == null)
             .Select(x => x.BackupTable!.BackupId)
             .Distinct()
+            .ToListAsync(cancellationToken));
+
+        // Deliberately left as a single correlated statement. A table with no parent of its own is
+        // an orphan only if none of its shards points at a live parent, and that has to be read at
+        // one instant: splitting it lets a concurrently committed incremental look parentless.
+        orphanBackupIds.UnionWith(await db.BackupTables
+            .AsNoTracking()
+            .Where(x => x.EffectiveBackupType == BackupType.Incremental &&
+                        x.ParentFullBackupId == null &&
+                        !db.BackupTableShards.Any(shard =>
+                            shard.BackupTableId == x.Id &&
+                            shard.EffectiveBackupType == BackupType.Incremental &&
+                            shard.ParentFullBackupId != null &&
+                            db.Backups.Any(parent => parent.Id == shard.ParentFullBackupId.Value &&
+                                                     !deletedStatuses.Contains(parent.Status))))
+            .Select(x => x.BackupId)
+            .Distinct()
+            .ToListAsync(cancellationToken));
+
+        return orphanBackupIds.ToList();
+    }
+
+    // Measured: at an IN-list of 500 SQLite abandons IX_BackupTableShards_ParentFullBackupId and
+    // scans every incremental shard instead, so cost becomes chunks x full-scan rather than
+    // ids x log(rows). 100 keeps the seek and is still far below the SQLite variable limit.
+    private const int OrphanParentChunkSize = 100;
+
+    private static IEnumerable<List<Guid>> Chunk(IReadOnlyList<Guid> source, int size)
+    {
+        for (var offset = 0; offset < source.Count; offset += size)
+        {
+            yield return source.Skip(offset).Take(size).ToList();
+        }
+    }
+
+    /// <summary>
+    /// Distinct parent backup ids referenced by incremental rows whose parent is deleted or gone.
+    /// The liveness test runs once per distinct parent, inside SQL, so nothing is compared against a
+    /// stale snapshot and no runtime-sized parameter list is sent.
+    /// </summary>
+    private static async Task<List<Guid>> OrphanParentBackupIdsAsync(ChoboDbContext db, CancellationToken cancellationToken)
+    {
+        var deletedStatuses = DeletedStatuses;
+
+        var shardOrphanParentIds = await db.BackupTableShards
+            .AsNoTracking()
+            .Where(x => x.ParentFullBackupId != null)
+            .Select(x => x.ParentFullBackupId!.Value)
+            .Distinct()
+            .Where(parentId => !db.Backups.Any(parent => parent.Id == parentId &&
+                                                         !deletedStatuses.Contains(parent.Status)))
             .ToListAsync(cancellationToken);
 
-        // Keep the two indexed entity scans independent. Composing them with Concat makes EF emit
-        // SELECT DISTINCT over a UNION, which forces SQLite to build a growing temporary result set.
-        return tableOrphanIds.Concat(shardOrphanIds).Distinct().ToList();
+        var tableOrphanParentIds = await db.BackupTables
+            .AsNoTracking()
+            .Where(x => x.ParentFullBackupId != null)
+            .Select(x => x.ParentFullBackupId!.Value)
+            .Distinct()
+            .Where(parentId => !db.Backups.Any(parent => parent.Id == parentId &&
+                                                         !deletedStatuses.Contains(parent.Status)))
+            .ToListAsync(cancellationToken);
+
+        return shardOrphanParentIds.Union(tableOrphanParentIds).ToList();
     }
 
     private static async Task<bool> IsOrphanIncrementalAsync(ChoboDbContext db, Guid backupId, CancellationToken cancellationToken) =>

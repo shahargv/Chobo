@@ -46,6 +46,7 @@ public sealed class RuntimeSettingsService(
         new(typeof(ChoboBackupRestoreOptions), "Chobo:BackupRestore", RuntimeSettingApplyMode.Live, null),
         new(typeof(ChoboClusterMetadataOptions), "Chobo:ClusterMetadata", RuntimeSettingApplyMode.Live, null),
         new(typeof(ChoboDatabaseLoggingOptions), "Chobo:DatabaseLogging", RuntimeSettingApplyMode.Live, "Slow SQLite query logging is emitted at Information level. Set a negative threshold to disable it."),
+        new(typeof(ChoboMetricsOptions), "Chobo:Metrics", RuntimeSettingApplyMode.Live, "Per-table-shard freshness metrics are off by default because the series count is tables multiplied by shards."),
         new(typeof(BackupStorageOperationOptions), "Chobo:BackupStorageOperations", RuntimeSettingApplyMode.Live, null),
         new(typeof(RetentionManagementOptions), "Chobo:RetentionManagement", RuntimeSettingApplyMode.Live, null),
         new(typeof(BackupsGarbageCollectorOptions), "Chobo:BackupsGarbageCollector", RuntimeSettingApplyMode.Live, null),

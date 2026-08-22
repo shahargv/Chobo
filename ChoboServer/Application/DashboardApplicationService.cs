@@ -1,12 +1,17 @@
 using System.Text.Json;
 using Chobo.Contracts;
 using ChoboServer.Data;
+using ChoboServer.Options;
 using ChoboServer.Services;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace ChoboServer.Application;
 
-public sealed class DashboardApplicationService(ChoboDbContext db, TimeProvider timeProvider)
+public sealed class DashboardApplicationService(
+    ChoboDbContext db,
+    TimeProvider timeProvider,
+    IOptionsMonitor<ChoboMetricsOptions> metricsOptions)
 {
     public async Task<DashboardDto> GetDashboardAsync(int nextHours = 6, CancellationToken cancellationToken = default)
     {
@@ -312,6 +317,13 @@ public sealed class DashboardApplicationService(ChoboDbContext db, TimeProvider 
             metrics[$"NumFailedBackupsLast24Hours.{policy.Name}"] = failedBackupsLast24HoursByPolicyId.GetValueOrDefault(policy.Id);
         }
 
+        // Off by default - see ChoboMetricsOptions.IncludeTableShardMetrics. Skipping this also
+        // skips the only query in the metrics path that touches BackupTableShards at all.
+        if (!metricsOptions.CurrentValue.IncludeTableShardMetrics)
+        {
+            return metrics;
+        }
+
         foreach (var row in await GetTableShardMetricRowsAsync(cancellationToken))
         {
             var suffix = $"{row.Database}.{row.Table}.{row.SourceShardNumber}";
@@ -341,9 +353,18 @@ public sealed class DashboardApplicationService(ChoboDbContext db, TimeProvider 
 
     private async Task<IReadOnlyList<TableShardMetricRow>> GetTableShardMetricRowsAsync(CancellationToken cancellationToken)
     {
+        // Deliberately grouped in memory, not with a LINQ GroupBy. EF translates a GroupBy carrying
+        // several conditional aggregates into one correlated scalar subquery *per aggregate*, so each
+        // group is re-scanned four times: measured at 720k shards that is 9.2 s against 3.4 s for
+        // streaming the rows and grouping here. The status filter below is still pushed into SQL.
+        // A single-pass SQL GROUP BY would beat both, but it needs hand-written SQL - see
+        // .codex/state/sqlite-load-performance.md.
         var rows = await db.BackupTableShards
             .AsNoTracking()
-            .Where(x => x.BackupTable != null && x.BackupTable.Backup != null)
+            .Where(x => x.BackupTable != null && x.BackupTable.Backup != null &&
+                        (x.BackupTable.Backup!.Status == BackupRunStatus.Succeeded ||
+                         x.BackupTable.Backup.Status == BackupRunStatus.PartiallySucceeded ||
+                         x.BackupTable.Backup.Status == BackupRunStatus.Failed))
             .Select(x => new
             {
                 x.SourceShardNumber,
@@ -352,13 +373,13 @@ public sealed class DashboardApplicationService(ChoboDbContext db, TimeProvider 
                 CompletedAt = x.CompletedAt ?? x.BackupTable!.CompletedAt ?? x.BackupTable.Backup!.CompletedAt,
                 x.BackupTable!.Database,
                 x.BackupTable.Table,
-                BackupStatus = x.BackupTable.Backup!.Status
+                BackupSucceeded = x.BackupTable.Backup!.Status == BackupRunStatus.Succeeded ||
+                                  x.BackupTable.Backup.Status == BackupRunStatus.PartiallySucceeded
             })
             .Where(x => x.CompletedAt != null)
             .ToListAsync(cancellationToken);
 
         return rows
-            .Where(x => IsCompletedBackupAttemptStatus(x.BackupStatus))
             .GroupBy(x => new { x.Database, x.Table, x.SourceShardNumber })
             .Select(x => new TableShardMetricRow(
                 x.Key.Database,
@@ -368,11 +389,10 @@ public sealed class DashboardApplicationService(ChoboDbContext db, TimeProvider 
                     .Max(row => row.CompletedAt),
                 x.Where(row => row.EffectiveBackupType == BackupType.Full &&
                                 row.Status == BackupTableStatus.Succeeded &&
-                                IsSuccessfulBackupForShard(row.BackupStatus))
+                                row.BackupSucceeded)
                     .Max(row => row.CompletedAt),
                 x.Max(row => row.CompletedAt),
-                x.Where(row => row.Status == BackupTableStatus.Succeeded &&
-                                IsSuccessfulBackupForShard(row.BackupStatus))
+                x.Where(row => row.Status == BackupTableStatus.Succeeded && row.BackupSucceeded)
                     .Max(row => row.CompletedAt)))
             .ToList();
     }
@@ -487,12 +507,6 @@ public sealed class DashboardApplicationService(ChoboDbContext db, TimeProvider 
     private sealed record MissingBackupScheduleRow(Guid Id, string Name, Guid PolicyId, string? PolicyName, BackupType BackupType);
     private sealed record ScheduleSummaryRow(Guid Id, string Name, Guid PolicyId, string? PolicyName, BackupType BackupType, string CronExpression, string TimeZoneId, bool IsEnabled, TimeSpan? MissedRunGracePeriod);
     private sealed record ScheduleLastRunRow(Guid ScheduleId, DateTimeOffset CreatedAt, BackupRunStatus Status, string? FailureReason, bool IsPinned, DateTimeOffset? DeletionRequestedAt);
-    private static bool IsCompletedBackupAttemptStatus(BackupRunStatus status) =>
-        status is BackupRunStatus.Succeeded or BackupRunStatus.PartiallySucceeded or BackupRunStatus.Failed;
-
-    private static bool IsSuccessfulBackupForShard(BackupRunStatus status) =>
-        status is BackupRunStatus.Succeeded or BackupRunStatus.PartiallySucceeded;
-
     private static double SecondsSince(DateTimeOffset generatedAt, DateTimeOffset value) =>
         Math.Max(0, (generatedAt - value).TotalSeconds);
 

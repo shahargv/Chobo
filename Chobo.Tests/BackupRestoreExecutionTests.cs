@@ -4158,7 +4158,7 @@ public sealed class BackupRestoreExecutionTests
     public async Task Metrics_report_table_shard_backup_freshness()
     {
         var now = new DateTimeOffset(2026, 5, 11, 10, 0, 0, TimeSpan.Zero);
-        await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now));
+        await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now), includeTableShardMetrics: true);
         var policy = await fixture.SeedPolicyAsync();
 
         await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, now.AddHours(-3), backupType: BackupType.Full, shardCount: 2, tableName: "orders");
@@ -4421,6 +4421,97 @@ public sealed class BackupRestoreExecutionTests
         var dependencyReason = Assert.Single(evaluation.Reasons, x => x.Reason == BackupGarbageCollectionReason.ActiveDependentBackups);
         Assert.Equal([incremental.Id], dependencyReason.RelatedBackupIds);
         Assert.Contains(incremental.Id.ToString(), dependencyReason.Text);
+    }
+
+    [Fact]
+    public async Task Garbage_collection_finds_dependents_linked_only_through_shards()
+    {
+        var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now));
+        var policy = await fixture.SeedPolicyAsync(retentionMinutes: 120);
+        var full = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, now.AddMinutes(-10), tableName: "orders");
+        var incremental = await fixture.SeedDependentIncrementalAsync(policy.Id, full, now.AddMinutes(-5));
+
+        var incrementalTable = await fixture.Db.BackupTables.SingleAsync(x => x.BackupId == incremental.Id);
+        incrementalTable.ParentFullBackupTableId = null;
+        await fixture.Db.SaveChangesAsync();
+
+        var evaluation = await fixture.Services.GetRequiredService<BackupGarbageCollectionEvaluationService>()
+            .EvaluateAsync(full.Id);
+
+        Assert.NotNull(evaluation);
+        var dependencyReason = Assert.Single(evaluation.Reasons, x => x.Reason == BackupGarbageCollectionReason.ActiveDependentBackups);
+        Assert.Equal([incremental.Id], dependencyReason.RelatedBackupIds);
+    }
+
+    [Fact]
+    public async Task Garbage_collection_finds_dependents_linked_only_through_tables()
+    {
+        var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now));
+        var policy = await fixture.SeedPolicyAsync(retentionMinutes: 120);
+        var full = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, now.AddMinutes(-10), tableName: "orders");
+        var incremental = await fixture.SeedDependentIncrementalAsync(policy.Id, full, now.AddMinutes(-5));
+
+        var incrementalShards = await fixture.Db.BackupTableShards
+            .Where(x => x.BackupTable!.BackupId == incremental.Id)
+            .ToListAsync();
+        foreach (var shard in incrementalShards)
+        {
+            shard.ParentFullBackupTableShardId = null;
+        }
+        await fixture.Db.SaveChangesAsync();
+
+        var evaluation = await fixture.Services.GetRequiredService<BackupGarbageCollectionEvaluationService>()
+            .EvaluateAsync(full.Id);
+
+        Assert.NotNull(evaluation);
+        var dependencyReason = Assert.Single(evaluation.Reasons, x => x.Reason == BackupGarbageCollectionReason.ActiveDependentBackups);
+        Assert.Equal([incremental.Id], dependencyReason.RelatedBackupIds);
+    }
+
+    [Theory]
+    [InlineData(BackupRunStatus.ManualDeleteRequested)]
+    [InlineData(BackupRunStatus.ManualDeleted)]
+    [InlineData(BackupRunStatus.FailedBackupDeleteRequested)]
+    [InlineData(BackupRunStatus.FailedBackupDeletedByGarbageCollector)]
+    [InlineData(BackupRunStatus.BackupExpiredDeleteStarted)]
+    [InlineData(BackupRunStatus.BackupExpiredDeleted)]
+    public async Task Garbage_collection_ignores_dependents_already_committed_to_deletion(BackupRunStatus status)
+    {
+        var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now));
+        var policy = await fixture.SeedPolicyAsync(retentionMinutes: 120);
+        var full = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, now.AddMinutes(-10), tableName: "orders");
+        var incremental = await fixture.SeedDependentIncrementalAsync(policy.Id, full, now.AddMinutes(-5));
+
+        var child = await fixture.Db.Backups.SingleAsync(x => x.Id == incremental.Id);
+        child.Status = status;
+        await fixture.Db.SaveChangesAsync();
+
+        var evaluation = await fixture.Services.GetRequiredService<BackupGarbageCollectionEvaluationService>()
+            .EvaluateAsync(full.Id);
+
+        Assert.NotNull(evaluation);
+        Assert.DoesNotContain(BackupGarbageCollectionReason.ActiveDependentBackups, evaluation.Reasons.Select(x => x.Reason));
+    }
+
+    [Fact]
+    public async Task Garbage_collection_orders_dependent_ids_by_completion_time()
+    {
+        var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now));
+        var policy = await fixture.SeedPolicyAsync(retentionMinutes: 120);
+        var full = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, now.AddMinutes(-30), tableName: "orders");
+        var newer = await fixture.SeedDependentIncrementalAsync(policy.Id, full, now.AddMinutes(-5));
+        var older = await fixture.SeedDependentIncrementalAsync(policy.Id, full, now.AddMinutes(-20));
+
+        var evaluation = await fixture.Services.GetRequiredService<BackupGarbageCollectionEvaluationService>()
+            .EvaluateAsync(full.Id);
+
+        Assert.NotNull(evaluation);
+        var dependencyReason = Assert.Single(evaluation.Reasons, x => x.Reason == BackupGarbageCollectionReason.ActiveDependentBackups);
+        Assert.Equal([older.Id, newer.Id], dependencyReason.RelatedBackupIds);
     }
 
     [Fact]
@@ -4797,6 +4888,44 @@ public sealed class BackupRestoreExecutionTests
         fixture.Db.ChangeTracker.Clear();
         Assert.Equal(BackupRunStatus.FailedBackupDeletedByGarbageCollector, (await fixture.Db.Backups.SingleAsync(x => x.Id == incremental.Id)).Status);
         Assert.True(await fixture.Db.AuditEntries.AnyAsync(x => x.Action == "orphaned-incremental-garbage-collection-requested" && x.EntityId == incremental.Id.ToString()));
+    }
+
+    [Fact]
+    public async Task Metrics_omit_table_shard_series_unless_explicitly_enabled()
+    {
+        var now = new DateTimeOffset(2026, 5, 11, 10, 0, 0, TimeSpan.Zero);
+        await using var fixture = await TestFixture.CreateAsync(timeProvider: new FixedTimeProvider(now), captureSql: true);
+        var policy = await fixture.SeedPolicyAsync();
+        await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, now.AddHours(-3), backupType: BackupType.Full, shardCount: 2, tableName: "orders");
+        fixture.SqlCommands.Clear();
+
+        var metrics = await fixture.Services.GetRequiredService<DashboardApplicationService>().GetMetricsAsync();
+
+        // The series count is tables multiplied by shards, so these are opt-in. Skipping them must
+        // also skip the query, which is the only part of the metrics path that reads shard rows.
+        Assert.DoesNotContain(metrics.Keys, key => key.Contains("OnTableShard", StringComparison.Ordinal));
+        Assert.DoesNotContain(fixture.SqlCommands, command => command.Contains("FROM \"BackupTableShards\"", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Metrics_filter_backup_status_in_sql_when_table_shard_series_enabled()
+    {
+        await using var fixture = await TestFixture.CreateAsync(captureSql: true, includeTableShardMetrics: true);
+        var policy = await fixture.SeedPolicyAsync();
+        var full = await fixture.SeedPolicyBackupAsync(policy.Id, BackupRunStatus.Succeeded, DateTimeOffset.UtcNow.AddHours(-2), tableName: "orders");
+        await fixture.SeedDependentIncrementalAsync(policy.Id, full, DateTimeOffset.UtcNow.AddHours(-1));
+        fixture.SqlCommands.Clear();
+
+        await fixture.Services.GetRequiredService<DashboardApplicationService>().GetMetricsAsync();
+
+        // The rows are grouped in memory on purpose (EF turns a GroupBy with several conditional
+        // aggregates into one correlated subquery per aggregate), but the status filter must still be
+        // applied by SQLite so that rows for incomplete backups are never transferred at all.
+        var shardMetricCommands = fixture.SqlCommands
+            .Where(command => command.Contains("FROM \"BackupTableShards\"", StringComparison.Ordinal))
+            .ToList();
+        Assert.NotEmpty(shardMetricCommands);
+        Assert.All(shardMetricCommands, command => Assert.Contains("\"Status\"", command, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -6085,7 +6214,7 @@ public sealed class BackupRestoreExecutionTests
         AssertAuditCorrelation(shardSucceededAudit, backupId, shard.ClickHouseOperationId);
         AssertAuditCorrelation(tableSucceededAudit, backupId, table.ClickHouseOperationId);
 
-        var operationAudits = await new AuditStore(fixture.Db).QueryAsync(null, null, null, limit: 500, operationId: backupId.ToString());
+        var operationAudits = await new AuditStore(fixture.Db, fixture.Services.GetRequiredService<SlowSqliteQueryLoggingInterceptor>()).QueryAsync(null, null, null, limit: 500, operationId: backupId.ToString());
         Assert.Contains(operationAudits.Items, x => x.Action == "clickhouse-operation-submitted");
         Assert.Contains(operationAudits.Items, x => x.Action == "shard-succeeded");
         Assert.Contains(operationAudits.Items, x => x.Action == "table-succeeded");
@@ -6947,7 +7076,7 @@ public sealed class BackupRestoreExecutionTests
             SqlCommands = sqlCommands;
         }
 
-        public static async Task<TestFixture> CreateAsync(int? clusterMaxDop = null, ChoboBackupRestoreOptions? options = null, TimeProvider? timeProvider = null, bool captureSql = false)
+        public static async Task<TestFixture> CreateAsync(int? clusterMaxDop = null, ChoboBackupRestoreOptions? options = null, TimeProvider? timeProvider = null, bool captureSql = false, bool includeTableShardMetrics = false)
         {
             var dataDirectory = Path.Combine(Path.GetTempPath(), "chobo-tests", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(dataDirectory);
@@ -7021,6 +7150,9 @@ public sealed class BackupRestoreExecutionTests
                 .AddSingleton(TestOptionsMonitor.Create(new ChoboClusterMetadataOptions { CacheDuration = TimeSpan.FromHours(1), RefreshInterval = TimeSpan.FromMinutes(30) }))
                 .AddSingleton(TestOptionsMonitor.Create(new RetentionManagementOptions { Interval = TimeSpan.FromSeconds(1), MaxDop = 2 }))
                 .AddSingleton(TestOptionsMonitor.Create(new BackupsGarbageCollectorOptions { Interval = TimeSpan.FromSeconds(1), MaxDop = 2 }))
+                .AddSingleton(TestOptionsMonitor.Create(new ChoboDatabaseLoggingOptions()))
+                .AddSingleton(TestOptionsMonitor.Create(new ChoboMetricsOptions { IncludeTableShardMetrics = includeTableShardMetrics }))
+                .AddSingleton<SlowSqliteQueryLoggingInterceptor>()
                 .AddSingleton(timeProvider ?? TimeProvider.System)
                 .AddSingleton<BackupSchedulerDispatcherBackgroundService>()
                 .AddSingleton<RetentionManagementBackgroundService>()
