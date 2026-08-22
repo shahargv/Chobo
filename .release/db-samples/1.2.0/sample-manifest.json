@@ -1,0 +1,10 @@
+{
+  "version": "1.2.0",
+  "sourceRef": "HEAD",
+  "generatedAt": "2026-08-22T07:20:45.2973521Z",
+  "generator": "scripts/New-ReleaseDbSample.ps1",
+  "seed": "test-hooks seed-export-import-graph",
+  "exportVersion": 1,
+  "schemaVersion": 3,
+  "productVersion": "1.2.0+release-sample"
+}

@@ -1,0 +1,131 @@
+{
+  "exportVersion": 1,
+  "schemaVersion": 3,
+  "generatedAt": "2026-08-22T07:20:39.8005119+00:00",
+  "productVersion": "1.2.0+release-sample",
+  "data": {
+    "users": [],
+    "accessTokens": [],
+    "clusters": [
+      {
+        "id": "3fd8fa12-91d8-4d7f-8b02-8c5a86c8554e",
+        "name": "system-export-cluster",
+        "mode": "Cluster",
+        "clickHouseClusterName": "system_export_cluster_name",
+        "accessNodes": [
+          {
+            "id": "feba9dbb-3101-47ff-b142-d919beebf602",
+            "host": "source-cluster",
+            "port": 9000,
+            "useTls": false
+          }
+        ],
+        "encryptedUserName": "encrypted-user-from-source",
+        "encryptedUserNameKeyId": "53ac90c3-b059-4374-906b-f6d9f4e24880",
+        "encryptedPassword": "encrypted-password-from-source",
+        "encryptedPasswordKeyId": "298b8034-1ef7-41ae-ac0d-cb0728cd01a1",
+        "backupRestoreMaxDop": 2,
+        "nodeMaxDopDefault": 1,
+        "nodeMaxDopOverrides": [],
+        "shardMaxDopDefault": 1,
+        "shardMaxDopOverrides": [],
+        "clickHouseBackupSettings": {},
+        "clickHouseRestoreSettings": {},
+        "isDeleted": false,
+        "createdAt": "2026-08-22T07:20:39.027+00:00",
+        "updatedAt": null,
+        "deletedAt": null
+      }
+    ],
+    "backupTargets": [
+      {
+        "id": "2994343d-24b6-4574-9795-1a19f3814c85",
+        "name": "system-export-target",
+        "type": "s3",
+        "settings": {
+          "Endpoint": "http://backup-s3:9000",
+          "Region": "us-east-1",
+          "Bucket": "backups",
+          "PathPrefix": "system-export",
+          "ForcePathStyle": true
+        },
+        "secrets": {},
+        "isDeleted": false,
+        "createdAt": "2026-08-22T07:20:39.027+00:00",
+        "updatedAt": null,
+        "deletedAt": null
+      }
+    ],
+    "backupPolicies": [
+      {
+        "id": "28ec338e-c9c3-4631-b39e-c2882609bad6",
+        "name": "system-export-policy",
+        "sourceClusterId": "3fd8fa12-91d8-4d7f-8b02-8c5a86c8554e",
+        "targetId": "2994343d-24b6-4574-9795-1a19f3814c85",
+        "contentMode": "SchemaAndData",
+        "selectorJsonVersion": 1,
+        "selector": {
+          "version": 1,
+          "rules": [
+            {
+              "action": "Include",
+              "database": {
+                "kind": "All",
+                "value": "*"
+              },
+              "table": {
+                "kind": "All",
+                "value": "*"
+              }
+            }
+          ]
+        },
+        "retention": {
+          "fullRetentionMinutes": 60,
+          "incrementalRetentionMinutes": 30,
+          "minBackupsToKeep": 1,
+          "minFullBackupsToKeep": 1
+        },
+        "failedBackupRetentionMode": "KeepAndExcludeFromMinBackupsToKeep",
+        "clickHouseBackupSettings": {},
+        "clickHouseRestoreSettings": {},
+        "isSystemDefault": false,
+        "isDeleted": false,
+        "createdAt": "2026-08-22T07:20:39.027+00:00",
+        "updatedAt": null,
+        "deletedAt": null,
+        "maxAgeHoursForBaseBackup": null,
+        "passwordMode": "None",
+        "encryptedBackupPassword": null,
+        "encryptedBackupPasswordKeyId": null,
+        "compressionMethod": null,
+        "compressionLevel": null
+      }
+    ],
+    "backupSchedules": [
+      {
+        "id": "dec17a03-e664-4012-b643-bfaad4dcf8db",
+        "name": "system-export-schedule",
+        "policyId": "28ec338e-c9c3-4631-b39e-c2882609bad6",
+        "backupType": "Full",
+        "cronExpression": "0 0 2 * * ?",
+        "timeZoneId": "UTC",
+        "isEnabled": true,
+        "missedRunGracePeriod": null,
+        "description": null,
+        "isSystemDefault": false,
+        "isDeleted": false,
+        "createdAt": "2026-08-22T07:20:39.027+00:00",
+        "updatedAt": null,
+        "deletedAt": null
+      }
+    ],
+    "schemaDefinitions": [],
+    "backups": [],
+    "backupTables": [],
+    "backupTableShards": [],
+    "restores": [],
+    "restoreTables": [],
+    "restoreTableShards": []
+  }
+}
