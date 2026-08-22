@@ -476,6 +476,8 @@ public sealed class TestHooksController(
     {
         if (!TestHooksAvailable()) return NotFound();
 
+        using var queryTagScope = SqliteQueryTagging.Push("test-hooks.seed-large-metadata-graph");
+
         var backupCount = Math.Clamp(request.BackupCount ?? 300, 1, 600);
         var tablesPerBackup = Math.Clamp(request.TablesPerBackup ?? 10, 1, 200);
         var shardsPerTable = Math.Clamp(request.ShardsPerTable ?? 4, 1, 32);
