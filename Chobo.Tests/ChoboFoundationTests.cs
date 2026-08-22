@@ -60,11 +60,36 @@ public sealed class ChoboFoundationTests
         await using var provider = services.BuildServiceProvider();
         using var scope = provider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ChoboDbContext>();
-        await db.Database.ExecuteSqlRawAsync("SELECT 1;");
+        using (SqliteQueryTagging.Push("foundation.execute-sql"))
+        {
+            await db.Database.ExecuteSqlRawAsync("SELECT 1;");
+        }
 
-        Assert.Single(sink.Events, logEvent =>
+        var slowQuery = Assert.Single(sink.Events, logEvent =>
             logEvent.Properties.TryGetValue("SourceContext", out var sourceContext) &&
             sourceContext.ToString().Contains(nameof(SlowSqliteQueryLoggingInterceptor), StringComparison.Ordinal));
+        Assert.Equal("\"foundation.execute-sql\"", slowQuery.Properties["QueryTag"].ToString());
+        Assert.Contains(SqliteQueryTagging.MarkerPrefix + "foundation.execute-sql", slowQuery.RenderMessage());
+    }
+
+    [Fact]
+    public async Task Chobo_server_assigns_semantic_tags_to_application_queries()
+    {
+        var sink = new CollectingSink();
+        var logger = new Serilog.LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(sink).CreateLogger();
+        await using var factory = CreateFactory(
+            extraConfiguration: new Dictionary<string, string?> { ["Chobo:DatabaseLogging:SlowQueryThreshold"] = "00:00:00" },
+            testLogger: logger);
+        var client = AuthenticatedClient(factory);
+
+        _ = await client.GetFromJsonAsync<List<UserDto>>("/api/v1/users", JsonOptions);
+
+        var slowQueries = sink.Events.Where(x =>
+            x.Properties.TryGetValue("SourceContext", out var sourceContext) &&
+            sourceContext.ToString().Contains(nameof(SlowSqliteQueryLoggingInterceptor), StringComparison.Ordinal)).ToList();
+        Assert.NotEmpty(slowQueries);
+        Assert.DoesNotContain(slowQueries, x => x.Properties["QueryTag"].ToString().Contains("sqlite.unattributed", StringComparison.Ordinal));
+        Assert.Contains(slowQueries, x => x.Properties["QueryTag"].ToString().Contains("select.users", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -2198,13 +2223,32 @@ public sealed class ChoboFoundationTests
         var interceptor = new SlowSqliteQueryLoggingInterceptor(options, logger);
 
         using var command = new SqliteCommand("SELECT * FROM Users WHERE UserName = $userName");
-        interceptor.LogIfSlow(command, TimeSpan.FromMilliseconds(1999));
-        interceptor.LogIfSlow(command, TimeSpan.FromMilliseconds(2001));
+        using (SqliteQueryTagging.Push("users.find-by-name"))
+        {
+            interceptor.LogIfSlow(command, TimeSpan.FromMilliseconds(1999));
+            interceptor.LogIfSlow(command, TimeSpan.FromMilliseconds(2001));
+        }
 
         var logEvent = Assert.Single(sink.Events);
         Assert.Equal(LogEventLevel.Information, logEvent.Level);
-        Assert.Contains("Slow SQLite query completed", logEvent.RenderMessage());
+        Assert.Equal("\"users.find-by-name\"", logEvent.Properties["QueryTag"].ToString());
+        Assert.Equal("False", logEvent.Properties["QueryTagMissing"].ToString());
+        Assert.Contains("Slow SQLite query users.find-by-name completed", logEvent.RenderMessage());
+        Assert.StartsWith(SqliteQueryTagging.MarkerPrefix + "users.find-by-name", command.CommandText);
         Assert.Contains("SELECT * FROM Users", logEvent.RenderMessage());
+    }
+
+    [Fact]
+    public void Sqlite_query_tags_reject_dynamic_or_malformed_values()
+    {
+        Assert.Throws<ArgumentException>(() => SqliteQueryTagging.Push("Backup 123"));
+        Assert.Throws<ArgumentException>(() => SqliteQueryTagging.Push("backup.load\n-- injected"));
+
+        using var command = new SqliteCommand("SELECT 1");
+        var fallback = SqliteQueryTagging.EnsureTag(command);
+        Assert.True(fallback.IsMissing);
+        Assert.StartsWith("sqlite.unattributed.select.database", fallback.Name);
+        Assert.True(SqliteQueryTagging.EnsureTag(command).IsMissing);
     }
 
     [Fact]
@@ -2582,7 +2626,7 @@ public sealed class ChoboFoundationTests
         Guid RestoreId,
         Guid RestoreTableId,
         Guid RestoreTableShardId);
-    private static WebApplicationFactory<Program> CreateFactory(string? dataDir = null, string adminUser = "admin", string accessToken = Token, IReadOnlyDictionary<string, string?>? extraConfiguration = null)
+    private static WebApplicationFactory<Program> CreateFactory(string? dataDir = null, string adminUser = "admin", string accessToken = Token, IReadOnlyDictionary<string, string?>? extraConfiguration = null, Serilog.ILogger? testLogger = null)
     {
         dataDir ??= NewTestDataDirectory();
         return new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
@@ -2608,6 +2652,10 @@ public sealed class ChoboFoundationTests
 
                 config.AddInMemoryCollection(values);
             });
+            if (testLogger is not null)
+            {
+                builder.ConfigureServices(services => services.AddSingleton(testLogger));
+            }
         });
     }
 

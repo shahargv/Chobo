@@ -301,11 +301,14 @@ function Get-SlowQueryEntries {
             if ($item.category -ne $script:SlowQueryCategory) { continue }
             $match = [regex]::Match($item.message, 'completed in ([0-9]+(?:\.[0-9]+)?) ms')
             $elapsed = if ($match.Success) { [double]$match.Groups[1].Value } else { -1 }
+            $tagMatch = [regex]::Match($item.message, 'Slow SQLite query ([a-z0-9.-]+) completed')
+            $tag = if ($tagMatch.Success) { $tagMatch.Groups[1].Value } else { 'sqlite.untagged' }
             $sqlMatch = [regex]::Match($item.message, 'CommandText=(.*)$', 'Singleline')
             $sql = if ($sqlMatch.Success) { $sqlMatch.Groups[1].Value } else { $item.message }
             $entries.Add([pscustomobject]@{
                 timestamp = $item.timestamp
                 elapsedMs = $elapsed
+                tag = $tag
                 sql = ($sql -replace '\s+', ' ').Trim()
             })
         }
@@ -368,7 +371,7 @@ function Invoke-SqlitePerformanceUnderLoad {
         $report.Add('')
         $report.Add('--- slowest queries (diagnostic pass) ---')
         foreach ($entry in $topDiagnostic) {
-            $report.Add(("{0,9:N1} ms  {1}" -f $entry.elapsedMs, $entry.sql.Substring(0, [Math]::Min(400, $entry.sql.Length))))
+            $report.Add(("{0,9:N1} ms  {1,-80} {2}" -f $entry.elapsedMs, $entry.tag, $entry.sql.Substring(0, [Math]::Min(300, $entry.sql.Length))))
         }
         $report.Add('')
         $report.Add('--- endpoint wall clock (gate pass) ---')
@@ -391,6 +394,11 @@ function Assert-SqlitePerformanceUnderLoad {
 
     $summary = Get-Content -Raw -Path $path | ConvertFrom-Json
 
+    $untagged = @($summary.diagnostic.slowQueries | Where-Object { $_.tag -eq 'sqlite.untagged' -or $_.tag -like 'sqlite.unattributed.*' })
+    if ($untagged.Count -gt 0) {
+        throw "$($untagged.Count) SQLite slow-query entries did not have a semantic tag."
+    }
+
     $failedRequests = @($summary.gate.timings | Where-Object { -not $_.ok })
     if ($failedRequests.Count -gt 0) {
         $detail = ($failedRequests | ForEach-Object { "$($_.name) -> HTTP $($_.status)" }) -join '; '
@@ -400,7 +408,7 @@ function Assert-SqlitePerformanceUnderLoad {
     $slow = @($summary.gate.slowQueries | Sort-Object elapsedMs -Descending)
     if ($slow.Count -gt 0) {
         $detail = ($slow | Select-Object -First 10 | ForEach-Object {
-            "{0:N1} ms: {1}" -f $_.elapsedMs, $_.sql.Substring(0, [Math]::Min(240, $_.sql.Length))
+            "{0:N1} ms [$($_.tag)]: {1}" -f $_.elapsedMs, $_.sql.Substring(0, [Math]::Min(200, $_.sql.Length))
         }) -join ' | '
         throw "$($slow.Count) SQLite queries exceeded the $($summary.gateMs) ms gate under load: $detail"
     }
